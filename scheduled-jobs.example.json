@@ -1,0 +1,13 @@
+[
+  {
+    "id": "example-job",
+    "prompt": "Décris le prompt que Claude Code doit exécuter.",
+    "cron": "0 7 * * *",
+    "profile": "admin",
+    "enabled": true,
+    "notify": false,
+    "created": "2026-01-01T00:00:00Z",
+    "lastRun": null,
+    "description": "Description courte du job"
+  }
+]
