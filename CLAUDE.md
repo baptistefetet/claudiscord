@@ -1,10 +1,10 @@
 # Claudiscord
 
-Daemon qui relaie les messages Discord DM vers Claude Code CLI pour l'administration système du Raspberry Pi 4.
+Daemon qui relaie les messages Discord DM vers Claude Code CLI. Conçu pour l'administration système via Discord.
 
 ## Architecture
 
-Le bot Discord (batflix, www-data) et le daemon (claudiscord, root) communiquent via les fichiers `messages/{userId}.json` :
+Le bot Discord et le daemon (claudiscord, root) communiquent via les fichiers `messages/{userId}.json` :
 
 1. Bot reçoit un DM → persiste le message user dans le JSON
 2. Daemon surveille le JSON avec `inotifywait`
@@ -26,8 +26,8 @@ Le bot Discord (batflix, www-data) et le daemon (claudiscord, root) communiquent
 
 ```env
 AUTHORIZED_USER_ID=<discord user id>
-MESSAGES_DIR=<chemin vers batflix/messages>
-DISCORD_TOKEN_FILE=<chemin vers batflix/.env contenant DISCORD_TOKEN>
+MESSAGES_DIR=<chemin vers le dossier messages/ du bot Discord>
+DISCORD_TOKEN_FILE=<chemin vers un fichier contenant DISCORD_TOKEN=...>
 CLAUDE_BIN=<chemin vers le binaire claude>
 ```
 
@@ -86,6 +86,7 @@ Le profil est déterminé automatiquement par Claude à la création du job (adm
 - Lock par job (`/tmp/scheduled-job-<id>.lock`), timeout 300s
 - Logs : `/var/log/scheduled-jobs.log` (rotation via `/etc/logrotate.d/scheduled-jobs`)
 - Si `notify=true`, le runner envoie automatiquement l'output du job sur Discord via `notify_discord.sh`
+- **Important** : Les jobs planifiés sont "fire and forget". Chaque job est une session Claude éphémère (`claude -p`), sans lien avec le daemon ni les conversations Discord. Si un utilisateur répond sur Discord à la notification d'un job, le daemon traitera ce message dans sa propre session sans aucun contexte de ce que le job a produit.
 
 ### Gestion
 
