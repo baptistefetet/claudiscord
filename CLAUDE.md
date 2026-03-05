@@ -8,7 +8,7 @@ Le bot Discord et le daemon (claudiscord, root) communiquent via les fichiers `m
 
 1. Bot reçoit un DM → persiste le message user dans le JSON
 2. Daemon surveille le JSON avec `inotifywait`
-3. Daemon détecte un nouveau message user → invoque `claude -p` (Opus, timeout 180s)
+3. Daemon détecte un nouveau message user → invoque `claude -p` (Opus, timeout 300s)
 4. Daemon écrit la réponse dans le JSON
 5. Bot détecte la réponse via `fs.watch` → l'envoie sur Discord
 

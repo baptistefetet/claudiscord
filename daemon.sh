@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/.env"
 
 WATCH_FILE="${MESSAGES_DIR}/${AUTHORIZED_USER_ID}.json"
-MAX_TIMEOUT=180
+MAX_TIMEOUT=300
 LOCK_FILE="/tmp/claudiscord.lock"
 LOG_TAG="claudiscord"
 STDERR_LOG="/tmp/claudiscord-stderr.log"
@@ -67,29 +67,29 @@ process_request() {
 
     if [ -n "$session_id" ]; then
         log "Running: claude -p (resume session $session_id) --model opus"
-        output=$(timeout "$MAX_TIMEOUT" "$CLAUDE_BIN" -p "$last_message" \
+        output=$(timeout "$MAX_TIMEOUT" "$CLAUDE_BIN" -p \
             --resume "$session_id" \
             --output-format json \
             --allowedTools "Bash(*) Read Write Edit Glob Grep WebSearch WebFetch Task" \
-            --model opus </dev/null 2>>"$STDERR_LOG") || exit_code=$?
+            --model opus -- "$last_message" </dev/null 2>>"$STDERR_LOG") || exit_code=$?
     else
         log "Running: claude -p (new session, prompt length: ${#last_message}) --model opus"
-        output=$(timeout "$MAX_TIMEOUT" "$CLAUDE_BIN" -p "$last_message" \
+        output=$(timeout "$MAX_TIMEOUT" "$CLAUDE_BIN" -p \
             --system-prompt "$SYSTEM_PROMPT" \
             --output-format json \
             --allowedTools "Bash(*) Read Write Edit Glob Grep WebSearch WebFetch Task" \
-            --model opus </dev/null 2>>"$STDERR_LOG") || exit_code=$?
+            --model opus -- "$last_message" </dev/null 2>>"$STDERR_LOG") || exit_code=$?
     fi
 
     # Fallback: if resume failed, retry with new session
     if [ "$exit_code" -ne 0 ] && [ -n "$session_id" ]; then
         log "Resume failed (exit $exit_code), retrying with new session..."
         exit_code=0
-        output=$(timeout "$MAX_TIMEOUT" "$CLAUDE_BIN" -p "$last_message" \
+        output=$(timeout "$MAX_TIMEOUT" "$CLAUDE_BIN" -p \
             --system-prompt "$SYSTEM_PROMPT" \
             --output-format json \
             --allowedTools "Bash(*) Read Write Edit Glob Grep WebSearch WebFetch Task" \
-            --model opus </dev/null 2>>"$STDERR_LOG") || exit_code=$?
+            --model opus -- "$last_message" </dev/null 2>>"$STDERR_LOG") || exit_code=$?
     fi
 
     log "Claude exited with code $exit_code, output length: ${#output}"
@@ -139,6 +139,11 @@ inotifywait -m -e close_write "$WATCH_FILE" --format '%e' 2>/dev/null | while re
         # Re-check after acquiring lock
         last_role=$(jq -r '.messages[-1].role // empty' "$WATCH_FILE" 2>/dev/null || echo "")
         [ "$last_role" != "user" ] && exit 0
+        last_content=$(jq -r '.messages[-1].content // empty' "$WATCH_FILE" 2>/dev/null || echo "")
+        if [ -z "$(echo "$last_content" | tr -d '[:space:]')" ]; then
+            log "Ignoring empty user message"
+            exit 0
+        fi
         process_request
     ) 9>"$LOCK_FILE"
 done
