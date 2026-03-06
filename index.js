@@ -80,7 +80,7 @@ client.on(Events.MessageCreate, async message => {
 		if (err.code === 124) {
 			errMsg = 'Claude Code a pris trop de temps, timeout !';
 		} else if (err.message === 'NOT_AUTHENTICATED') {
-			errMsg = 'Tu n\'es pas authentifie dans le sandbox. Utilise `/login` pour connecter ton compte Claude.';
+			errMsg = 'Tu n\'es pas authentifie dans le sandbox. Envoie `/login` pour les instructions.';
 		} else {
 			errMsg = `Erreur Claude Code : ${err.message?.slice(0, 300) || 'unknown'}`;
 		}

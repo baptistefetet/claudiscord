@@ -232,58 +232,27 @@ function executeInContainerQueued(userId, prompt, options = {}) {
 }
 
 /**
- * Run claude auth login in the container.
- * The CLI polls for OAuth completion automatically (no stdin needed).
- * Returns { urlPromise, completionPromise }.
+ * Write credentials JSON to the user's container volume.
+ * The user obtains these by running `claude auth login` on their own machine
+ * and copying ~/.claude/.credentials.json.
  */
-function runLoginFlow(userId) {
-	ensureContainer(userId);
-	const name = containerName(userId);
+function writeCredentials(userId, credentialsJson) {
+	ensureUserStorage(userId);
+	const credPath = path.join(DATA_DIR, userId, 'home', '.claude', '.credentials.json');
+	const tmp = credPath + '.tmp';
+	fs.writeFileSync(tmp, credentialsJson, { mode: 0o600 });
+	fs.renameSync(tmp, credPath);
+	// Ensure ownership
+	execFileSync('chown', [`${CONTAINER_UID}:${CONTAINER_GID}`, credPath], { timeout: 5000 });
+	log.info(`Wrote credentials for user ${userId}`);
+}
 
-	const child = spawn('docker', ['exec', name, 'claude', 'auth', 'login'], {
-		stdio: ['ignore', 'pipe', 'pipe'],
-	});
-
-	let url = null;
-	const urlRegex = /https:\/\/[^\s]+/;
-
-	const urlPromise = new Promise((resolve, reject) => {
-		function checkForUrl(data) {
-			const text = data.toString();
-			const match = text.match(urlRegex);
-			if (match && !url) {
-				url = match[0];
-				resolve(url);
-			}
-		}
-
-		child.stdout.on('data', checkForUrl);
-		child.stderr.on('data', checkForUrl);
-
-		const timer = setTimeout(() => {
-			child.kill('SIGTERM');
-			if (!url) reject(new Error('Login flow timeout (5min)'));
-		}, 300000);
-
-		child.on('close', () => {
-			clearTimeout(timer);
-			if (!url) reject(new Error('Login flow ended without URL'));
-		});
-
-		child.on('error', (err) => {
-			clearTimeout(timer);
-			reject(err);
-		});
-	});
-
-	const completionPromise = new Promise((resolve, reject) => {
-		child.on('close', (code) => {
-			if (code === 0) resolve();
-			else reject(new Error(`Login exited with code ${code}`));
-		});
-	});
-
-	return { urlPromise, completionPromise };
+/**
+ * Check if a user has credentials in their container volume.
+ */
+function hasCredentials(userId) {
+	const credPath = path.join(DATA_DIR, userId, 'home', '.claude', '.credentials.json');
+	return fs.existsSync(credPath);
 }
 
 function destroyContainer(userId) {
@@ -297,4 +266,4 @@ function destroyContainer(userId) {
 	} catch {}
 }
 
-module.exports = { ensureImage, ensureContainer, executeInContainerQueued, runLoginFlow, destroyContainer };
+module.exports = { ensureImage, ensureContainer, executeInContainerQueued, writeCredentials, hasCredentials, destroyContainer };
