@@ -1,0 +1,10 @@
+{
+  "name": "batbot",
+  "version": "1.0.0",
+  "description": "BatBot - Claude Code Discord relay",
+  "main": "bot.js",
+  "dependencies": {
+    "discord.js": "^14.19.3",
+    "dotenv": "^16.5.0"
+  }
+}

@@ -16,7 +16,7 @@ MAX_LENGTH=1900
 MESSAGE="$1"
 [ "${#MESSAGE}" -gt "$MAX_LENGTH" ] && MESSAGE="${MESSAGE:0:$MAX_LENGTH}...(tronqué)"
 
-DISCORD_TOKEN=$(grep '^DISCORD_TOKEN=' "$ENV_FILE" | cut -d'"' -f2)
+DISCORD_TOKEN=$(grep '^BATBOT_DISCORD_TOKEN=' "$ENV_FILE" | sed 's/^BATBOT_DISCORD_TOKEN=//' | tr -d '"')
 [ -z "$DISCORD_TOKEN" ] && { echo "[notify_discord] ERREUR : DISCORD_TOKEN introuvable" >&2; exit 1; }
 
 # Ouvrir canal DM

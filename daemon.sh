@@ -7,6 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/.env"
 
+mkdir -p "$MESSAGES_DIR"
 WATCH_FILE="${MESSAGES_DIR}/${AUTHORIZED_USER_ID}.json"
 MAX_TIMEOUT=300
 LOCK_FILE="/tmp/claudiscord.lock"
