@@ -1,4 +1,4 @@
 .env
 scheduled-jobs.json
 node_modules/
-messages/
+sessions.json
