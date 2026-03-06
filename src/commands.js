@@ -1,7 +1,7 @@
 const { AUTHORIZED_USER_ID } = require('./config');
 const sessions = require('./sessions');
 const mode = require('./mode');
-const { runLoginFlow, hasPendingLogin, submitLoginCode } = require('./container');
+const { runLoginFlow } = require('./container');
 const log = require('./logger');
 
 /**
@@ -10,13 +10,6 @@ const log = require('./logger');
 async function handleCommand(message) {
 	const content = message.content.trim();
 	const userId = message.author.id;
-
-	// If user has a pending login, route the message as OAuth code
-	if (hasPendingLogin(userId)) {
-		submitLoginCode(userId, content);
-		await message.channel.send('Code recu, verification en cours...');
-		return true;
-	}
 
 	if (content === '/clear') {
 		sessions.clearSession(userId);
@@ -42,9 +35,9 @@ async function handleCommand(message) {
 		try {
 			const { urlPromise, completionPromise } = runLoginFlow(userId);
 			const url = await urlPromise;
-			await message.channel.send(`Ouvre ce lien pour connecter ton compte Claude :\n${url}\n\nPuis colle le code ici.`);
+			await message.channel.send(`Ouvre ce lien et autorise l'acces :\n${url}\n\nL'authentification sera detectee automatiquement.`);
 
-			// Wait for completion in background
+			// Wait for completion in background (CLI polls for OAuth completion)
 			completionPromise.then(() => {
 				message.channel.send('Authentification reussie !').catch(() => {});
 			}).catch((err) => {

@@ -231,51 +231,23 @@ function executeInContainerQueued(userId, prompt, options = {}) {
 	return p;
 }
 
-/** Active login processes: userId -> { process, resolve, reject } */
-const pendingLogins = new Map();
-
 /**
- * Check if a user has a pending login flow
- */
-function hasPendingLogin(userId) {
-	return pendingLogins.has(userId);
-}
-
-/**
- * Feed the OAuth code into the pending login process
- */
-function submitLoginCode(userId, code) {
-	const entry = pendingLogins.get(userId);
-	if (!entry) return false;
-	entry.process.stdin.write(code + '\n');
-	entry.process.stdin.end();
-	return true;
-}
-
-/**
- * Run claude auth login in the container, capture the OAuth URL.
- * Returns { url } when the URL is found.
- * The process stays alive waiting for the code via submitLoginCode().
- * Returns a completionPromise that resolves when login finishes.
+ * Run claude auth login in the container.
+ * The CLI polls for OAuth completion automatically (no stdin needed).
+ * Returns { urlPromise, completionPromise }.
  */
 function runLoginFlow(userId) {
 	ensureContainer(userId);
 	const name = containerName(userId);
 
-	// Clean up any previous login
-	if (pendingLogins.has(userId)) {
-		try { pendingLogins.get(userId).process.kill(); } catch {}
-		pendingLogins.delete(userId);
-	}
-
-	const child = spawn('docker', ['exec', '-i', name, 'claude', 'auth', 'login'], {
-		stdio: ['pipe', 'pipe', 'pipe'],
+	const child = spawn('docker', ['exec', name, 'claude', 'auth', 'login'], {
+		stdio: ['ignore', 'pipe', 'pipe'],
 	});
 
-	const urlPromise = new Promise((resolve, reject) => {
-		let url = null;
-		const urlRegex = /https:\/\/[^\s]+/;
+	let url = null;
+	const urlRegex = /https:\/\/[^\s]+/;
 
+	const urlPromise = new Promise((resolve, reject) => {
 		function checkForUrl(data) {
 			const text = data.toString();
 			const match = text.match(urlRegex);
@@ -290,33 +262,26 @@ function runLoginFlow(userId) {
 
 		const timer = setTimeout(() => {
 			child.kill('SIGTERM');
-			pendingLogins.delete(userId);
 			if (!url) reject(new Error('Login flow timeout (5min)'));
 		}, 300000);
 
-		child.on('close', (code) => {
+		child.on('close', () => {
 			clearTimeout(timer);
-			pendingLogins.delete(userId);
 			if (!url) reject(new Error('Login flow ended without URL'));
 		});
 
 		child.on('error', (err) => {
 			clearTimeout(timer);
-			pendingLogins.delete(userId);
 			reject(err);
 		});
 	});
 
 	const completionPromise = new Promise((resolve, reject) => {
 		child.on('close', (code) => {
-			pendingLogins.delete(userId);
 			if (code === 0) resolve();
 			else reject(new Error(`Login exited with code ${code}`));
 		});
 	});
-
-	// Store for later code submission
-	pendingLogins.set(userId, { process: child });
 
 	return { urlPromise, completionPromise };
 }
@@ -332,4 +297,4 @@ function destroyContainer(userId) {
 	} catch {}
 }
 
-module.exports = { ensureImage, ensureContainer, executeInContainerQueued, runLoginFlow, hasPendingLogin, submitLoginCode, destroyContainer };
+module.exports = { ensureImage, ensureContainer, executeInContainerQueued, runLoginFlow, destroyContainer };
