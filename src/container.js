@@ -4,7 +4,6 @@ const path = require('path');
 const { DATA_DIR, DOCKER_IMAGE, CONTAINER_MEMORY, CONTAINER_CPUS, CLAUDE_TIMEOUT_MS, PROFILES } = require('./config');
 const log = require('./logger');
 
-const SANDBOX_CLAUDE_MD = path.resolve(__dirname, '..', 'sandbox-CLAUDE.md');
 const DOCKERFILE_DIR = path.resolve(__dirname, '..');
 
 /** Per-userId promise queues */
@@ -37,9 +36,10 @@ function ensureUserStorage(userId) {
 	const userHome = path.join(DATA_DIR, userId, 'home');
 	fs.mkdirSync(userHome, { recursive: true });
 
+	// Seed a default CLAUDE.md for new sandbox users (customizable)
 	const claudeMd = path.join(userHome, 'CLAUDE.md');
 	if (!fs.existsSync(claudeMd)) {
-		fs.copyFileSync(SANDBOX_CLAUDE_MD, claudeMd);
+		fs.writeFileSync(claudeMd, '# Sandbox Claude\nTu es dans un environnement sandbox Docker isole.\nPersonnalise ce fichier pour adapter le comportement de Claude a tes besoins.\n');
 		log.info(`Created CLAUDE.md for user ${userId}`);
 	}
 

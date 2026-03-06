@@ -27,7 +27,6 @@ Jobs planifies (scheduler)
 ```
 index.js              # Point d'entree, handler Discord, routing mode, shutdown
 Dockerfile            # Image sandbox (node:22-slim + claude CLI + user claude)
-sandbox-CLAUDE.md     # Template CLAUDE.md copie pour chaque nouvel utilisateur
 rebuild-sandbox.sh    # Script rebuild image + recreation containers (job hebdo)
 src/
   config.js           # .env + constantes + system prompt + profils + Docker config
