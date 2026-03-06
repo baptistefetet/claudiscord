@@ -6,14 +6,20 @@ const log = require('./logger');
 
 const LOGIN_INSTRUCTIONS = `**Authentification sandbox**
 
-Le login OAuth ne fonctionne pas dans un container Docker. Tu dois t'authentifier sur ta propre machine puis envoyer tes credentials :
+Tu dois t'authentifier sur ta propre machine puis envoyer tes credentials :
 
-1. Installe Claude Code : \`curl -fsSL https://claude.ai/install.sh | bash\`
-2. Lance : \`claude auth login\` et autorise l'acces dans ton navigateur
-3. Copie le contenu du fichier credentials :
-   - Linux/Mac : \`cat ~/.claude/.credentials.json\`
-   - Windows : \`type %USERPROFILE%\\.claude\\.credentials.json\`
-4. Envoie ici : \`/login {"claudeAiOauth":...}\``;
+**1.** Installe Claude Code : \`curl -fsSL https://claude.ai/install.sh | bash\`
+**2.** Lance : \`claude auth login\` et autorise l'acces dans ton navigateur
+**3.** Copie les credentials :
+
+> **Linux** : \`cat ~/.claude/.credentials.json\`
+> **Mac** : les credentials sont dans le Keychain. Lance cette commande :
+> \`security find-generic-password -s "claude-credentials" -w\`
+> **Windows** : \`type %USERPROFILE%\\.claude\\.credentials.json\`
+
+**4.** Envoie ici : \`/login {"claudeAiOauth":...}\`
+
+Le message sera supprime automatiquement apres enregistrement.`;
 
 /**
  * Handle special commands. Returns true if the message was a command.
