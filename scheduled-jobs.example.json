@@ -1,13 +1,24 @@
 [
   {
-    "id": "example-job",
-    "prompt": "Décris le prompt que Claude Code doit exécuter.",
+    "id": "check-system",
+    "prompt": "Verifie que tous les services tournent (systemctl is-active), l'espace disque (df -BG), et les erreurs recentes (journalctl --since yesterday -p err). Resume structure, termine par STATUT: OK ou STATUT: PROBLEME.",
     "cron": "0 7 * * *",
     "profile": "admin",
     "enabled": true,
-    "notify": false,
+    "notify": true,
     "created": "2026-01-01T00:00:00Z",
     "lastRun": null,
-    "description": "Description courte du job"
+    "description": "Check sante quotidien a 7h"
+  },
+  {
+    "id": "rebuild-sandbox",
+    "prompt": "Execute le script de rebuild de l'image Docker sandbox : `bash /opt/claudiscord/rebuild-sandbox.sh 2>&1`. Rapporte le resultat (succes ou erreur). En cas d'erreur, affiche les dernieres lignes de sortie.",
+    "cron": "0 4 * * 0",
+    "profile": "admin",
+    "enabled": true,
+    "notify": true,
+    "created": "2026-01-01T00:00:00Z",
+    "lastRun": null,
+    "description": "Rebuild image sandbox Docker (dimanche 4h, met a jour Claude Code)"
   }
 ]
