@@ -29,6 +29,10 @@ function ensureImage() {
 	}
 }
 
+// UID/GID of the 'claude' user inside the container
+const CONTAINER_UID = 1001;
+const CONTAINER_GID = 1001;
+
 function ensureUserStorage(userId) {
 	const userHome = path.join(DATA_DIR, userId, 'home');
 	fs.mkdirSync(userHome, { recursive: true });
@@ -42,6 +46,9 @@ function ensureUserStorage(userId) {
 	// Ensure .claude dir exists for auth persistence
 	const claudeDir = path.join(userHome, '.claude');
 	fs.mkdirSync(claudeDir, { recursive: true });
+
+	// Ensure all files are owned by the container's claude user
+	execFileSync('chown', ['-R', `${CONTAINER_UID}:${CONTAINER_GID}`, userHome], { timeout: 5000 });
 }
 
 function containerName(userId) {
@@ -138,7 +145,7 @@ function executeInContainerInternal(userId, prompt, options = {}) {
 				return;
 			}
 			if (stderr) log.warn('Container stderr:', stderr.slice(0, 500));
-			resolve({ stdout, code });
+			resolve({ stdout, stderr, code });
 		});
 
 		child.on('error', (err) => {
@@ -189,6 +196,10 @@ async function executeInContainer(userId, prompt, options = {}) {
 	}
 
 	if (result.code !== 0) {
+		const combined = (result.stdout + result.stderr).toLowerCase();
+		if (combined.includes('not authenticated') || combined.includes('auth') || combined.includes('login') || combined.includes('api key')) {
+			throw Object.assign(new Error('NOT_AUTHENTICATED'), { code: result.code });
+		}
 		const errMsg = result.stdout.slice(-500) || `exit code ${result.code}`;
 		throw Object.assign(new Error(errMsg), { code: result.code });
 	}

@@ -76,9 +76,14 @@ client.on(Events.MessageCreate, async message => {
 	} catch (err) {
 		if (stopTyping) stopTyping();
 
-		const errMsg = err.code === 124
-			? 'Claude Code a pris trop de temps, timeout !'
-			: `Erreur Claude Code : ${err.message?.slice(0, 300) || 'unknown'}`;
+		let errMsg;
+		if (err.code === 124) {
+			errMsg = 'Claude Code a pris trop de temps, timeout !';
+		} else if (err.message === 'NOT_AUTHENTICATED') {
+			errMsg = 'Tu n\'es pas authentifie dans le sandbox. Utilise `/login` pour connecter ton compte Claude.';
+		} else {
+			errMsg = `Erreur Claude Code : ${err.message?.slice(0, 300) || 'unknown'}`;
+		}
 		await message.channel.send(errMsg).catch(e => log.error('Failed to send error message:', e));
 	}
 });
