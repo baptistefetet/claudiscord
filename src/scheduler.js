@@ -1,9 +1,13 @@
 const fs = require('fs');
+const path = require('path');
 const cron = require('node-cron');
 const { JOBS_FILE, PROFILES, CLAUDE_TIMEOUT_MS, AUTHORIZED_USER_ID } = require('./config');
 const { executeClaudeCommand, acquireJobLock, releaseJobLock } = require('./claude');
 const { sendDM } = require('./discord');
 const log = require('./logger');
+
+const JOBS_DIR = path.dirname(JOBS_FILE);
+const JOBS_BASENAME = path.basename(JOBS_FILE);
 
 /** @type {Map<string, import('node-cron').ScheduledTask>} */
 const tasks = new Map();
@@ -130,9 +134,13 @@ function scheduleTasks() {
 function start() {
 	scheduleTasks();
 
-	// Watch for changes to scheduled-jobs.json
+	// Watch the directory instead of the file directly.
+	// fs.watch() on a file tracks an inode; rename() (used by atomic writes
+	// from saveJobs, jq, or Claude) replaces the inode and breaks the watcher.
+	// Watching the directory catches rename events reliably.
 	try {
-		fileWatcher = fs.watch(JOBS_FILE, () => {
+		fileWatcher = fs.watch(JOBS_DIR, (eventType, filename) => {
+			if (filename !== JOBS_BASENAME) return;
 			if (debounceTimer) clearTimeout(debounceTimer);
 			debounceTimer = setTimeout(() => {
 				log.info('scheduled-jobs.json changed, reloading...');
@@ -141,7 +149,7 @@ function start() {
 		});
 		fileWatcher.on('error', () => {});
 	} catch (err) {
-		log.warn('Could not watch scheduled-jobs.json:', err.message);
+		log.warn('Could not watch for scheduled-jobs.json changes:', err.message);
 	}
 
 	log.info(`Scheduler started with ${tasks.size} job(s)`);

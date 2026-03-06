@@ -5,52 +5,107 @@ Relay Discord DM vers Claude Code CLI + scheduler de jobs planifies. Un seul pro
 ## Architecture
 
 ```
-Discord DM -> [index.js] --spawn--> claude -p -> reponse Discord
-                  |-- scheduler interne --spawn--> claude -p -> DM notification
+DM (admin, mode sandbox = defaut)
+  -> executeInContainerQueued(userId, prompt) -> docker exec -> claude -p -> Discord
+
+DM (admin, mode admin via /admin)
+  -> executeDM(prompt) -> spawn direct hote (comportement Phase 1)
+
+Jobs planifies (scheduler)
+  -> executeClaudeCommand() -> toujours sur l'hote (inchange)
 ```
 
-- DM : le prompt va en memoire a `executeDM()`, la reponse repart sur Discord
+- DM : le prompt va en memoire, la reponse repart sur Discord
 - Jobs : `node-cron` declenche `executeJob()`, output envoye par DM si `notify: true`
 - Sessions : `sessions.json` stocke uniquement les session IDs (pas d'historique de messages)
-- Mutex DM : un seul Claude a la fois pour les DM (queue en memoire)
+- Mutex DM admin : un seul Claude a la fois pour les DM hote (queue en memoire)
+- Mutex sandbox : un lock par userId (Map de Promise queues), concurrent entre utilisateurs
 - Mutex jobs : un lock par job ID (Set en memoire)
 
 ## Fichiers
 
 ```
-index.js              # Point d'entree, handler Discord, shutdown
+index.js              # Point d'entree, handler Discord, routing mode, shutdown
+Dockerfile            # Image sandbox (node:22-slim + claude CLI + user claude)
+sandbox-CLAUDE.md     # Template CLAUDE.md copie pour chaque nouvel utilisateur
 src/
-  config.js           # .env + constantes + system prompt + profils
+  config.js           # .env + constantes + system prompt + profils + Docker config
   logger.js           # Logging stdout/stderr (journald)
   discord.js          # Client Discord, sendDM, splitMessage, typing
-  claude.js           # Spawn claude CLI, mutex DM, locks jobs
+  claude.js           # Spawn claude CLI hote, mutex DM, locks jobs
+  container.js        # Docker : ensureImage, ensureContainer, executeInContainer, login flow
+  mode.js             # Persistance admin/sandbox mode (admin-mode.json)
   sessions.js         # Map memoire + persistence sessions.json
   scheduler.js        # node-cron, reload auto, executeJob
-  commands.js         # /clear (et futur /sandbox)
+  commands.js         # /clear, /admin, /login, /status
 sessions.json         # { userId: sessionId } (gitignored)
 scheduled-jobs.json   # Jobs planifies (gitignored)
-.env                  # AUTHORIZED_USER_ID, CLAUDE_BIN, BATBOT_DISCORD_TOKEN
+admin-mode.json       # { adminMode: bool } (gitignored)
+.env                  # AUTHORIZED_USER_ID, CLAUDE_BIN, BATBOT_DISCORD_TOKEN, DATA_DIR
 ```
 
 ## Service
 
 - **Service** : `claudiscord` (`systemctl status claudiscord`)
 - **Logs** : `journalctl -u claudiscord -f`
+- **Dependance** : `docker.service` (Requires + After)
 - **ExecStopPost** : `pkill -f "claude.*-p"` (filet de securite)
+
+## Modes
+
+- **sandbox** (defaut) : DM admin executes dans un container Docker isole
+- **admin** : DM admin executes directement sur l'hote (acces systeme complet)
+- Toggle via `/admin`, persiste dans `admin-mode.json`
+- Le toggle clear automatiquement la session (contextes incompatibles)
+
+## Docker Sandbox
+
+- **Image** : `claudiscord-sandbox` (build local arm64, `node:22-slim` + Claude Code)
+- **Container** : `claudiscord-{userId}`, un par utilisateur, persistant (`--restart unless-stopped`)
+- **Limites** : 512 Mo RAM, 1 CPU
+- **Volume** : `DATA_DIR/{userId}/home` -> `/home/claude`
+- **Reseau** : bridge (acces internet pour l'API Claude)
+- **User** : `claude` (non-root, requis pour `--dangerously-skip-permissions`)
+- **CMD** : `sleep infinity` (container alive, commandes via `docker exec`)
+
+### Stockage sandbox
+
+```
+/mnt/maxtor/claudiscord/    # DATA_DIR (.env)
+  {userId}/
+    home/                    # Volume monte comme /home/claude dans le container
+      CLAUDE.md              # Personnalisable par l'utilisateur
+      .claude/               # Auth state (cree par claude auth login)
+```
+
+### Rebuild image
+
+Si Claude Code se met a jour, reconstruire l'image :
+```bash
+docker build --no-cache -t claudiscord-sandbox /opt/claudiscord/
+```
+Les containers existants ne sont pas affectes. Pour utiliser la nouvelle image, il faut recreer le container.
 
 ## Claude CLI
 
 - `claude -p` avec `--output-format json` (DM) ou `text` (jobs)
 - `--resume <sessionId>` pour les DM, fallback en nouvelle session si echec
-- `--allowedTools` selon le profil (admin ou online)
+- `--allowedTools` selon le profil (admin, sandbox, ou online)
+- `--dangerously-skip-permissions` en sandbox (le container EST le sandbox)
 - `--model opus`
 - stdin ferme immediatement (`child.stdin.end()`)
-- cwd: `/root` (charge automatiquement `/root/CLAUDE.md`)
+- cwd hote: `/root` (charge automatiquement `/root/CLAUDE.md`)
+- cwd sandbox: `/home/claude` (charge le CLAUDE.md du volume)
 - Timeout: 300s (SIGTERM puis SIGKILL apres 5s)
 
 ## Commandes Discord
 
-- `/clear` : reinitialise la session (admin only)
+| Commande | Qui | Action |
+|----------|-----|--------|
+| `/clear` | tous | Reset session Claude |
+| `/admin` | admin | Toggle admin/sandbox, clear session |
+| `/login` | tous | OAuth flow : lance `claude auth login` dans le container, envoie l'URL par DM |
+| `/status` | admin | Affiche le mode actuel |
 
 ## Jobs planifies
 
@@ -72,6 +127,7 @@ Format dans `scheduled-jobs.json` :
 ### Profils
 
 - `admin` : `Bash(*) Read Write Edit Glob Grep WebSearch WebFetch Task`
+- `sandbox` : `Bash Read Write Edit Glob Grep WebSearch WebFetch Task`
 - `online` : `WebSearch WebFetch`
 
 ### Comportement
@@ -82,6 +138,7 @@ Format dans `scheduled-jobs.json` :
 - `fs.watch()` sur `scheduled-jobs.json` avec debounce 2s pour recharger automatiquement
 - Jobs ephemeres (pas de session persistante)
 - Si `notify: true`, output envoye par DM Discord
+- Jobs toujours sur l'hote (non affectes par le mode sandbox)
 
 ## Variables .env
 
@@ -89,4 +146,5 @@ Format dans `scheduled-jobs.json` :
 AUTHORIZED_USER_ID=<discord user id>
 CLAUDE_BIN=<chemin vers le binaire claude>
 BATBOT_DISCORD_TOKEN=<token du bot Discord>
+DATA_DIR=/mnt/maxtor/claudiscord
 ```

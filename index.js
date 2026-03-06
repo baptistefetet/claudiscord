@@ -1,7 +1,9 @@
-const { AUTHORIZED_USER_ID, getSystemPrompt, PROFILES } = require('./src/config');
+const { AUTHORIZED_USER_ID, getSystemPrompt, getSandboxSystemPrompt, PROFILES } = require('./src/config');
 const log = require('./src/logger');
 const sessions = require('./src/sessions');
+const mode = require('./src/mode');
 const { executeDM } = require('./src/claude');
+const { executeInContainerQueued, ensureImage } = require('./src/container');
 const { createClient, login, splitMessage, startTypingIndicator } = require('./src/discord');
 const { handleCommand } = require('./src/commands');
 const scheduler = require('./src/scheduler');
@@ -14,9 +16,6 @@ process.on('uncaughtException', err => {
 	log.error('Uncaught exception:', err);
 });
 
-// Load sessions from disk
-sessions.load();
-
 // Create Discord client
 const client = createClient();
 
@@ -26,7 +25,7 @@ client.on(Events.MessageCreate, async message => {
 	const isDM = message.channel.type === 1 || message.channel.type === 'DM';
 	if (!isDM) return;
 
-	// Phase 1: admin-only
+	// Phase 2: admin-only for now (future: non-admin always goes to container)
 	if (message.author.id !== AUTHORIZED_USER_ID) return;
 
 	const content = message.content.trim();
@@ -42,12 +41,25 @@ client.on(Events.MessageCreate, async message => {
 		const userId = message.author.id;
 		const sessionId = sessions.getSessionId(userId);
 
-		const result = await executeDM(content, {
-			sessionId,
-			systemPrompt: getSystemPrompt(),
-			allowedTools: PROFILES.admin,
-			outputFormat: 'json',
-		});
+		let result;
+
+		if (userId === AUTHORIZED_USER_ID && mode.isAdminMode()) {
+			// Admin mode: spawn on host (original behavior)
+			result = await executeDM(content, {
+				sessionId,
+				systemPrompt: getSystemPrompt(),
+				allowedTools: PROFILES.admin,
+				outputFormat: 'json',
+			});
+		} else {
+			// Sandbox mode: execute in container
+			result = await executeInContainerQueued(userId, content, {
+				sessionId,
+				systemPrompt: getSandboxSystemPrompt(),
+				allowedTools: PROFILES.sandbox,
+				outputFormat: 'json',
+			});
+		}
 
 		stopTyping();
 		stopTyping = null;
@@ -89,8 +101,15 @@ function shutdown(signal) {
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
-// Start
-login().catch(err => {
+// Async startup
+async function start() {
+	sessions.load();
+	mode.load();
+	ensureImage();
+	await login();
+}
+
+start().catch(err => {
 	log.error('Failed to start:', err);
 	process.exit(1);
 });
