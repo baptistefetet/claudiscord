@@ -266,4 +266,42 @@ function destroyContainer(userId) {
 	} catch {}
 }
 
-module.exports = { ensureImage, ensureContainer, executeInContainerQueued, writeCredentials, hasCredentials, destroyContainer };
+/**
+ * Rebuild the sandbox image and recreate all existing containers.
+ * Volumes (credentials, files) are preserved since they're bind-mounted.
+ */
+function rebuildImage() {
+	log.info('Rebuilding sandbox image...');
+
+	// List existing claudiscord containers
+	let containerList;
+	try {
+		const out = docker('ps', '-a', '--filter', 'name=claudiscord-', '--format', '{{.Names}}');
+		containerList = out ? out.split('\n').filter(n => n.startsWith('claudiscord-')) : [];
+	} catch {
+		containerList = [];
+	}
+
+	// Stop and remove all containers (they use the old image)
+	for (const name of containerList) {
+		try { docker('stop', name); } catch {}
+		try { docker('rm', name); } catch {}
+		log.info(`Removed container '${name}' for rebuild`);
+	}
+
+	// Rebuild image
+	execFileSync('docker', ['build', '--no-cache', '-t', DOCKER_IMAGE, DOCKERFILE_DIR], {
+		encoding: 'utf8',
+		timeout: 600000,
+		stdio: 'inherit',
+	});
+	log.info('Sandbox image rebuilt');
+
+	// Clean up old dangling images
+	try { docker('image', 'prune', '-f'); } catch {}
+
+	// Containers will be recreated on next use via ensureContainer()
+	return containerList.length;
+}
+
+module.exports = { ensureImage, ensureContainer, executeInContainerQueued, writeCredentials, hasCredentials, destroyContainer, rebuildImage };

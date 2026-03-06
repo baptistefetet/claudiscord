@@ -28,12 +28,13 @@ Jobs planifies (scheduler)
 index.js              # Point d'entree, handler Discord, routing mode, shutdown
 Dockerfile            # Image sandbox (node:22-slim + claude CLI + user claude)
 sandbox-CLAUDE.md     # Template CLAUDE.md copie pour chaque nouvel utilisateur
+rebuild-sandbox.sh    # Script rebuild image + recreation containers (job hebdo)
 src/
   config.js           # .env + constantes + system prompt + profils + Docker config
   logger.js           # Logging stdout/stderr (journald)
   discord.js          # Client Discord, sendDM, splitMessage, typing
   claude.js           # Spawn claude CLI hote, mutex DM, locks jobs
-  container.js        # Docker : ensureImage, ensureContainer, executeInContainer, login flow
+  container.js        # Docker : ensureImage, ensureContainer, executeInContainer, credentials, rebuild
   mode.js             # Persistance admin/sandbox mode (admin-mode.json)
   sessions.js         # Map memoire + persistence sessions.json
   scheduler.js        # node-cron, reload auto, executeJob
@@ -80,11 +81,11 @@ admin-mode.json       # { adminMode: bool } (gitignored)
 
 ### Rebuild image
 
-Si Claude Code se met a jour, reconstruire l'image :
+Rebuild manuel (ou via le job `rebuild-sandbox` chaque dimanche 4h) :
 ```bash
-docker build --no-cache -t claudiscord-sandbox /opt/claudiscord/
+bash /opt/claudiscord/rebuild-sandbox.sh
 ```
-Les containers existants ne sont pas affectes. Pour utiliser la nouvelle image, il faut recreer le container.
+Le script stoppe les containers, rebuild l'image, et nettoie. Les containers sont recrees automatiquement au prochain usage (volumes preserves).
 
 ## Claude CLI
 
@@ -104,7 +105,7 @@ Les containers existants ne sont pas affectes. Pour utiliser la nouvelle image, 
 |----------|-----|--------|
 | `/clear` | tous | Reset session Claude |
 | `/admin` | admin | Toggle admin/sandbox, clear session |
-| `/login` | tous | OAuth flow : lance `claude auth login` dans le container, envoie l'URL par DM |
+| `/login` | tous | Sans arg: instructions. Avec JSON: enregistre les credentials |
 | `/status` | admin | Affiche le mode actuel |
 
 ## Jobs planifies
