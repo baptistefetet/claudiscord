@@ -15,7 +15,8 @@ done
 echo "Rebuilding image..."
 docker build --no-cache -t claudiscord-sandbox /opt/claudiscord/
 
-echo "Cleaning up old images..."
+echo "Cleaning up old images and build cache..."
 docker image prune -f
+docker builder prune -f
 
 echo "Done. Containers will be recreated on next use."
