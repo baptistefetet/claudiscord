@@ -35,7 +35,7 @@ function saveJobs(jobs) {
 }
 
 async function executeJob(job) {
-	const { id, prompt, profile, notify } = job;
+	const { id, prompt, profile, notify, notifyPattern } = job;
 
 	// Check lock
 	if (!acquireJobLock(id)) {
@@ -73,7 +73,8 @@ async function executeJob(job) {
 
 		log.info(`Job '${id}' completed (output: ${output.length} chars)`);
 
-		if (notify && output) {
+		const shouldNotify = notify && output && (!notifyPattern || output.includes(notifyPattern));
+		if (shouldNotify) {
 			await sendDM(AUTHORIZED_USER_ID, `\u{1F4CB} **[PI4] Job '${id}'**\n${output}`);
 		}
 	} catch (err) {

@@ -6,6 +6,7 @@
     "profile": "admin",
     "enabled": true,
     "notify": true,
+    "notifyPattern": "STATUT: PROBLEME",
     "created": "2026-01-01T00:00:00Z",
     "lastRun": null,
     "description": "Check sante quotidien a 7h"

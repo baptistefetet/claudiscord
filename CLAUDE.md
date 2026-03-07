@@ -117,7 +117,8 @@ Format dans `scheduled-jobs.json` :
   "cron": "0 7 * * *",
   "profile": "admin",
   "enabled": true,
-  "notify": false,
+  "notify": true,
+  "notifyPattern": "STATUT: PROBLEME",
   "created": "2026-02-21T10:00:00Z",
   "lastRun": null,
   "description": "Check sante quotidien a 7h"
@@ -137,7 +138,7 @@ Format dans `scheduled-jobs.json` :
 - Protection doublon dans la meme minute
 - `fs.watch()` sur `scheduled-jobs.json` avec debounce 2s pour recharger automatiquement
 - Jobs ephemeres (pas de session persistante)
-- Si `notify: true`, output envoye par DM Discord
+- Si `notify: true`, output envoye par DM Discord (filtre par `notifyPattern` si present)
 - Jobs toujours sur l'hote (non affectes par le mode sandbox)
 
 ## Variables .env
