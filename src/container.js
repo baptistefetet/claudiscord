@@ -1,7 +1,7 @@
 const { spawn, execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { DATA_DIR, DOCKER_IMAGE, CONTAINER_MEMORY, CONTAINER_CPUS, CLAUDE_TIMEOUT_MS, PROFILES } = require('./config');
+const { DATA_DIR, DOCKER_IMAGE, CONTAINER_MEMORY, CONTAINER_CPUS, CLAUDE_TIMEOUT_MS, ALLOWED_TOOLS } = require('./config');
 const log = require('./logger');
 
 const DOCKERFILE_DIR = path.resolve(__dirname, '..');
@@ -94,7 +94,7 @@ function executeInContainerInternal(userId, prompt, options = {}) {
 	const {
 		sessionId = null,
 		systemPrompt = null,
-		allowedTools = PROFILES.sandbox,
+		allowedTools = ALLOWED_TOOLS,
 		model = 'opus',
 		outputFormat = 'json',
 		timeoutMs = CLAUDE_TIMEOUT_MS,
@@ -164,7 +164,7 @@ async function executeInContainer(userId, prompt, options = {}) {
 	const {
 		sessionId = null,
 		systemPrompt = null,
-		allowedTools = PROFILES.sandbox,
+		allowedTools = ALLOWED_TOOLS,
 		outputFormat = 'json',
 		timeoutMs = CLAUDE_TIMEOUT_MS,
 	} = options;

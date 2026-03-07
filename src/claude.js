@@ -1,5 +1,5 @@
 const { spawn } = require('child_process');
-const { CLAUDE_BIN, CLAUDE_TIMEOUT_MS, getSystemPrompt, PROFILES } = require('./config');
+const { CLAUDE_BIN, CLAUDE_TIMEOUT_MS, getSystemPrompt, ALLOWED_TOOLS } = require('./config');
 const log = require('./logger');
 
 // Mutex for DM requests (one Claude at a time)
@@ -12,7 +12,7 @@ function spawnClaude(prompt, options = {}) {
 	const {
 		sessionId = null,
 		systemPrompt = null,
-		allowedTools = PROFILES.admin,
+		allowedTools = ALLOWED_TOOLS,
 		model = 'opus',
 		outputFormat = 'json',
 		timeoutMs = CLAUDE_TIMEOUT_MS,
@@ -79,7 +79,7 @@ async function executeClaudeCommand(prompt, options = {}) {
 	const {
 		sessionId = null,
 		systemPrompt = getSystemPrompt(),
-		allowedTools = PROFILES.admin,
+		allowedTools = ALLOWED_TOOLS,
 		outputFormat = 'json',
 		timeoutMs = CLAUDE_TIMEOUT_MS,
 	} = options;

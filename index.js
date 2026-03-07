@@ -1,4 +1,4 @@
-const { AUTHORIZED_USER_ID, getSystemPrompt, getSandboxSystemPrompt, PROFILES } = require('./src/config');
+const { AUTHORIZED_USER_ID, getSystemPrompt, getSandboxSystemPrompt, ALLOWED_TOOLS } = require('./src/config');
 const log = require('./src/logger');
 const sessions = require('./src/sessions');
 const mode = require('./src/mode');
@@ -50,7 +50,7 @@ client.on(Events.MessageCreate, async message => {
 			result = await executeDM(content, {
 				sessionId,
 				systemPrompt: getSystemPrompt({ botName, userName }),
-				allowedTools: PROFILES.admin,
+				allowedTools: ALLOWED_TOOLS,
 				outputFormat: 'json',
 			});
 		} else {
@@ -58,7 +58,7 @@ client.on(Events.MessageCreate, async message => {
 			result = await executeInContainerQueued(userId, content, {
 				sessionId,
 				systemPrompt: getSandboxSystemPrompt({ botName, userName }),
-				allowedTools: PROFILES.sandbox,
+				allowedTools: ALLOWED_TOOLS,
 				outputFormat: 'json',
 			});
 		}

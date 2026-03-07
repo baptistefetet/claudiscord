@@ -24,10 +24,7 @@ const CLAUDE_TIMEOUT_MS = 300_000;
 const DISCORD_MAX_MSG_LENGTH = 2000;
 const TYPING_INTERVAL_MS = 8000;
 
-const PROFILES = {
-	admin: 'Bash(*) Read Write Edit Glob Grep WebSearch WebFetch Task',
-	sandbox: 'Bash Read Write Edit Glob Grep WebSearch WebFetch Task',
-};
+const ALLOWED_TOOLS = 'Bash(*) Read Write Edit Glob Grep WebSearch WebFetch Task';
 
 const SANDBOX_JOBS_PATH = '/home/claude/.claudiscord/scheduled-jobs.json';
 
@@ -72,7 +69,7 @@ module.exports = {
 	DOCKER_IMAGE,
 	CONTAINER_MEMORY,
 	CONTAINER_CPUS,
-	PROFILES,
+	ALLOWED_TOOLS,
 	getSystemPrompt,
 	getSandboxSystemPrompt,
 };
