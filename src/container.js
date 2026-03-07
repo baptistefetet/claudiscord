@@ -47,6 +47,10 @@ function ensureUserStorage(userId) {
 	const claudeDir = path.join(userHome, '.claude');
 	fs.mkdirSync(claudeDir, { recursive: true });
 
+	// Ensure .claudiscord dir exists for scheduled jobs
+	const claudiscordDir = path.join(userHome, '.claudiscord');
+	fs.mkdirSync(claudiscordDir, { recursive: true });
+
 	// Ensure all files are owned by the container's claude user
 	execFileSync('chown', ['-R', `${CONTAINER_UID}:${CONTAINER_GID}`, userHome], { timeout: 5000 });
 }
@@ -78,6 +82,7 @@ function ensureContainer(userId) {
 		'--memory', CONTAINER_MEMORY,
 		'--cpus', String(CONTAINER_CPUS),
 		'--restart', 'unless-stopped',
+		'-e', 'TZ=Europe/Paris',
 		'-v', `${userHome}:/home/claude`,
 		DOCKER_IMAGE,
 	);
@@ -202,6 +207,14 @@ async function executeInContainer(userId, prompt, options = {}) {
 		}
 		const errMsg = result.stdout.slice(-500) || `exit code ${result.code}`;
 		throw Object.assign(new Error(errMsg), { code: result.code });
+	}
+
+	// Merge user scheduled jobs after successful execution
+	try {
+		const { mergeUserJobs } = require('./scheduler');
+		mergeUserJobs(userId);
+	} catch (err) {
+		log.warn(`Failed to merge jobs for user ${userId}:`, err.message);
 	}
 
 	// Parse output

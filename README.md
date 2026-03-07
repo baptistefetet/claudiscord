@@ -104,9 +104,9 @@ Jobs are defined in `scheduled-jobs.json` (see `scheduled-jobs.example.json` for
 ```json
 {
   "id": "my-job",
+  "userId": null,
   "prompt": "The prompt Claude Code will execute",
   "cron": "0 7 * * *",
-  "profile": "admin",
   "enabled": true,
   "notify": true,
   "created": "2026-01-01T00:00:00Z",
@@ -115,9 +115,9 @@ Jobs are defined in `scheduled-jobs.json` (see `scheduled-jobs.example.json` for
 }
 ```
 
-**Profiles:** `admin` (full system access), `sandbox` (container tools), `online` (web only).
-
-Jobs always run on the host, regardless of sandbox mode.
+- `userId: null` → runs on host with full system access
+- `userId: "<discord id>"` → runs in user's sandbox container
+- Sandbox users manage their jobs in `/home/claude/.claudiscord/scheduled-jobs.json`, automatically merged after each execution.
 
 ## Architecture
 

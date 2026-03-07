@@ -26,9 +26,14 @@ const TYPING_INTERVAL_MS = 8000;
 
 const PROFILES = {
 	admin: 'Bash(*) Read Write Edit Glob Grep WebSearch WebFetch Task',
-	online: 'WebSearch WebFetch',
 	sandbox: 'Bash Read Write Edit Glob Grep WebSearch WebFetch Task',
 };
+
+const SANDBOX_JOBS_PATH = '/home/claude/.claudiscord/scheduled-jobs.json';
+
+function getSchedulingPrompt(jobsPath) {
+	return `Tu peux gerer les jobs planifies (creer, modifier, supprimer, lister) dans ${jobsPath} si l'utilisateur le demande. Champs : id (string unique), prompt, cron (expression cron standard), enabled (bool), notify (bool), notifyPattern (string optionnel), created (ISO date), lastRun (null), description. Notifications : si notify=true, l'output est envoye par DM a l'utilisateur. Si notifyPattern est defini (ex: "PROBLEME"), la notification n'est envoyee que si l'output contient cette chaine — utile pour n'alerter qu'en cas de probleme. Le job n'a pas besoin d'envoyer de notification lui-meme.`;
+}
 
 function getSystemPrompt({ botName, userName } = {}) {
 	const today = new Date().toISOString().slice(0, 10);
@@ -36,7 +41,7 @@ function getSystemPrompt({ botName, userName } = {}) {
 	const interlocutor = userName ? `Tu parles a ${userName}. ` : '';
 	return `${identity}Tu es l'assistant administrateur systeme. ${interlocutor}L'utilisateur te parle via Discord DM.
 Tu as acces aux outils systeme pour administrer le serveur.
-Tu peux gerer les jobs planifies (creer, modifier, supprimer, lister, executer) dans ${JOBS_FILE} si l'utilisateur le demande. Champs : id, prompt, cron, profile (admin|online), enabled, notify, notifyPattern (optionnel), created, lastRun, description. Notifications : si notify=true, l'output est envoye par DM. Si notifyPattern est defini (ex: "PROBLEME"), la notification n'est envoyee que si l'output contient cette chaine — utile pour n'alerter qu'en cas de probleme. Le job n'a pas besoin d'envoyer de notification lui-meme. Profil : admin seulement si le prompt necessite un acces systeme (Bash, fichiers, services). Pour tout le reste (recherche web, generation de texte, message simple), utilise online. L'utilisateur peut forcer le profil.
+${getSchedulingPrompt(JOBS_FILE)}
 Fais des reponses concises adaptees a Discord (max ~1800 caracteres).
 Utilise le markdown Discord (pas HTML). La date du jour est : ${today}.`;
 }
@@ -48,6 +53,7 @@ function getSandboxSystemPrompt({ botName, userName } = {}) {
 	return `${identity}Tu es un assistant Claude dans un environnement sandbox Docker isole.
 ${interlocutor}L'utilisateur te parle via Discord DM.
 Tu as acces aux outils de developpement (Bash, fichiers, web).
+${getSchedulingPrompt(SANDBOX_JOBS_PATH)}
 Fais des reponses concises adaptees a Discord (max ~1800 caracteres).
 Utilise le markdown Discord (pas HTML). La date du jour est : ${today}.`;
 }
@@ -59,6 +65,7 @@ module.exports = {
 	DATA_DIR,
 	JOBS_FILE,
 	SESSIONS_FILE,
+	SANDBOX_JOBS_PATH,
 	CLAUDE_TIMEOUT_MS,
 	DISCORD_MAX_MSG_LENGTH,
 	TYPING_INTERVAL_MS,
