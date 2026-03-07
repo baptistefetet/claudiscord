@@ -1,6 +1,6 @@
 #!/bin/bash
 # Rebuild the claudiscord-sandbox Docker image and recreate containers.
-# Called by the weekly scheduled job via Claude CLI on the host.
+# Called by the monthly scheduled job via Claude CLI on the host.
 # Volumes (credentials, user files) are preserved.
 
 set -e

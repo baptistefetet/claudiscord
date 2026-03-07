@@ -304,4 +304,4 @@ function rebuildImage() {
 	return containerList.length;
 }
 
-module.exports = { ensureImage, ensureContainer, executeInContainerQueued, writeCredentials, hasCredentials, destroyContainer, rebuildImage };
+module.exports = { ensureImage, ensureContainer, containerName, executeInContainerQueued, writeCredentials, hasCredentials, destroyContainer, rebuildImage };

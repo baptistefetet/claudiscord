@@ -1,5 +1,5 @@
 const { Client, Events, GatewayIntentBits, Partials } = require('discord.js');
-const { BATBOT_DISCORD_TOKEN, DISCORD_MAX_MSG_LENGTH, TYPING_INTERVAL_MS } = require('./config');
+const { DISCORD_TOKEN, DISCORD_MAX_MSG_LENGTH, TYPING_INTERVAL_MS } = require('./config');
 const log = require('./logger');
 
 let client = null;
@@ -20,7 +20,7 @@ function getClient() {
 }
 
 async function login() {
-	await client.login(BATBOT_DISCORD_TOKEN);
+	await client.login(DISCORD_TOKEN);
 	log.info(`Discord client connected as ${client.user.tag}`);
 }
 

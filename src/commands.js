@@ -1,7 +1,8 @@
+const { execFileSync } = require('child_process');
 const { AUTHORIZED_USER_ID } = require('./config');
 const sessions = require('./sessions');
 const mode = require('./mode');
-const { writeCredentials, hasCredentials } = require('./container');
+const { writeCredentials, hasCredentials, ensureContainer, containerName } = require('./container');
 const log = require('./logger');
 
 const LOGIN_INSTRUCTIONS = `**Authentification sandbox**
@@ -27,6 +28,46 @@ Le message sera supprime automatiquement apres enregistrement.`;
 async function handleCommand(message) {
 	const content = message.content.trim();
 	const userId = message.author.id;
+
+	if (content === '/help') {
+		const isAdmin = userId === AUTHORIZED_USER_ID;
+		let help = `**Commandes disponibles**
+
+\`/help\` — Affiche cette aide
+\`/clear\` — Reinitialise la session (nouvelle conversation)
+\`/upgrade\` — Met a jour Claude Code dans ton container sandbox
+\`/login\` — Instructions d'authentification sandbox
+\`/login <json>\` — Enregistre tes credentials`;
+		if (isAdmin) {
+			help += `
+\`/admin\` — Bascule entre mode admin (hote) et sandbox (container)
+\`/status\` — Affiche le mode actuel et le statut d'authentification`;
+		}
+		await message.channel.send(help);
+		return true;
+	}
+
+	if (content === '/upgrade') {
+		try {
+			ensureContainer(userId);
+			const name = containerName(userId);
+			await message.channel.send('Mise a jour de Claude Code en cours...');
+			const output = execFileSync('docker', [
+				'exec', name, 'bash', '-c',
+				'curl -fsSL https://claude.ai/install.sh | bash 2>&1 | tail -5',
+			], { encoding: 'utf8', timeout: 120000 });
+			// Get new version
+			let version = '';
+			try {
+				version = execFileSync('docker', ['exec', name, 'claude', '--version'], { encoding: 'utf8', timeout: 10000 }).trim();
+			} catch {}
+			await message.channel.send(`Claude Code mis a jour.${version ? `\nVersion : \`${version}\`` : ''}`);
+		} catch (err) {
+			log.error('Upgrade error:', err.message);
+			await message.channel.send(`Erreur lors de la mise a jour : ${err.message.slice(0, 300)}`);
+		}
+		return true;
+	}
 
 	if (content === '/clear') {
 		sessions.clearSession(userId);

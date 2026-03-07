@@ -40,6 +40,8 @@ client.on(Events.MessageCreate, async message => {
 
 		const userId = message.author.id;
 		const sessionId = sessions.getSessionId(userId);
+		const botName = client.user.displayName;
+		const userName = message.author.displayName;
 
 		let result;
 
@@ -47,7 +49,7 @@ client.on(Events.MessageCreate, async message => {
 			// Admin mode: spawn on host (original behavior)
 			result = await executeDM(content, {
 				sessionId,
-				systemPrompt: getSystemPrompt(),
+				systemPrompt: getSystemPrompt({ botName, userName }),
 				allowedTools: PROFILES.admin,
 				outputFormat: 'json',
 			});
@@ -55,7 +57,7 @@ client.on(Events.MessageCreate, async message => {
 			// Sandbox mode: execute in container
 			result = await executeInContainerQueued(userId, content, {
 				sessionId,
-				systemPrompt: getSandboxSystemPrompt(),
+				systemPrompt: getSandboxSystemPrompt({ botName, userName }),
 				allowedTools: PROFILES.sandbox,
 				outputFormat: 'json',
 			});

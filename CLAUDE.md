@@ -27,7 +27,7 @@ Jobs planifies (scheduler)
 ```
 index.js              # Point d'entree, handler Discord, routing mode, shutdown
 Dockerfile            # Image sandbox (node:22-slim + claude CLI + user claude)
-rebuild-sandbox.sh    # Script rebuild image + recreation containers (job hebdo)
+rebuild-sandbox.sh    # Script rebuild image + recreation containers (job mensuel)
 src/
   config.js           # .env + constantes + system prompt + profils + Docker config
   logger.js           # Logging stdout/stderr (journald)
@@ -41,7 +41,7 @@ src/
 sessions.json         # { userId: sessionId } (gitignored)
 scheduled-jobs.json   # Jobs planifies (gitignored)
 admin-mode.json       # { adminMode: bool } (gitignored)
-.env                  # AUTHORIZED_USER_ID, CLAUDE_BIN, BATBOT_DISCORD_TOKEN, DATA_DIR
+.env                  # AUTHORIZED_USER_ID, CLAUDE_BIN, DISCORD_TOKEN, DATA_DIR
 ```
 
 ## Service
@@ -80,7 +80,7 @@ admin-mode.json       # { adminMode: bool } (gitignored)
 
 ### Rebuild image
 
-Rebuild manuel (ou via le job `rebuild-sandbox` chaque dimanche 4h) :
+Rebuild manuel (ou via le job `rebuild-sandbox` le 1er du mois a 4h) :
 ```bash
 bash /opt/claudiscord/rebuild-sandbox.sh
 ```
@@ -102,7 +102,9 @@ Le script stoppe les containers, rebuild l'image, et nettoie. Les containers son
 
 | Commande | Qui | Action |
 |----------|-----|--------|
+| `/help` | tous | Affiche les commandes disponibles |
 | `/clear` | tous | Reset session Claude |
+| `/upgrade` | tous | Met a jour Claude Code dans le container sandbox |
 | `/admin` | admin | Toggle admin/sandbox, clear session |
 | `/login` | tous | Sans arg: instructions. Avec JSON: enregistre les credentials |
 | `/status` | admin | Affiche le mode actuel |
@@ -146,6 +148,6 @@ Format dans `scheduled-jobs.json` :
 ```env
 AUTHORIZED_USER_ID=<discord user id>
 CLAUDE_BIN=<chemin vers le binaire claude>
-BATBOT_DISCORD_TOKEN=<token du bot Discord>
+DISCORD_TOKEN=<token du bot Discord>
 DATA_DIR=/mnt/maxtor/claudiscord
 ```

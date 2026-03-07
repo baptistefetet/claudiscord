@@ -11,7 +11,7 @@ Each user gets an isolated Docker container with Claude Code. The admin can also
 - **Admin mode** -- toggle between sandbox (container) and admin (host) for system access
 - **Session persistence** -- conversations are resumed across messages via `--resume`
 - **Job scheduler** -- cron-based jobs with `node-cron`, auto-reload on file change
-- **Weekly image rebuild** -- keeps Claude Code up to date in containers
+- **Monthly image rebuild** -- keeps Claude Code up to date in containers
 
 ## Prerequisites
 
@@ -32,7 +32,7 @@ npm install
 
 # Configure
 cp .env.example .env
-# Edit .env: set AUTHORIZED_USER_ID, CLAUDE_BIN, BATBOT_DISCORD_TOKEN, DATA_DIR
+# Edit .env: set AUTHORIZED_USER_ID, CLAUDE_BIN, DISCORD_TOKEN, DATA_DIR
 
 # Build the sandbox Docker image
 docker build -t claudiscord-sandbox .
@@ -75,7 +75,9 @@ systemctl enable --now claudiscord
 
 | Command | Who | Description |
 |---------|-----|-------------|
+| `/help` | everyone | Show available commands |
 | `/clear` | everyone | Reset Claude session |
+| `/upgrade` | everyone | Update Claude Code in the sandbox container |
 | `/admin` | admin | Toggle admin (host) / sandbox (container) mode |
 | `/login` | everyone | Without args: show auth instructions. With JSON: save credentials |
 | `/status` | admin | Show current mode and auth status |
@@ -133,16 +135,16 @@ Scheduled jobs
 - One container per user (`claudiscord-{userId}`), persistent (`--restart unless-stopped`)
 - Volumes in `DATA_DIR/{userId}/home/` mounted as `/home/claude` (credentials, files, CLAUDE.md)
 - Containers survive reboots and service restarts
-- Weekly image rebuild updates Claude Code without losing user data
+- Monthly image rebuild updates Claude Code without losing user data
 
 ## Configuration
 
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `AUTHORIZED_USER_ID` | Discord user ID of the admin | required |
-| `BATBOT_DISCORD_TOKEN` | Discord bot token | required |
-| `CLAUDE_BIN` | Path to Claude Code binary | `/root/.local/bin/claude` |
-| `DATA_DIR` | Directory for sandbox user volumes | `/mnt/maxtor/claudiscord` |
+| `DISCORD_TOKEN` | Discord bot token | required |
+| `CLAUDE_BIN` | Path to Claude Code binary | required |
+| `DATA_DIR` | Directory for sandbox user volumes | required |
 
 ## License
 
