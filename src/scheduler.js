@@ -222,18 +222,18 @@ async function executeJob(job) {
 
 		const shouldNotify = notify && output && (!notifyPattern || output.includes(notifyPattern));
 		if (shouldNotify) {
-			await sendDM(targetUser, `\u{1F4CB} **[PI4] Job '${id}'**\n${output}`);
+			await sendDM(targetUser, `\u{1F4CB} **Job '${id}'**\n${output}`);
 		}
 	} catch (err) {
 		if (err.code === 124) {
 			log.error(`Job '${key}': TIMEOUT`);
 			if (notify) {
-				await sendDM(targetUser, `\u{1F6A8} **[PI4] Job '${id}' \u2014 TIMEOUT**\nPas de reponse apres ${CLAUDE_TIMEOUT_MS / 1000}s.`).catch(e => log.error('Notify failed:', e.message));
+				await sendDM(targetUser, `\u{1F6A8} **Job '${id}' \u2014 TIMEOUT**\nPas de reponse apres ${CLAUDE_TIMEOUT_MS / 1000}s.`).catch(e => log.error('Notify failed:', e.message));
 			}
 		} else {
 			log.error(`Job '${key}': ERROR (code ${err.code || 'unknown'})`, err.message);
 			if (notify) {
-				await sendDM(targetUser, `\u{1F6A8} **[PI4] Job '${id}' \u2014 ERREUR**\nClaude a echoue avec le code ${err.code || 'unknown'}.`).catch(e => log.error('Notify failed:', e.message));
+				await sendDM(targetUser, `\u{1F6A8} **Job '${id}' \u2014 ERREUR**\nClaude a echoue avec le code ${err.code || 'unknown'}.`).catch(e => log.error('Notify failed:', e.message));
 			}
 		}
 	} finally {
