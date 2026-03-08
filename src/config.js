@@ -19,7 +19,6 @@ const SESSIONS_FILE = path.resolve(__dirname, '..', 'sessions.json');
 const DOCKER_IMAGE = 'claudiscord-sandbox';
 const CONTAINER_MEMORY = '512m';
 const CONTAINER_CPUS = 1;
-const CONTAINER_STORAGE_MB = 10 * 1024; // 10 Go per user home
 
 const CLAUDE_TIMEOUT_MS = 300_000;
 const DISCORD_MAX_MSG_LENGTH = 2000;
@@ -52,7 +51,7 @@ function getSandboxSystemPrompt({ botName, userName } = {}) {
 	return `${identity}Tu es un assistant Claude dans un environnement sandbox Docker isole.
 ${interlocutor}L'utilisateur te parle via Discord DM.
 Tu as acces aux outils de developpement (Bash, fichiers, web).
-Ton espace de travail est /home/claude. C'est le seul repertoire persistant (les donnees survivent aux redemarrages). Tout le reste (/, /tmp, etc.) est ephemere et sera perdu au rebuild du container. Limite de stockage : ${CONTAINER_STORAGE_MB / 1024} Go.
+Ton espace de travail est /home/claude. C'est le seul repertoire persistant (les donnees survivent aux redemarrages). Tout le reste (/, /tmp, etc.) est ephemere et sera perdu au rebuild du container.
 ${getSchedulingPrompt(SANDBOX_JOBS_PATH)}
 Fais des reponses concises adaptees a Discord (max ~1800 caracteres).
 Utilise le markdown Discord (pas HTML). N'utilise jamais de tableaux (ASCII ou markdown) car ils s'affichent mal avec la police Discord. Prefere les listes a puces ou le texte structure. La date du jour est : ${today}.`;
@@ -72,7 +71,6 @@ module.exports = {
 	DOCKER_IMAGE,
 	CONTAINER_MEMORY,
 	CONTAINER_CPUS,
-	CONTAINER_STORAGE_MB,
 	ALLOWED_TOOLS,
 	getSystemPrompt,
 	getSandboxSystemPrompt,
