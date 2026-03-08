@@ -81,8 +81,6 @@ client.on(Events.MessageCreate, async message => {
 		let errMsg;
 		if (err.code === 124) {
 			errMsg = 'Claude Code a pris trop de temps, timeout !';
-		} else if (err.code === 'STORAGE_LIMIT') {
-			errMsg = err.message;
 		} else if (err.message === 'NOT_AUTHENTICATED') {
 			errMsg = 'Tu n\'es pas authentifie dans le sandbox. Envoie `/login` pour les instructions.';
 		} else {

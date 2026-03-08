@@ -32,9 +32,66 @@ function ensureImage() {
 const CONTAINER_UID = 1001;
 const CONTAINER_GID = 1001;
 
-function ensureUserStorage(userId) {
-	const userHome = path.join(DATA_DIR, userId, 'home');
+function isLoopMounted(mountPoint) {
+	try {
+		execFileSync('mountpoint', ['-q', mountPoint], { timeout: 5000 });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function ensureLoopMount(userId) {
+	const userDir = path.join(DATA_DIR, userId);
+	const imgPath = path.join(userDir, 'home.img');
+	const userHome = path.join(userDir, 'home');
+
 	fs.mkdirSync(userHome, { recursive: true });
+
+	if (!fs.existsSync(imgPath)) {
+		// Migrate existing data if present (one-time, pre-loop-mount users)
+		const existingFiles = fs.readdirSync(userHome);
+		let tmpDir = null;
+
+		if (existingFiles.length > 0) {
+			const name = containerName(userId);
+			try { docker('stop', name); } catch {}
+			try { docker('rm', name); } catch {}
+
+			tmpDir = path.join(userDir, 'home_migration_tmp');
+			fs.renameSync(userHome, tmpDir);
+			fs.mkdirSync(userHome, { recursive: true });
+			log.info(`Migrating existing data for user ${userId}`);
+		}
+
+		// Create sparse image (only uses actual disk space for written data)
+		execFileSync('truncate', ['-s', `${CONTAINER_STORAGE_MB}M`, imgPath], { timeout: 5000 });
+		execFileSync('mkfs.ext4', ['-q', '-m', '0', '-F', imgPath], { timeout: 30000 });
+		log.info(`Created ${CONTAINER_STORAGE_MB / 1024}G loop image for user ${userId}`);
+
+		execFileSync('mount', ['-o', 'loop', imgPath, userHome], { timeout: 10000 });
+		log.info(`Mounted loop image for user ${userId}`);
+
+		// Restore migrated data
+		if (tmpDir) {
+			execFileSync('cp', ['-aT', tmpDir, userHome], { timeout: 60000 });
+			execFileSync('rm', ['-rf', tmpDir], { timeout: 10000 });
+			log.info(`Migration complete for user ${userId}`);
+		}
+
+		return;
+	}
+
+	// Image exists, ensure it's mounted (e.g. after reboot)
+	if (!isLoopMounted(userHome)) {
+		execFileSync('mount', ['-o', 'loop', imgPath, userHome], { timeout: 10000 });
+		log.info(`Mounted loop image for user ${userId}`);
+	}
+}
+
+function ensureUserStorage(userId) {
+	ensureLoopMount(userId);
+	const userHome = path.join(DATA_DIR, userId, 'home');
 
 	// Seed a default CLAUDE.md for new sandbox users (customizable)
 	const claudeMd = path.join(userHome, 'CLAUDE.md');
@@ -53,25 +110,6 @@ function ensureUserStorage(userId) {
 
 	// Ensure all files are owned by the container's claude user
 	execFileSync('chown', ['-R', `${CONTAINER_UID}:${CONTAINER_GID}`, userHome], { timeout: 5000 });
-}
-
-function checkStorageLimit(userId) {
-	const userHome = path.join(DATA_DIR, userId, 'home');
-	try {
-		const out = execFileSync('du', ['-sm', userHome], { encoding: 'utf8', timeout: 10000 });
-		const usedMB = parseInt(out.split('\t')[0], 10);
-		if (usedMB >= CONTAINER_STORAGE_MB) {
-			throw Object.assign(
-				new Error(`Quota disque depasse : ${usedMB} Mo utilises sur ${CONTAINER_STORAGE_MB} Mo autorises. Libere de l'espace dans /home/claude.`),
-				{ code: 'STORAGE_LIMIT' },
-			);
-		}
-		return usedMB;
-	} catch (err) {
-		if (err.code === 'STORAGE_LIMIT') throw err;
-		log.warn(`Storage check failed for user ${userId}:`, err.message);
-		return 0; // fail open
-	}
 }
 
 function containerName(userId) {
@@ -188,9 +226,6 @@ async function executeInContainer(userId, prompt, options = {}) {
 		timeoutMs = CLAUDE_TIMEOUT_MS,
 	} = options;
 
-	// Check storage quota before execution
-	checkStorageLimit(userId);
-
 	let result;
 
 	// First attempt
@@ -286,7 +321,19 @@ function writeCredentials(userId, credentialsJson) {
  * Check if a user has credentials in their container volume.
  */
 function hasCredentials(userId) {
-	const credPath = path.join(DATA_DIR, userId, 'home', '.claude', '.credentials.json');
+	// Ensure loop image is mounted if it exists (e.g. after reboot)
+	const userDir = path.join(DATA_DIR, userId);
+	const imgPath = path.join(userDir, 'home.img');
+	const userHome = path.join(userDir, 'home');
+	if (fs.existsSync(imgPath) && !isLoopMounted(userHome)) {
+		try {
+			fs.mkdirSync(userHome, { recursive: true });
+			execFileSync('mount', ['-o', 'loop', imgPath, userHome], { timeout: 10000 });
+		} catch (err) {
+			log.warn(`Failed to mount image for credentials check:`, err.message);
+		}
+	}
+	const credPath = path.join(userHome, '.claude', '.credentials.json');
 	return fs.existsSync(credPath);
 }
 
