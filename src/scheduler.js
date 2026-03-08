@@ -234,7 +234,17 @@ async function executeJob(job) {
 
 		log.info(`Job '${key}' completed (output: ${output.length} chars)`);
 
-		const shouldNotify = notify && output && (!notifyPattern || output.includes(notifyPattern));
+		let patternMatches = true;
+		if (notifyPattern) {
+			try {
+				const regex = new RegExp(notifyPattern, 's');
+				patternMatches = regex.test(output);
+			} catch {
+				log.warn(`Job '${key}': invalid notifyPattern regex '${notifyPattern}', falling back to includes()`);
+				patternMatches = output.includes(notifyPattern);
+			}
+		}
+		const shouldNotify = notify && output && patternMatches;
 		if (shouldNotify) {
 			await sendDM(targetUser, `\u{1F4CB} **Job '${id}'**\n${output}`);
 		}

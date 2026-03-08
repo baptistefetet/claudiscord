@@ -35,7 +35,7 @@ Le fichier ${jobsPath} contient un tableau JSON d'objets. Un scheduler (node-cro
 
 Champs : id (string unique), prompt (le prompt qui sera execute par Claude), cron (expression cron standard, timezone Europe/Paris), enabled (bool), notify (bool), notifyPattern (string optionnel), created (ISO date), lastRun (null ou ISO date, ne pas modifier), description.
 
-Notifications : si notify=true, l'output du job est envoye par DM Discord a l'utilisateur. Si notifyPattern est defini (ex: "PROBLEME"), la notification n'est envoyee que si l'output contient cette chaine — utile pour n'alerter qu'en cas de probleme.
+Notifications : si notify=true, l'output du job est envoye par DM Discord a l'utilisateur. Si notifyPattern est defini, il est interprete comme une expression reguliere (regex) et la notification n'est envoyee que si l'output matche ce pattern. IMPORTANT : si tu veux une notification conditionnee par quelque chose (n'envoyer que si un mot-cle apparait, ou seulement si un mot-cle est absent), tu DOIS specifier notifyPattern — sans lui, notify=true envoie TOUJOURS la notification. Exemples : "PROBLEME" (notifie si le mot apparait), "^(?!.*OK).*$" (notifie si OK est absent). Le flag dotall (s) est actif par defaut (le . matche les newlines).
 
 Pour consulter la liste des jobs planifies, il suffit de lire ce fichier — il contient toujours l'etat complet et a jour de tous les jobs.
 

@@ -161,7 +161,7 @@ Apres chaque execution de Claude dans un container, `mergeUserJobs(userId)` :
 - Protection doublon dans la meme minute
 - `fs.watch()` sur `scheduled-jobs.json` avec debounce 2s pour recharger automatiquement
 - Jobs ephemeres (pas de session persistante)
-- Si `notify: true`, output envoye par DM au `userId` du job (ou admin si `null`). Filtre par `notifyPattern` si present.
+- Si `notify: true`, output envoye par DM au `userId` du job (ou admin si `null`). Filtre par `notifyPattern` si present (interprete comme regex, flag dotall `s` actif).
 
 ## Variables .env
 
