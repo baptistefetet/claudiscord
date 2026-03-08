@@ -25,7 +25,7 @@ function spawnClaude(prompt, options = {}) {
 		if (sessionId) {
 			args.push('--resume', sessionId);
 		} else if (systemPrompt) {
-			args.push('--system-prompt', systemPrompt);
+			args.push('--append-system-prompt', systemPrompt);
 		}
 
 		args.push('--output-format', outputFormat);

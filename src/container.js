@@ -109,7 +109,7 @@ function executeInContainerInternal(userId, prompt, options = {}) {
 		if (sessionId) {
 			claudeArgs.push('--resume', sessionId);
 		} else if (systemPrompt) {
-			claudeArgs.push('--system-prompt', systemPrompt);
+			claudeArgs.push('--append-system-prompt', systemPrompt);
 		}
 
 		claudeArgs.push('--output-format', outputFormat);
