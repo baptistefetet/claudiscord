@@ -166,6 +166,18 @@ function mergeUserJobs(userId) {
 		saveJobs(filteredJobs);
 		// fs.watch will detect this and trigger scheduleTasks()
 	}
+
+	// Write back user's jobs to sandbox file (sync central → sandbox)
+	// This ensures the sandbox always has the complete, up-to-date list
+	// (including lastRun updates) so the user can always see and manage their jobs
+	const userJobsFromCentral = filteredJobs
+		.filter(j => j.userId === userId)
+		.map(({ userId: _uid, ...rest }) => rest);
+	try {
+		fs.writeFileSync(userJobsFile, JSON.stringify(userJobsFromCentral, null, 2), 'utf8');
+	} catch (err) {
+		log.warn(`Failed to write back jobs for user ${userId}:`, err.message);
+	}
 }
 
 // --- Job execution ---
