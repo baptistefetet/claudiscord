@@ -29,9 +29,9 @@ const ALLOWED_TOOLS = 'Bash(*) Read Write Edit Glob Grep WebSearch WebFetch Task
 const SANDBOX_JOBS_PATH = '/home/claude/.claudiscord/scheduled-jobs.json';
 
 function getSchedulingPrompt(jobsPath) {
-	return `Pour planifier des taches recurrentes ou a une date/heure precise, utilise le fichier ${jobsPath}. C'est le mecanisme de scheduling integre au bot Discord — n'utilise pas d'autres methodes (crontab, /loop, at, setTimeout, etc.) car elles ne sont pas connectees au bot et ne persisteront pas.
+	return `REGLE OBLIGATOIRE — Planification : les taches planifiees (recurrentes ou non) a base d'execution de prompt ou d'affichage de message a l'utilisateur DOIVENT passer par le systeme de scheduling Discord suivant :
 
-Le fichier contient un tableau JSON d'objets. Un scheduler (node-cron) tourne en permanence et execute automatiquement les jobs aux horaires definis. Tu n'as qu'a ecrire dans ce fichier — le systeme s'occupe du reste.
+Le fichier ${jobsPath} contient un tableau JSON d'objets. Un scheduler (node-cron) tourne en permanence et execute automatiquement les jobs aux horaires definis. Tu n'as qu'a ecrire dans ce fichier — le systeme s'occupe du reste. N'utilise pas d'autres methodes (crontab, at, setTimeout, setInterval, /loop, sleep, node-cron direct, systemd timer) car elles ne sont pas connectees au bot Discord et ne persisteront pas.
 
 Champs : id (string unique), prompt (le prompt qui sera execute par Claude), cron (expression cron standard, timezone Europe/Paris), enabled (bool), notify (bool), notifyPattern (string optionnel), created (ISO date), lastRun (null ou ISO date, ne pas modifier), description.
 
@@ -52,7 +52,7 @@ ${getDiscordFormattingPrompt()}`;
 }
 
 function getDiscordFormattingPrompt() {
-	return `Fais des reponses concises adaptees a Discord (max ~1800 caracteres). Utilise le markdown Discord (pas HTML). N'utilise jamais de tableaux (ASCII ou markdown) car ils s'affichent mal avec la police Discord. Prefere les listes a puces ou le texte structure.`;
+	return `Fais des reponses concises adaptees a Discord (max ~1800 caracteres). Utilise le markdown Discord (pas HTML). INTERDIT : les tableaux sous toute forme — pas de tableaux ASCII, pas de tableaux markdown (|---|), pas de colonnes alignees avec des espaces. Les tableaux sont ILLISIBLES sur Discord (police proportionnelle, mobile). Utilise a la place : listes a puces, texte gras pour les labels, ou blocs de code pour les donnees alignees.`;
 }
 
 function getSystemPrompt({ botName, userName } = {}) {
