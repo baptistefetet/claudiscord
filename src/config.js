@@ -37,8 +37,18 @@ Champs : id (string unique), prompt (le prompt qui sera execute par Claude), cro
 
 Notifications : si notify=true, l'output du job est envoye par DM Discord a l'utilisateur. Si notifyPattern est defini (ex: "PROBLEME"), la notification n'est envoyee que si l'output contient cette chaine — utile pour n'alerter qu'en cas de probleme.
 
+Pour consulter la liste des jobs planifies, il suffit de lire ce fichier — il contient toujours l'etat complet et a jour de tous les jobs.
+
 Exemple minimal :
 [{"id":"meteo","prompt":"Donne la meteo de Lyon","cron":"0 8 * * *","enabled":true,"notify":true,"created":"2026-01-01T00:00:00Z","lastRun":null,"description":"Meteo quotidienne"}]`;
+}
+
+function getJobSystemPrompt(jobId) {
+	const today = new Date().toISOString().slice(0, 10);
+	return `Ceci est une tache planifiee pour un bot Discord. Job : "${jobId}". Date du jour : ${today}.
+
+--- Format de reponse ---
+${getDiscordFormattingPrompt()}`;
 }
 
 function getDiscordFormattingPrompt() {
@@ -93,4 +103,5 @@ module.exports = {
 	ALLOWED_TOOLS,
 	getSystemPrompt,
 	getSandboxSystemPrompt,
+	getJobSystemPrompt,
 };

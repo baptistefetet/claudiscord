@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const cron = require('node-cron');
-const { JOBS_FILE, DATA_DIR, SANDBOX_JOBS_PATH, ALLOWED_TOOLS, CLAUDE_TIMEOUT_MS, AUTHORIZED_USER_ID } = require('./config');
+const { JOBS_FILE, DATA_DIR, SANDBOX_JOBS_PATH, ALLOWED_TOOLS, CLAUDE_TIMEOUT_MS, AUTHORIZED_USER_ID, getJobSystemPrompt } = require('./config');
 const { executeClaudeCommand, acquireJobLock, releaseJobLock } = require('./claude');
 const { executeInContainerQueued } = require('./container');
 const { sendDM } = require('./discord');
@@ -208,11 +208,13 @@ async function executeJob(job) {
 	try {
 		let output;
 
+		const jobSystemPrompt = getJobSystemPrompt(id);
+
 		if (userId) {
 			// Sandbox job: execute in user's container
 			const { result } = await executeInContainerQueued(userId, fullPrompt, {
 				sessionId: null,
-				systemPrompt: null,
+				systemPrompt: jobSystemPrompt,
 				allowedTools: ALLOWED_TOOLS,
 				outputFormat: 'text',
 				timeoutMs: CLAUDE_TIMEOUT_MS,
@@ -222,7 +224,7 @@ async function executeJob(job) {
 			// Host job: execute on host with admin tools
 			const { result } = await executeClaudeCommand(fullPrompt, {
 				sessionId: null,
-				systemPrompt: null,
+				systemPrompt: jobSystemPrompt,
 				allowedTools: ALLOWED_TOOLS,
 				outputFormat: 'text',
 				timeoutMs: CLAUDE_TIMEOUT_MS,
