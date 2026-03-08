@@ -1,7 +1,7 @@
 const { spawn, execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { DATA_DIR, DOCKER_IMAGE, CONTAINER_MEMORY, CONTAINER_CPUS, CLAUDE_TIMEOUT_MS, ALLOWED_TOOLS } = require('./config');
+const { DATA_DIR, DOCKER_IMAGE, CONTAINER_MEMORY, CONTAINER_CPUS, CONTAINER_STORAGE_MB, CLAUDE_TIMEOUT_MS, ALLOWED_TOOLS } = require('./config');
 const log = require('./logger');
 
 const DOCKERFILE_DIR = path.resolve(__dirname, '..');
@@ -53,6 +53,25 @@ function ensureUserStorage(userId) {
 
 	// Ensure all files are owned by the container's claude user
 	execFileSync('chown', ['-R', `${CONTAINER_UID}:${CONTAINER_GID}`, userHome], { timeout: 5000 });
+}
+
+function checkStorageLimit(userId) {
+	const userHome = path.join(DATA_DIR, userId, 'home');
+	try {
+		const out = execFileSync('du', ['-sm', userHome], { encoding: 'utf8', timeout: 10000 });
+		const usedMB = parseInt(out.split('\t')[0], 10);
+		if (usedMB >= CONTAINER_STORAGE_MB) {
+			throw Object.assign(
+				new Error(`Quota disque depasse : ${usedMB} Mo utilises sur ${CONTAINER_STORAGE_MB} Mo autorises. Libere de l'espace dans /home/claude.`),
+				{ code: 'STORAGE_LIMIT' },
+			);
+		}
+		return usedMB;
+	} catch (err) {
+		if (err.code === 'STORAGE_LIMIT') throw err;
+		log.warn(`Storage check failed for user ${userId}:`, err.message);
+		return 0; // fail open
+	}
 }
 
 function containerName(userId) {
@@ -168,6 +187,9 @@ async function executeInContainer(userId, prompt, options = {}) {
 		outputFormat = 'json',
 		timeoutMs = CLAUDE_TIMEOUT_MS,
 	} = options;
+
+	// Check storage quota before execution
+	checkStorageLimit(userId);
 
 	let result;
 
