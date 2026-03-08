@@ -24,8 +24,8 @@ Each user gets an isolated Docker container with Claude Code. The admin can also
 
 ```bash
 # Clone
-git clone https://github.com/baptistefetet/claudiscord.git /opt/claudiscord
-cd /opt/claudiscord
+git clone https://github.com/baptistefetet/claudiscord.git /var/www/html/claudiscord
+cd /var/www/html/claudiscord
 
 # Install dependencies
 npm install
@@ -56,7 +56,7 @@ Requires=docker.service
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/opt/claudiscord
+WorkingDirectory=/var/www/html/claudiscord
 ExecStart=/usr/bin/node index.js
 Restart=on-failure
 RestartSec=10

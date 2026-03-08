@@ -84,7 +84,7 @@ admin-mode.json       # { adminMode: bool } (gitignored)
 
 Rebuild manuel (ou via le job `rebuild-sandbox` le 1er du mois a 4h) :
 ```bash
-bash /opt/claudiscord/rebuild-sandbox.sh
+bash /var/www/html/claudiscord/rebuild-sandbox.sh
 ```
 Le script stoppe les containers, rebuild l'image, et nettoie. Les containers sont recrees automatiquement au prochain usage (volumes preserves).
 

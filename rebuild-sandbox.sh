@@ -13,7 +13,7 @@ for name in $(docker ps -a --filter "name=claudiscord-" --format "{{.Names}}" | 
 done
 
 echo "Rebuilding image..."
-docker build --no-cache -t claudiscord-sandbox /opt/claudiscord/
+docker build --no-cache -t claudiscord-sandbox /var/www/html/claudiscord/
 
 echo "Cleaning up old images and build cache..."
 docker image prune -f
