@@ -109,7 +109,8 @@ function executeInContainerInternal(userId, prompt, options = {}) {
 		if (sessionId) {
 			claudeArgs.push('--resume', sessionId);
 		} else if (systemPrompt) {
-			claudeArgs.push('--append-system-prompt', systemPrompt);
+			// TODO: switch to --append-system-prompt to preserve Claude Code's native system prompt
+			claudeArgs.push('--system-prompt', systemPrompt);
 		}
 
 		claudeArgs.push('--output-format', outputFormat);

@@ -25,7 +25,8 @@ function spawnClaude(prompt, options = {}) {
 		if (sessionId) {
 			args.push('--resume', sessionId);
 		} else if (systemPrompt) {
-			args.push('--append-system-prompt', systemPrompt);
+			// TODO: switch to --append-system-prompt to preserve Claude Code's native system prompt
+			args.push('--system-prompt', systemPrompt);
 		}
 
 		args.push('--output-format', outputFormat);
