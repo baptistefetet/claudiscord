@@ -25,9 +25,6 @@ client.on(Events.MessageCreate, async message => {
 	const isDM = message.channel.type === 1 || message.channel.type === 'DM';
 	if (!isDM) return;
 
-	// Phase 2: admin-only for now (future: non-admin always goes to container)
-	if (message.author.id !== AUTHORIZED_USER_ID) return;
-
 	const content = message.content.trim();
 	if (!content) return;
 
