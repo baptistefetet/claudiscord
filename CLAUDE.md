@@ -27,7 +27,6 @@ Jobs planifies (scheduler)
 ```
 index.js              # Point d'entree, handler Discord, routing mode, shutdown
 Dockerfile            # Image sandbox (node:22-slim + claude CLI + user claude)
-rebuild-sandbox.sh    # Script rebuild image + recreation containers (job mensuel)
 src/
   config.js           # .env + constantes + system prompt + Docker config
   logger.js           # Logging stdout/stderr (journald)
@@ -82,11 +81,11 @@ admin-mode.json       # { adminMode: bool } (gitignored)
 
 ### Rebuild image
 
-Rebuild manuel (ou via le job `rebuild-sandbox` le 1er du mois a 4h) :
+Rebuild manuel :
 ```bash
-bash /var/www/html/claudiscord/rebuild-sandbox.sh
+docker build --no-cache -t claudiscord-sandbox .
 ```
-Le script stoppe les containers, rebuild l'image, et nettoie. Les containers sont recrees automatiquement au prochain usage (volumes preserves).
+Les containers existants doivent etre supprimes avant (ils utilisent l'ancienne image). Ils seront recrees automatiquement au prochain usage (volumes preserves).
 
 ## Claude CLI
 

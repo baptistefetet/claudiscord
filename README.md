@@ -11,7 +11,6 @@ Each user gets an isolated Docker container with Claude Code. The admin can also
 - **Admin mode** -- toggle between sandbox (container) and admin (host) for system access
 - **Session persistence** -- conversations are resumed across messages via `--resume`
 - **Job scheduler** -- cron-based jobs with `node-cron`, auto-reload on file change
-- **Monthly image rebuild** -- keeps Claude Code up to date in containers
 
 ## Prerequisites
 
@@ -24,8 +23,8 @@ Each user gets an isolated Docker container with Claude Code. The admin can also
 
 ```bash
 # Clone
-git clone https://github.com/baptistefetet/claudiscord.git /var/www/html/claudiscord
-cd /var/www/html/claudiscord
+git clone https://github.com/baptistefetet/claudiscord.git
+cd claudiscord
 
 # Install dependencies
 npm install
@@ -41,7 +40,7 @@ docker build -t claudiscord-sandbox .
 cp scheduled-jobs.example.json scheduled-jobs.json
 
 # Create the data directory for sandbox volumes
-mkdir -p /mnt/maxtor/claudiscord  # or wherever DATA_DIR points
+mkdir -p /path/to/data  # set DATA_DIR in .env to this path
 ```
 
 ## Systemd service
@@ -56,7 +55,7 @@ Requires=docker.service
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/var/www/html/claudiscord
+WorkingDirectory=/path/to/claudiscord
 ExecStart=/usr/bin/node index.js
 Restart=on-failure
 RestartSec=10
@@ -135,7 +134,7 @@ Scheduled jobs
 - One container per user (`claudiscord-{userId}`), persistent (`--restart unless-stopped`)
 - Volumes in `DATA_DIR/{userId}/home/` mounted as `/home/claude` (credentials, files, CLAUDE.md)
 - Containers survive reboots and service restarts
-- Monthly image rebuild updates Claude Code without losing user data
+- To update Claude Code, rebuild the image with `docker build --no-cache -t claudiscord-sandbox .` (user data is preserved in volumes)
 
 ## Configuration
 
