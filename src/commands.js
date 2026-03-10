@@ -59,7 +59,7 @@ async function handleCommand(message) {
 			// Copy upgraded binary to /usr/local/bin so it takes priority in PATH
 			execFileSync('docker', [
 				'exec', '-u', 'root', name, 'bash', '-c',
-				'cp /home/claude/.local/share/claude/versions/* /usr/local/bin/claude && chmod 755 /usr/local/bin/claude',
+				'cp /home/claude/.local/share/claude/versions/$(ls -t /home/claude/.local/share/claude/versions/ | head -1) /usr/local/bin/claude && chmod 755 /usr/local/bin/claude',
 			], { encoding: 'utf8', timeout: 10000 });
 			// Get new version
 			let version = '';
