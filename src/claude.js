@@ -1,5 +1,5 @@
 const { spawn } = require('child_process');
-const { CLAUDE_BIN, CLAUDE_TIMEOUT_MS, getSystemPrompt, ALLOWED_TOOLS } = require('./config');
+const { CLAUDE_BIN, CLAUDE_TIMEOUT_MS, getSystemPrompt, ALLOWED_TOOLS, DISALLOWED_TOOLS } = require('./config');
 const log = require('./logger');
 
 // Mutex for DM requests (one Claude at a time)
@@ -13,6 +13,7 @@ function spawnClaude(prompt, options = {}) {
 		sessionId = null,
 		systemPrompt = null,
 		allowedTools = ALLOWED_TOOLS,
+		disallowedTools = DISALLOWED_TOOLS,
 		model = 'opus',
 		outputFormat = 'json',
 		timeoutMs = CLAUDE_TIMEOUT_MS,
@@ -31,6 +32,7 @@ function spawnClaude(prompt, options = {}) {
 
 		args.push('--output-format', outputFormat);
 		args.push('--allowedTools', allowedTools);
+		args.push('--disallowedTools', disallowedTools);
 		args.push('--model', model);
 		args.push('--', prompt);
 
@@ -81,6 +83,7 @@ async function executeClaudeCommand(prompt, options = {}) {
 		sessionId = null,
 		systemPrompt = getSystemPrompt(),
 		allowedTools = ALLOWED_TOOLS,
+		disallowedTools = DISALLOWED_TOOLS,
 		outputFormat = 'json',
 		timeoutMs = CLAUDE_TIMEOUT_MS,
 	} = options;
@@ -93,6 +96,7 @@ async function executeClaudeCommand(prompt, options = {}) {
 			sessionId,
 			systemPrompt: sessionId ? null : systemPrompt,
 			allowedTools,
+			disallowedTools,
 			outputFormat,
 			timeoutMs,
 		});
@@ -109,6 +113,7 @@ async function executeClaudeCommand(prompt, options = {}) {
 				sessionId: null,
 				systemPrompt,
 				allowedTools,
+				disallowedTools,
 				outputFormat,
 				timeoutMs,
 			});

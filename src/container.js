@@ -1,7 +1,7 @@
 const { spawn, execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { DATA_DIR, DOCKER_IMAGE, CONTAINER_MEMORY, CONTAINER_CPUS, CLAUDE_TIMEOUT_MS, ALLOWED_TOOLS } = require('./config');
+const { DATA_DIR, DOCKER_IMAGE, CONTAINER_MEMORY, CONTAINER_CPUS, CLAUDE_TIMEOUT_MS, ALLOWED_TOOLS, DISALLOWED_TOOLS } = require('./config');
 const log = require('./logger');
 
 const DOCKERFILE_DIR = path.resolve(__dirname, '..');
@@ -95,6 +95,7 @@ function executeInContainerInternal(userId, prompt, options = {}) {
 		sessionId = null,
 		systemPrompt = null,
 		allowedTools = ALLOWED_TOOLS,
+		disallowedTools = DISALLOWED_TOOLS,
 		model = 'opus',
 		outputFormat = 'json',
 		timeoutMs = CLAUDE_TIMEOUT_MS,
@@ -115,6 +116,7 @@ function executeInContainerInternal(userId, prompt, options = {}) {
 
 		claudeArgs.push('--output-format', outputFormat);
 		claudeArgs.push('--allowedTools', allowedTools);
+		claudeArgs.push('--disallowedTools', disallowedTools);
 		claudeArgs.push('--model', model);
 		claudeArgs.push('--', prompt);
 
@@ -166,6 +168,7 @@ async function executeInContainer(userId, prompt, options = {}) {
 		sessionId = null,
 		systemPrompt = null,
 		allowedTools = ALLOWED_TOOLS,
+		disallowedTools = DISALLOWED_TOOLS,
 		outputFormat = 'json',
 		timeoutMs = CLAUDE_TIMEOUT_MS,
 	} = options;
@@ -178,6 +181,7 @@ async function executeInContainer(userId, prompt, options = {}) {
 			sessionId,
 			systemPrompt: sessionId ? null : systemPrompt,
 			allowedTools,
+			disallowedTools,
 			outputFormat,
 			timeoutMs,
 		});
@@ -193,6 +197,7 @@ async function executeInContainer(userId, prompt, options = {}) {
 				sessionId: null,
 				systemPrompt,
 				allowedTools,
+				disallowedTools,
 				outputFormat,
 				timeoutMs,
 			});
