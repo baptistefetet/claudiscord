@@ -274,8 +274,28 @@ async function executeJob(job) {
 				if (typeof jobEntry.remaining === 'number' && jobEntry.remaining > 0) {
 					jobEntry.remaining--;
 					if (jobEntry.remaining === 0) {
+						const removedUserId = jobEntry.userId;
+						const removedJobId = jobEntry.id;
 						jobs.splice(idx, 1);
 						log.info(`Job '${key}' removed (remaining reached 0)`);
+
+						// Sync sandbox file: remove the job from the user's file too
+						if (removedUserId) {
+							try {
+								const userJobsFile = path.join(DATA_DIR, removedUserId, 'home', SANDBOX_JOBS_PATH.replace('/home/claude/', ''));
+								const raw = fs.readFileSync(userJobsFile, 'utf8');
+								const userJobs = JSON.parse(raw);
+								if (Array.isArray(userJobs)) {
+									const filtered = userJobs.filter(j => j.id !== removedJobId);
+									if (filtered.length !== userJobs.length) {
+										fs.writeFileSync(userJobsFile, JSON.stringify(filtered, null, 2), 'utf8');
+										log.info(`Job '${removedJobId}' also removed from sandbox file for user ${removedUserId}`);
+									}
+								}
+							} catch (syncErr) {
+								log.warn(`Failed to sync sandbox file after job removal:`, syncErr.message);
+							}
+						}
 					}
 				}
 
