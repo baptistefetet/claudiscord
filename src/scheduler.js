@@ -261,13 +261,24 @@ async function executeJob(job) {
 			}
 		}
 	} finally {
-		// Update lastRun
+		// Update lastRun + handle remaining counter
 		lastRunMinutes.set(key, nowMinute);
 		try {
 			const jobs = loadJobs();
-			const jobEntry = jobs.find(j => jobKey(j) === key);
-			if (jobEntry) {
+			const idx = jobs.findIndex(j => jobKey(j) === key);
+			if (idx !== -1) {
+				const jobEntry = jobs[idx];
 				jobEntry.lastRun = new Date().toISOString();
+
+				// Remaining counter: 0 = infinite, >0 = decrement then remove at 0
+				if (typeof jobEntry.remaining === 'number' && jobEntry.remaining > 0) {
+					jobEntry.remaining--;
+					if (jobEntry.remaining === 0) {
+						jobs.splice(idx, 1);
+						log.info(`Job '${key}' removed (remaining reached 0)`);
+					}
+				}
+
 				saveJobs(jobs);
 			}
 		} catch (err) {

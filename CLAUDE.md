@@ -8,7 +8,7 @@ Relay Discord DM vers Claude Code CLI + scheduler de jobs planifies. Un seul pro
 DM (admin, mode sandbox = defaut)
   -> executeInContainerQueued(userId, prompt) -> docker exec -> claude -p -> Discord
 
-DM (admin, mode admin via /admin)
+DM (admin, mode admin via /admin et /sandbox)
   -> executeDM(prompt) -> spawn direct hote (comportement Phase 1)
 
 Jobs planifies (scheduler)
@@ -33,13 +33,11 @@ src/
   discord.js          # Client Discord, sendDM, splitMessage, typing
   claude.js           # Spawn claude CLI hote, mutex DM, locks jobs
   container.js        # Docker : ensureImage, ensureContainer, executeInContainer, credentials, rebuild
-  mode.js             # Persistance admin/sandbox mode (admin-mode.json)
-  sessions.js         # Map memoire + persistence sessions.json
-  scheduler.js        # node-cron, reload auto, executeJob
-  commands.js         # /clear, /admin, /login, /status
-sessions.json         # { userId: sessionId } (gitignored)
+  sessions.js         # Map memoire + persistence sessions.json (sessions + adminMode)
+  scheduler.js        # node-cron, reload auto, executeJob, compteur remaining
+  commands.js         # /clear, /admin, /sandbox, /login, /status
+sessions.json         # { adminMode, sessions: { userId: sessionId } } (gitignored)
 scheduled-jobs.json   # Jobs planifies (gitignored)
-admin-mode.json       # { adminMode: bool } (gitignored)
 .env                  # AUTHORIZED_USER_ID, CLAUDE_BIN, DISCORD_TOKEN, DATA_DIR
 ```
 
@@ -54,8 +52,9 @@ admin-mode.json       # { adminMode: bool } (gitignored)
 
 - **sandbox** (defaut) : DM admin executes dans un container Docker isole
 - **admin** : DM admin executes directement sur l'hote (acces systeme complet)
-- Toggle via `/admin`, persiste dans `admin-mode.json`
-- Le toggle clear automatiquement la session (contextes incompatibles)
+- `/admin` passe en mode admin, `/sandbox` passe en mode sandbox (admin uniquement)
+- Persiste dans `sessions.json` (champ `adminMode`)
+- Le changement de mode clear automatiquement la session (contextes incompatibles)
 
 ## Docker Sandbox
 
@@ -106,7 +105,8 @@ Les containers existants doivent etre supprimes avant (ils utilisent l'ancienne 
 | `/help` | tous | Affiche les commandes disponibles |
 | `/clear` | tous | Reset session Claude |
 | `/upgrade` | tous | Met a jour Claude Code dans le container sandbox |
-| `/admin` | admin | Toggle admin/sandbox, clear session |
+| `/admin` | admin | Passe en mode admin (hote), clear session |
+| `/sandbox` | admin | Passe en mode sandbox (container), clear session |
 | `/login` | tous | Sans arg: instructions. Avec JSON: enregistre les credentials |
 | `/status` | admin | Affiche le mode actuel |
 
@@ -127,6 +127,7 @@ Le fichier central est `scheduled-jobs.json` (admin). Les users sandbox ecrivent
   "enabled": true,
   "notify": true,
   "notifyPattern": "STATUT: PROBLEME",
+  "remaining": 0,
   "created": "2026-02-21T10:00:00Z",
   "lastRun": null,
   "description": "Check sante quotidien a 7h"
@@ -134,6 +135,7 @@ Le fichier central est `scheduled-jobs.json` (admin). Les users sandbox ecrivent
 ```
 
 - `userId` : `null` = job admin (hote), Discord user ID = job sandbox (container)
+- `remaining` : compteur d'executions restantes. `0` = infini (le job tourne indefiniment). `> 0` = decremente apres chaque execution ; quand il atteint `0`, le job est automatiquement supprime de la liste. Pour un job one-shot, mettre `1`.
 - Cle unique : `userId` + `id` (deux users peuvent avoir le meme `id`)
 
 ### Merge sandbox

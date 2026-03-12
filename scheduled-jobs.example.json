@@ -7,8 +7,21 @@
     "enabled": true,
     "notify": true,
     "notifyPattern": "STATUT: PROBLEME",
+    "remaining": 0,
     "created": "2026-01-01T00:00:00Z",
     "lastRun": null,
-    "description": "Check sante quotidien a 7h"
+    "description": "Check sante quotidien a 7h (remaining: 0 = infini)"
+  },
+  {
+    "id": "one-shot-example",
+    "userId": null,
+    "prompt": "Dis bonjour.",
+    "cron": "30 12 * * *",
+    "enabled": true,
+    "notify": true,
+    "remaining": 1,
+    "created": "2026-01-01T00:00:00Z",
+    "lastRun": null,
+    "description": "Exemple one-shot (remaining: 1 = supprime apres execution)"
   }
 ]

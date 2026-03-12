@@ -1,7 +1,6 @@
 const { execFileSync } = require('child_process');
 const { AUTHORIZED_USER_ID } = require('./config');
 const sessions = require('./sessions');
-const mode = require('./mode');
 const { writeCredentials, hasCredentials, ensureContainer, containerName } = require('./container');
 const log = require('./logger');
 
@@ -40,7 +39,8 @@ async function handleCommand(message) {
 \`/login <json>\` — Enregistre tes credentials`;
 		if (isAdmin) {
 			help += `
-\`/admin\` — Bascule entre mode admin (hote) et sandbox (container)
+\`/admin\` — Passe en mode admin (hote)
+\`/sandbox\` — Passe en mode sandbox (container)
 \`/status\` — Affiche le mode actuel et le statut d'authentification`;
 		}
 		await message.channel.send(help);
@@ -81,14 +81,29 @@ async function handleCommand(message) {
 	}
 
 	if (content === '/admin' && userId === AUTHORIZED_USER_ID) {
-		const isAdmin = mode.toggle();
+		if (sessions.isAdminMode()) {
+			await message.channel.send('Deja en mode **admin**.');
+			return true;
+		}
+		sessions.setAdminMode(true);
 		sessions.clearSession(userId);
-		await message.channel.send(`Mode bascule vers **${isAdmin ? 'admin' : 'sandbox'}**. Session reinitialisee.`);
+		await message.channel.send('Mode bascule vers **admin**. Session reinitialisee.');
+		return true;
+	}
+
+	if (content === '/sandbox' && userId === AUTHORIZED_USER_ID) {
+		if (!sessions.isAdminMode()) {
+			await message.channel.send('Deja en mode **sandbox**.');
+			return true;
+		}
+		sessions.setAdminMode(false);
+		sessions.clearSession(userId);
+		await message.channel.send('Mode bascule vers **sandbox**. Session reinitialisee.');
 		return true;
 	}
 
 	if (content === '/status' && userId === AUTHORIZED_USER_ID) {
-		const current = mode.isAdminMode() ? 'admin (hote)' : 'sandbox (container)';
+		const current = sessions.isAdminMode() ? 'admin (hote)' : 'sandbox (container)';
 		const authed = hasCredentials(userId) ? 'oui' : 'non';
 		await message.channel.send(`Mode actuel : **${current}**\nAuthentifie (sandbox) : **${authed}**`);
 		return true;

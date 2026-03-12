@@ -1,7 +1,6 @@
 const { AUTHORIZED_USER_ID, getSystemPrompt, getSandboxSystemPrompt, ALLOWED_TOOLS } = require('./src/config');
 const log = require('./src/logger');
 const sessions = require('./src/sessions');
-const mode = require('./src/mode');
 const { executeDM } = require('./src/claude');
 const { executeInContainerQueued, ensureImage } = require('./src/container');
 const { createClient, login, splitMessage, startTypingIndicator } = require('./src/discord');
@@ -42,7 +41,7 @@ client.on(Events.MessageCreate, async message => {
 
 		let result;
 
-		if (userId === AUTHORIZED_USER_ID && mode.isAdminMode()) {
+		if (userId === AUTHORIZED_USER_ID && sessions.isAdminMode()) {
 			// Admin mode: spawn on host (original behavior)
 			result = await executeDM(content, {
 				sessionId,
@@ -108,7 +107,6 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 // Async startup
 async function start() {
 	sessions.load();
-	mode.load();
 	ensureImage();
 	await login();
 }
