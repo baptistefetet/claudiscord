@@ -1,122 +1,115 @@
 # Claudiscord
 
-Relay Discord DM vers Claude Code CLI + scheduler de jobs planifies. Un seul process Node.js.
+Discord DM relay to Claude Code CLI + scheduled job runner. Single Node.js process.
+
+See `README.md` for installation, setup, configuration, and Discord commands reference.
 
 ## Architecture
 
 ```
-DM (admin, mode sandbox = defaut)
+DM (sandbox mode, default)
   -> executeInContainerQueued(userId, prompt) -> docker exec -> claude -p -> Discord
 
-DM (admin, mode admin via /admin et /sandbox)
-  -> executeDM(prompt) -> spawn direct hote (comportement Phase 1)
+DM (admin mode, via /admin and /sandbox)
+  -> executeDM(prompt) -> host spawn (direct CLI)
 
-Jobs planifies (scheduler)
-  -> executeClaudeCommand() -> toujours sur l'hote (inchange)
+Scheduled jobs
+  -> userId: null  -> executeClaudeCommand() -> host
+  -> userId: <id>  -> executeInContainerQueued() -> user's container
 ```
 
-- DM : le prompt va en memoire, la reponse repart sur Discord
-- Jobs : `node-cron` declenche `executeJob()`, output envoye par DM si `notify: true`
-- Sessions : `sessions.json` stocke uniquement les session IDs (pas d'historique de messages)
-- Mutex DM admin : un seul Claude a la fois pour les DM hote (queue en memoire)
-- Mutex sandbox : un lock par userId (Map de Promise queues), concurrent entre utilisateurs
-- Mutex jobs : un lock par job ID (Set en memoire)
+- DM: prompt goes to Claude CLI, response sent back to Discord
+- Jobs: `node-cron` triggers `executeJob()`, output sent via DM if `notify: true`
+- Sessions: `sessions.json` stores session IDs only (no message history) + admin mode flag
+- Admin DM mutex: single Claude at a time for host DMs (in-memory queue)
+- Sandbox mutex: one lock per userId (Map of Promise queues), concurrent across users
+- Job mutex: one lock per job ID (in-memory Set)
 
-## Fichiers
+## Files
 
 ```
-index.js              # Point d'entree, handler Discord, routing mode, shutdown
-Dockerfile            # Image sandbox (node:22-slim + claude CLI + user claude)
+index.js              # Entry point, Discord handler, mode routing, shutdown
+Dockerfile            # Sandbox image (node:22-slim + Claude CLI + user claude)
 src/
-  config.js           # .env + constantes + system prompt + Docker config
-  logger.js           # Logging stdout/stderr (journald)
-  discord.js          # Client Discord, sendDM, splitMessage, typing
-  claude.js           # Spawn claude CLI hote, mutex DM, locks jobs
-  container.js        # Docker : ensureImage, ensureContainer, executeInContainer, credentials, rebuild
-  sessions.js         # Map memoire + persistence sessions.json (sessions + adminMode)
-  scheduler.js        # node-cron, reload auto, executeJob, compteur remaining
-  commands.js         # /clear, /admin, /sandbox, /login, /status
+  config.js           # .env + constants + system prompts + Docker config
+  logger.js           # Logging to stdout/stderr (journald)
+  discord.js          # Discord client, sendDM, splitMessage, typing indicator
+  claude.js           # Spawn Claude CLI on host, DM mutex, job locks
+  container.js        # Docker: ensureImage, ensureContainer, executeInContainer, credentials
+  sessions.js         # In-memory map + persistence to sessions.json (sessions + adminMode)
+  scheduler.js        # node-cron, auto-reload, executeJob, remaining counter
+  commands.js         # /clear, /admin, /sandbox, /login, /status, /upgrade
 sessions.json         # { adminMode, sessions: { userId: sessionId } } (gitignored)
-scheduled-jobs.json   # Jobs planifies (gitignored)
+scheduled-jobs.json   # Scheduled jobs array (gitignored)
 .env                  # AUTHORIZED_USER_ID, CLAUDE_BIN, DISCORD_TOKEN, DATA_DIR
 ```
 
 ## Service
 
-- **Service** : `claudiscord` (`systemctl status claudiscord`)
-- **Logs** : `journalctl -u claudiscord -f`
-- **Dependance** : `docker.service` (Requires + After)
-- **ExecStopPost** : `pkill -f "claude.*-p"` (filet de securite)
+- **Service**: `claudiscord` (`systemctl status claudiscord`)
+- **Logs**: `journalctl -u claudiscord -f`
+- **Dependency**: `docker.service` (Requires + After)
+- **ExecStopPost**: `pkill -f "claude.*-p"` (safety net)
 
 ## Modes
 
-- **sandbox** (defaut) : DM admin executes dans un container Docker isole
-- **admin** : DM admin executes directement sur l'hote (acces systeme complet)
-- `/admin` passe en mode admin, `/sandbox` passe en mode sandbox (admin uniquement)
-- Persiste dans `sessions.json` (champ `adminMode`)
-- Le changement de mode clear automatiquement la session (contextes incompatibles)
+- **sandbox** (default): DMs executed in an isolated Docker container
+- **admin**: DMs executed directly on the host (full system access)
+- `/admin` switches to admin mode, `/sandbox` switches to sandbox mode (admin only)
+- Persisted in `sessions.json` (`adminMode` field)
+- Switching mode automatically clears the session (incompatible contexts)
 
 ## Docker Sandbox
 
-- **Image** : `claudiscord-sandbox` (build local arm64, `node:22-slim` + Claude Code)
-- **Container** : `claudiscord-{userId}`, un par utilisateur, persistant (`--restart unless-stopped`)
-- **Limites** : 512 Mo RAM, 1 CPU
-- **Volume** : `DATA_DIR/{userId}/home` -> `/home/claude`
-- **Reseau** : bridge (acces internet pour l'API Claude)
-- **User** : `claude` (non-root, requis pour `--dangerously-skip-permissions`)
-- **CMD** : `sleep infinity` (container alive, commandes via `docker exec`)
+- **Image**: `claudiscord-sandbox` (local arm64 build, `node:22-slim` + Claude Code)
+- **Container**: `claudiscord-{userId}`, one per user, persistent (`--restart unless-stopped`)
+- **Limits**: 512 MB RAM, 1 CPU
+- **Volume**: `DATA_DIR/{userId}/home` -> `/home/claude`
+- **Network**: bridge (internet access for Claude API)
+- **User**: `claude` (non-root, required for `--dangerously-skip-permissions`)
+- **CMD**: `sleep infinity` (container kept alive, commands via `docker exec`)
+- Containers survive reboots and service restarts
+- User data (credentials, files, CLAUDE.md) persists in volumes
 
-### Stockage sandbox
+### Sandbox storage
 
 ```
-/mnt/maxtor/claudiscord/    # DATA_DIR (.env)
+DATA_DIR/
   {userId}/
-    home/                    # Volume monte comme /home/claude dans le container
-      CLAUDE.md              # Personnalisable par l'utilisateur
-      .claude/               # Auth state (cree par claude auth login)
-      .claudiscord/           # Donnees internes claudiscord
-        scheduled-jobs.json  # Jobs planifies de l'utilisateur
+    home/                    # Mounted as /home/claude in the container
+      CLAUDE.md              # Customizable by the user
+      .claude/               # Auth state (from claude auth login)
+      .claudiscord/          # Internal claudiscord data
+        scheduled-jobs.json  # User's scheduled jobs
 ```
 
-### Rebuild image
+### Image rebuild
 
-Rebuild manuel :
 ```bash
 docker build --no-cache -t claudiscord-sandbox .
 ```
-Les containers existants doivent etre supprimes avant (ils utilisent l'ancienne image). Ils seront recrees automatiquement au prochain usage (volumes preserves).
+
+Existing containers must be removed first (they use the old image). They are recreated automatically on next use (volumes preserved).
 
 ## Claude CLI
 
-- `claude -p` avec `--output-format json` (DM) ou `text` (jobs)
-- `--resume <sessionId>` pour les DM, fallback en nouvelle session si echec
-- `--allowedTools` selon le contexte (admin sur hote, sandbox dans container)
-- `--dangerously-skip-permissions` en sandbox (le container EST le sandbox)
+- `claude -p` with `--output-format json` (DMs) or `text` (jobs)
+- `--resume <sessionId>` for DMs, falls back to new session on failure
+- `--allowedTools` depends on context (admin on host, sandbox in container)
+- `--dangerously-skip-permissions` in sandbox (the container IS the sandbox)
 - `--model opus`
-- stdin ferme immediatement (`child.stdin.end()`)
-- cwd hote: `/root` (charge automatiquement `/root/CLAUDE.md`)
-- cwd sandbox: `/home/claude` (charge le CLAUDE.md du volume)
-- Timeout: 300s (SIGTERM puis SIGKILL apres 5s)
+- stdin closed immediately (`child.stdin.end()`)
+- Host cwd: `/root` (auto-loads `/root/CLAUDE.md`)
+- Sandbox cwd: `/home/claude` (loads the volume's CLAUDE.md)
+- Timeout: 300s (SIGTERM then SIGKILL after 5s)
 
-## Commandes Discord
+## Scheduled jobs
 
-| Commande | Qui | Action |
-|----------|-----|--------|
-| `/help` | tous | Affiche les commandes disponibles |
-| `/clear` | tous | Reset session Claude |
-| `/upgrade` | tous | Met a jour Claude Code dans le container sandbox |
-| `/admin` | admin | Passe en mode admin (hote), clear session |
-| `/sandbox` | admin | Passe en mode sandbox (container), clear session |
-| `/login` | tous | Sans arg: instructions. Avec JSON: enregistre les credentials |
-| `/status` | admin | Affiche le mode actuel |
-
-## Jobs planifies
-
-Tous les utilisateurs (admin et sandbox) peuvent creer des jobs planifies.
+All users (admin and sandbox) can create scheduled jobs.
 
 ### Format
 
-Le fichier central est `scheduled-jobs.json` (admin). Les users sandbox ecrivent dans `/home/claude/.claudiscord/scheduled-jobs.json` dans leur container ; leurs jobs sont merges automatiquement dans le fichier central apres chaque execution.
+The central file is `scheduled-jobs.json` (admin). Sandbox users write to `/home/claude/.claudiscord/scheduled-jobs.json` in their container; their jobs are automatically merged into the central file after each execution.
 
 ```json
 {
@@ -130,45 +123,35 @@ Le fichier central est `scheduled-jobs.json` (admin). Les users sandbox ecrivent
   "remaining": 0,
   "created": "2026-02-21T10:00:00Z",
   "lastRun": null,
-  "description": "Check sante quotidien a 7h"
+  "description": "Daily health check at 7am"
 }
 ```
 
-- `userId` : `null` = job admin (hote), Discord user ID = job sandbox (container)
-- `remaining` : compteur d'executions restantes. `0` = infini (le job tourne indefiniment). `> 0` = decremente apres chaque execution ; quand il atteint `0`, le job est automatiquement supprime de la liste. Pour un job one-shot, mettre `1`.
-- Cle unique : `userId` + `id` (deux users peuvent avoir le meme `id`)
+- `userId`: `null` = admin job (host), Discord user ID = sandbox job (container)
+- `remaining`: execution counter. `0` = infinite (runs forever). `> 0` = decremented after each execution; job is automatically removed when it reaches `0`. Set to `1` for a one-shot job.
+- Unique key: `userId` + `id` (two users can have the same `id`)
 
-### Merge sandbox
+### Sandbox merge
 
-Apres chaque execution de Claude dans un container, `mergeUserJobs(userId)` :
-1. Lit `DATA_DIR/{userId}/home/scheduled-jobs.json`
-2. Valide chaque job (champs requis, cron valide). Nettoie le fichier si invalide.
-3. Compare avec les jobs du user dans le fichier central :
-   - Jobs nouveaux → ajoutes (avec `userId` stampe)
-   - Jobs modifies → mis a jour (preserve `lastRun`)
-   - Jobs supprimes par le user → retires du central
-4. Sauvegarde le fichier central. `fs.watch` declenche le rechargement du scheduler.
+After each Claude execution in a container, `mergeUserJobs(userId)`:
+1. Reads `DATA_DIR/{userId}/home/.claudiscord/scheduled-jobs.json`
+2. Validates each job (required fields, valid cron). Cleans the file if invalid.
+3. Compares with the user's jobs in the central file:
+   - New jobs -> added (with `userId` stamped)
+   - Modified jobs -> updated (preserves `lastRun`)
+   - Jobs deleted by the user -> removed from central
+4. Saves the central file. `fs.watch` triggers scheduler reload.
 
 ### Execution
 
-- `userId: null` → hote, tous les outils admin (`Bash(*) Read Write Edit Glob Grep WebSearch WebFetch Task`)
-- `userId: <id>` → container de l'utilisateur, tous les outils sandbox (`--dangerously-skip-permissions`)
-- Tous les outils sont toujours disponibles dans l'environnement d'execution
+- `userId: null` -> host, all admin tools (`Bash(*) Read Write Edit Glob Grep WebSearch WebFetch Task`)
+- `userId: <id>` -> user's container, all sandbox tools (`--dangerously-skip-permissions`)
 
-### Comportement
+### Behavior
 
-- `node-cron` pour le scheduling
-- Lock en memoire par job key (`userId:id` ou `id` seul pour admin)
-- Protection doublon dans la meme minute
-- `fs.watch()` sur `scheduled-jobs.json` avec debounce 2s pour recharger automatiquement
-- Jobs ephemeres (pas de session persistante)
-- Si `notify: true`, output envoye par DM au `userId` du job (ou admin si `null`). Filtre par `notifyPattern` si present (interprete comme regex, flag dotall `s` actif).
-
-## Variables .env
-
-```env
-AUTHORIZED_USER_ID=<discord user id>
-CLAUDE_BIN=<chemin vers le binaire claude>
-DISCORD_TOKEN=<token du bot Discord>
-DATA_DIR=/mnt/maxtor/claudiscord
-```
+- `node-cron` for scheduling
+- In-memory lock per job key (`userId:id` or `id` alone for admin)
+- Duplicate protection within the same minute
+- `fs.watch()` on `scheduled-jobs.json` with 2s debounce for auto-reload
+- Ephemeral jobs (no persistent session)
+- If `notify: true`, output sent via DM to the job's `userId` (or admin if `null`). Filtered by `notifyPattern` if present (interpreted as regex, dotall flag `s` enabled).

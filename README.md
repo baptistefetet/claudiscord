@@ -8,7 +8,7 @@ Each user gets an isolated Docker container with Claude Code. The admin can also
 
 - **Discord DM relay** -- send a message, get a Claude Code response
 - **Docker sandbox** -- each user runs in their own isolated container (512 MB RAM, 1 CPU)
-- **Admin mode** -- toggle between sandbox (container) and admin (host) for system access
+- **Admin mode** -- switch between sandbox (container) and admin (host) for system access
 - **Session persistence** -- conversations are resumed across messages via `--resume`
 - **Job scheduler** -- cron-based jobs with `node-cron`, auto-reload on file change
 
@@ -77,7 +77,8 @@ systemctl enable --now claudiscord
 | `/help` | everyone | Show available commands |
 | `/clear` | everyone | Reset Claude session |
 | `/upgrade` | everyone | Update Claude Code in the sandbox container |
-| `/admin` | admin | Toggle admin (host) / sandbox (container) mode |
+| `/admin` | admin | Switch to admin (host) mode |
+| `/sandbox` | admin | Switch to sandbox (container) mode |
 | `/login` | everyone | Without args: show auth instructions. With JSON: save credentials |
 | `/status` | admin | Show current mode and auth status |
 
@@ -95,46 +96,6 @@ Credentials are stored in the user's persistent volume and the message is delete
 - **Linux**: `cat ~/.claude/.credentials.json`
 - **Mac**: `security find-generic-password -s "claude-credentials" -w`
 - **Windows**: `type %USERPROFILE%\.claude\.credentials.json`
-
-## Scheduled jobs
-
-Jobs are defined in `scheduled-jobs.json` (see `scheduled-jobs.example.json` for examples). The file is watched and auto-reloaded on change.
-
-```json
-{
-  "id": "my-job",
-  "userId": null,
-  "prompt": "The prompt Claude Code will execute",
-  "cron": "0 7 * * *",
-  "enabled": true,
-  "notify": true,
-  "created": "2026-01-01T00:00:00Z",
-  "lastRun": null,
-  "description": "Short description"
-}
-```
-
-- `userId: null` → runs on host with full system access
-- `userId: "<discord id>"` → runs in user's sandbox container
-- Sandbox users manage their jobs in `/home/claude/.claudiscord/scheduled-jobs.json`, automatically merged after each execution.
-
-## Architecture
-
-```
-DM (sandbox mode, default)
-  -> Docker container -> claude -p -> Discord
-
-DM (admin mode)
-  -> host -> claude -p -> Discord
-
-Scheduled jobs
-  -> host -> claude -p -> DM notification (if notify: true)
-```
-
-- One container per user (`claudiscord-{userId}`), persistent (`--restart unless-stopped`)
-- Volumes in `DATA_DIR/{userId}/home/` mounted as `/home/claude` (credentials, files, CLAUDE.md)
-- Containers survive reboots and service restarts
-- To update Claude Code, rebuild the image with `docker build --no-cache -t claudiscord-sandbox .` (user data is preserved in volumes)
 
 ## Configuration
 
