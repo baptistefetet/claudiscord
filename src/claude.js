@@ -25,8 +25,8 @@ function spawnClaude(prompt, options = {}) {
 
 		if (sessionId) {
 			args.push('--resume', sessionId);
-		} else if (systemPrompt) {
-			// TODO: switch to --append-system-prompt to preserve Claude Code's native system prompt
+		}
+		if (systemPrompt) {
 			args.push('--system-prompt', systemPrompt);
 		}
 
@@ -94,7 +94,7 @@ async function executeClaudeCommand(prompt, options = {}) {
 	try {
 		result = await spawnClaude(prompt, {
 			sessionId,
-			systemPrompt: sessionId ? null : systemPrompt,
+			systemPrompt,
 			allowedTools,
 			disallowedTools,
 			outputFormat,

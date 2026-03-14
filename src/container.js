@@ -109,8 +109,8 @@ function executeInContainerInternal(userId, prompt, options = {}) {
 
 		if (sessionId) {
 			claudeArgs.push('--resume', sessionId);
-		} else if (systemPrompt) {
-			// TODO: switch to --append-system-prompt to preserve Claude Code's native system prompt
+		}
+		if (systemPrompt) {
 			claudeArgs.push('--system-prompt', systemPrompt);
 		}
 
@@ -179,7 +179,7 @@ async function executeInContainer(userId, prompt, options = {}) {
 	try {
 		result = await executeInContainerInternal(userId, prompt, {
 			sessionId,
-			systemPrompt: sessionId ? null : systemPrompt,
+			systemPrompt,
 			allowedTools,
 			disallowedTools,
 			outputFormat,
