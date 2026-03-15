@@ -1,4 +1,5 @@
-const { AUTHORIZED_USER_ID, getSystemPrompt, getSandboxSystemPrompt, ALLOWED_TOOLS } = require('./src/config');
+const { AUTHORIZED_USER_ID, ALLOWED_TOOLS } = require('./src/config');
+const { getSystemPrompt, getSandboxSystemPrompt } = require('./src/prompts');
 const log = require('./src/logger');
 const sessions = require('./src/sessions');
 const { executeDM } = require('./src/claude');

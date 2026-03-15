@@ -1,5 +1,6 @@
 const { spawn } = require('child_process');
-const { CLAUDE_BIN, CLAUDE_TIMEOUT_MS, getSystemPrompt, ALLOWED_TOOLS, DISALLOWED_TOOLS } = require('./config');
+const { CLAUDE_BIN, CLAUDE_TIMEOUT_MS, ALLOWED_TOOLS, DISALLOWED_TOOLS } = require('./config');
+const { getSystemPrompt } = require('./prompts');
 const log = require('./logger');
 
 // Mutex for DM requests (one Claude at a time)

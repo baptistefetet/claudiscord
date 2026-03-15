@@ -1,7 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 const cron = require('node-cron');
-const { JOBS_FILE, DATA_DIR, SANDBOX_JOBS_PATH, ALLOWED_TOOLS, CLAUDE_TIMEOUT_MS, AUTHORIZED_USER_ID, getJobSystemPrompt } = require('./config');
+const { JOBS_FILE, DATA_DIR, SANDBOX_JOBS_PATH, ALLOWED_TOOLS, CLAUDE_TIMEOUT_MS, AUTHORIZED_USER_ID } = require('./config');
+const { getJobSystemPrompt } = require('./prompts');
 const { executeClaudeCommand, acquireJobLock, releaseJobLock } = require('./claude');
 const { executeInContainerQueued } = require('./container');
 const { sendDM } = require('./discord');
