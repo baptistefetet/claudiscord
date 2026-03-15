@@ -75,6 +75,8 @@ client.on(Events.MessageCreate, async message => {
 	} catch (err) {
 		if (stopTyping) stopTyping();
 
+		log.error('Message handling error:', err.message || err);
+
 		let errMsg;
 		if (err.code === 124) {
 			errMsg = 'Claude Code took too long, timeout!';
