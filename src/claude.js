@@ -9,7 +9,11 @@ let dmQueue = Promise.resolve();
 // Lock set for scheduled jobs (per job ID)
 const jobLocks = new Set();
 
-function spawnClaude(prompt, options = {}) {
+/**
+ * Build Claude CLI arguments from options.
+ * Extra args (e.g. --dangerously-skip-permissions) can be prepended via extraArgs.
+ */
+function buildClaudeArgs(prompt, options = {}) {
 	const {
 		sessionId = null,
 		systemPrompt = null,
@@ -17,29 +21,40 @@ function spawnClaude(prompt, options = {}) {
 		disallowedTools = DISALLOWED_TOOLS,
 		model = 'opus',
 		outputFormat = 'json',
+		extraArgs = [],
+	} = options;
+
+	const args = ['-p', ...extraArgs];
+
+	if (sessionId) {
+		args.push('--resume', sessionId);
+	}
+	if (systemPrompt) {
+		args.push('--system-prompt', systemPrompt);
+	}
+
+	args.push('--output-format', outputFormat);
+	args.push('--allowedTools', allowedTools);
+	args.push('--disallowedTools', disallowedTools);
+	args.push('--model', model);
+	args.push('--', prompt);
+
+	return args;
+}
+
+/**
+ * Spawn a command with timeout, stdout/stderr collection, and SIGTERM→SIGKILL.
+ * Returns { stdout, stderr, code }.
+ */
+function spawnWithTimeout(cmd, args, options = {}) {
+	const {
 		timeoutMs = CLAUDE_TIMEOUT_MS,
-		cwd = '/root',
+		cwd,
+		label = 'process',
 	} = options;
 
 	return new Promise((resolve, reject) => {
-		const args = ['-p'];
-
-		if (sessionId) {
-			args.push('--resume', sessionId);
-		}
-		if (systemPrompt) {
-			args.push('--system-prompt', systemPrompt);
-		}
-
-		args.push('--output-format', outputFormat);
-		args.push('--allowedTools', allowedTools);
-		args.push('--disallowedTools', disallowedTools);
-		args.push('--model', model);
-		args.push('--', prompt);
-
-		log.info(`Spawning claude: ${sessionId ? `resume ${sessionId}` : 'new session'}, prompt length: ${prompt.length}, format: ${outputFormat}`);
-
-		const child = spawn(CLAUDE_BIN, args, {
+		const child = spawn(cmd, args, {
 			cwd,
 			stdio: ['pipe', 'pipe', 'pipe'],
 		});
@@ -55,7 +70,7 @@ function spawnClaude(prompt, options = {}) {
 		let killed = false;
 		const timer = setTimeout(() => {
 			killed = true;
-			log.warn(`Claude timeout after ${timeoutMs}ms, sending SIGTERM`);
+			log.warn(`${label} timeout after ${timeoutMs}ms, sending SIGTERM`);
 			child.kill('SIGTERM');
 			setTimeout(() => {
 				try { child.kill('SIGKILL'); } catch (_) {}
@@ -68,8 +83,8 @@ function spawnClaude(prompt, options = {}) {
 				reject(Object.assign(new Error('timeout'), { code: 124 }));
 				return;
 			}
-			if (stderr) log.warn('Claude stderr:', stderr.slice(0, 500));
-			resolve({ stdout, code });
+			if (stderr) log.warn(`${label} stderr:`, stderr.slice(0, 500));
+			resolve({ stdout, stderr, code });
 		});
 
 		child.on('error', (err) => {
@@ -77,6 +92,25 @@ function spawnClaude(prompt, options = {}) {
 			reject(err);
 		});
 	});
+}
+
+/**
+ * Parse Claude CLI output (JSON or text).
+ */
+function parseClaudeOutput(stdout, outputFormat, label = 'Claude') {
+	if (outputFormat === 'json') {
+		try {
+			const parsed = JSON.parse(stdout);
+			return {
+				result: parsed.result || '',
+				sessionId: parsed.session_id || null,
+			};
+		} catch (err) {
+			log.error(`Failed to parse ${label} JSON output:`, stdout.slice(0, 200));
+			return { result: stdout, sessionId: null };
+		}
+	}
+	return { result: stdout, sessionId: null };
 }
 
 async function executeClaudeCommand(prompt, options = {}) {
@@ -89,38 +123,25 @@ async function executeClaudeCommand(prompt, options = {}) {
 		timeoutMs = CLAUDE_TIMEOUT_MS,
 	} = options;
 
-	let result;
+	const spawnOpts = { systemPrompt, allowedTools, disallowedTools, outputFormat };
+
+	log.info(`Spawning claude: ${sessionId ? `resume ${sessionId}` : 'new session'}, prompt length: ${prompt.length}, format: ${outputFormat}`);
 
 	// First attempt: with resume if sessionId provided, otherwise new session
-	try {
-		result = await spawnClaude(prompt, {
-			sessionId,
-			systemPrompt,
-			allowedTools,
-			disallowedTools,
-			outputFormat,
-			timeoutMs,
-		});
-	} catch (err) {
-		if (err.code === 124) throw err;
-		throw err;
-	}
+	let result = await spawnWithTimeout(
+		CLAUDE_BIN,
+		buildClaudeArgs(prompt, { ...spawnOpts, sessionId }),
+		{ timeoutMs, cwd: '/root', label: 'Claude' },
+	);
 
 	// Fallback: if resume failed, retry with new session
 	if (result.code !== 0 && sessionId) {
 		log.warn(`Resume failed (exit ${result.code}), retrying with new session...`);
-		try {
-			result = await spawnClaude(prompt, {
-				sessionId: null,
-				systemPrompt,
-				allowedTools,
-				disallowedTools,
-				outputFormat,
-				timeoutMs,
-			});
-		} catch (err) {
-			throw err;
-		}
+		result = await spawnWithTimeout(
+			CLAUDE_BIN,
+			buildClaudeArgs(prompt, { ...spawnOpts, sessionId: null }),
+			{ timeoutMs, cwd: '/root', label: 'Claude' },
+		);
 	}
 
 	if (result.code !== 0) {
@@ -128,21 +149,7 @@ async function executeClaudeCommand(prompt, options = {}) {
 		throw Object.assign(new Error(errMsg), { code: result.code });
 	}
 
-	// Parse output
-	if (outputFormat === 'json') {
-		try {
-			const parsed = JSON.parse(result.stdout);
-			return {
-				result: parsed.result || '',
-				sessionId: parsed.session_id || null,
-			};
-		} catch (err) {
-			log.error('Failed to parse Claude JSON output:', result.stdout.slice(0, 200));
-			return { result: result.stdout, sessionId: null };
-		}
-	}
-
-	return { result: result.stdout, sessionId: null };
+	return parseClaudeOutput(result.stdout, outputFormat);
 }
 
 /**
@@ -168,4 +175,4 @@ function releaseJobLock(jobId) {
 	jobLocks.delete(jobId);
 }
 
-module.exports = { executeClaudeCommand, executeDM, acquireJobLock, releaseJobLock };
+module.exports = { buildClaudeArgs, spawnWithTimeout, parseClaudeOutput, executeClaudeCommand, executeDM, acquireJobLock, releaseJobLock };

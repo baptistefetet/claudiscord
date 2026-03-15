@@ -1,8 +1,9 @@
-const { spawn, execFileSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { DATA_DIR, DOCKER_IMAGE, CONTAINER_MEMORY, CONTAINER_CPUS, CLAUDE_TIMEOUT_MS, ALLOWED_TOOLS, DISALLOWED_TOOLS } = require('./config');
 const { getDefaultClaudeMd } = require('./prompts');
+const { buildClaudeArgs, spawnWithTimeout, parseClaudeOutput } = require('./claude');
 const log = require('./logger');
 
 const DOCKERFILE_DIR = path.resolve(__dirname, '..');
@@ -91,79 +92,6 @@ function ensureContainer(userId) {
 	log.info(`Created and started container '${name}'`);
 }
 
-function executeInContainerInternal(userId, prompt, options = {}) {
-	const {
-		sessionId = null,
-		systemPrompt = null,
-		allowedTools = ALLOWED_TOOLS,
-		disallowedTools = DISALLOWED_TOOLS,
-		model = 'opus',
-		outputFormat = 'json',
-		timeoutMs = CLAUDE_TIMEOUT_MS,
-	} = options;
-
-	ensureContainer(userId);
-	const name = containerName(userId);
-
-	return new Promise((resolve, reject) => {
-		const claudeArgs = ['-p', '--dangerously-skip-permissions'];
-
-		if (sessionId) {
-			claudeArgs.push('--resume', sessionId);
-		}
-		if (systemPrompt) {
-			claudeArgs.push('--system-prompt', systemPrompt);
-		}
-
-		claudeArgs.push('--output-format', outputFormat);
-		claudeArgs.push('--allowedTools', allowedTools);
-		claudeArgs.push('--disallowedTools', disallowedTools);
-		claudeArgs.push('--model', model);
-		claudeArgs.push('--', prompt);
-
-		const args = ['exec', '-i', name, 'claude', ...claudeArgs];
-
-		log.info(`Container exec [${name}]: ${sessionId ? `resume ${sessionId}` : 'new session'}, prompt length: ${prompt.length}`);
-
-		const child = spawn('docker', args, {
-			stdio: ['pipe', 'pipe', 'pipe'],
-		});
-
-		child.stdin.end();
-
-		let stdout = '';
-		let stderr = '';
-
-		child.stdout.on('data', chunk => { stdout += chunk; });
-		child.stderr.on('data', chunk => { stderr += chunk; });
-
-		let killed = false;
-		const timer = setTimeout(() => {
-			killed = true;
-			log.warn(`Container exec timeout after ${timeoutMs}ms, killing`);
-			child.kill('SIGTERM');
-			setTimeout(() => {
-				try { child.kill('SIGKILL'); } catch (_) {}
-			}, 5000);
-		}, timeoutMs);
-
-		child.on('close', (code) => {
-			clearTimeout(timer);
-			if (killed) {
-				reject(Object.assign(new Error('timeout'), { code: 124 }));
-				return;
-			}
-			if (stderr) log.warn('Container stderr:', stderr.slice(0, 500));
-			resolve({ stdout, stderr, code });
-		});
-
-		child.on('error', (err) => {
-			clearTimeout(timer);
-			reject(err);
-		});
-	});
-}
-
 async function executeInContainer(userId, prompt, options = {}) {
 	const {
 		sessionId = null,
@@ -174,37 +102,42 @@ async function executeInContainer(userId, prompt, options = {}) {
 		timeoutMs = CLAUDE_TIMEOUT_MS,
 	} = options;
 
-	let result;
+	ensureContainer(userId);
+	const name = containerName(userId);
+
+	const claudeArgs = buildClaudeArgs(prompt, {
+		sessionId,
+		systemPrompt,
+		allowedTools,
+		disallowedTools,
+		outputFormat,
+		extraArgs: ['--dangerously-skip-permissions'],
+	});
+
+	const label = `Container [${name}]`;
+	log.info(`${label}: ${sessionId ? `resume ${sessionId}` : 'new session'}, prompt length: ${prompt.length}`);
 
 	// First attempt
-	try {
-		result = await executeInContainerInternal(userId, prompt, {
-			sessionId,
+	let result = await spawnWithTimeout(
+		'docker', ['exec', '-i', name, 'claude', ...claudeArgs],
+		{ timeoutMs, label },
+	);
+
+	// Fallback: if resume failed, retry with new session
+	if (result.code !== 0 && sessionId) {
+		log.warn(`${label} resume failed (exit ${result.code}), retrying with new session...`);
+		const retryArgs = buildClaudeArgs(prompt, {
+			sessionId: null,
 			systemPrompt,
 			allowedTools,
 			disallowedTools,
 			outputFormat,
-			timeoutMs,
+			extraArgs: ['--dangerously-skip-permissions'],
 		});
-	} catch (err) {
-		throw err;
-	}
-
-	// Fallback: if resume failed, retry with new session
-	if (result.code !== 0 && sessionId) {
-		log.warn(`Container resume failed (exit ${result.code}), retrying with new session...`);
-		try {
-			result = await executeInContainerInternal(userId, prompt, {
-				sessionId: null,
-				systemPrompt,
-				allowedTools,
-				disallowedTools,
-				outputFormat,
-				timeoutMs,
-			});
-		} catch (err) {
-			throw err;
-		}
+		result = await spawnWithTimeout(
+			'docker', ['exec', '-i', name, 'claude', ...retryArgs],
+			{ timeoutMs, label },
+		);
 	}
 
 	if (result.code !== 0) {
@@ -224,21 +157,7 @@ async function executeInContainer(userId, prompt, options = {}) {
 		log.warn(`Failed to merge jobs for user ${userId}:`, err.message);
 	}
 
-	// Parse output
-	if (outputFormat === 'json') {
-		try {
-			const parsed = JSON.parse(result.stdout);
-			return {
-				result: parsed.result || '',
-				sessionId: parsed.session_id || null,
-			};
-		} catch (err) {
-			log.error('Failed to parse container JSON output:', result.stdout.slice(0, 200));
-			return { result: result.stdout, sessionId: null };
-		}
-	}
-
-	return { result: result.stdout, sessionId: null };
+	return parseClaudeOutput(result.stdout, outputFormat, label);
 }
 
 /**
