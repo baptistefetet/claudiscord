@@ -56,7 +56,7 @@ async function handleCommand(message) {
 			await message.channel.send('Updating container packages...');
 			execFileSync('docker', [
 				'exec', '-u', 'root', name, 'bash', '-c',
-				'apt-get update -qq && apt-get upgrade -y -qq 2>&1 | tail -10',
+				'DEBIAN_FRONTEND=noninteractive apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" 2>&1 | tail -10',
 			], { encoding: 'utf8', timeout: 300000 });
 			// Claude Code upgrade
 			await message.channel.send('Updating Claude Code...');
