@@ -20,7 +20,7 @@ const DOCKER_IMAGE = 'claudiscord-sandbox';
 const CONTAINER_MEMORY = '512m';
 const CONTAINER_CPUS = 1;
 
-const CLAUDE_TIMEOUT_MS = 300_000;
+const CLAUDE_TIMEOUT_MS = 600_000;
 const DISCORD_MAX_MSG_LENGTH = 2000;
 const TYPING_INTERVAL_MS = 8000;
 
