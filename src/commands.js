@@ -41,8 +41,11 @@ async function handleCommand(message) {
 			help += `
 \`/admin\` — Switch to admin mode (host)
 \`/sandbox\` — Switch to sandbox mode (container)
-\`/restart\` — Restart the claudiscord service
 \`/status\` — Show current mode and authentication status`;
+			if (sessions.isAdminMode()) {
+				help += `
+\`/restart\` — Restart the claudiscord service`;
+			}
 		}
 		await message.channel.send(help);
 		return true;
@@ -110,7 +113,7 @@ async function handleCommand(message) {
 		return true;
 	}
 
-	if (content === '/restart' && userId === AUTHORIZED_USER_ID) {
+	if (content === '/restart' && userId === AUTHORIZED_USER_ID && sessions.isAdminMode()) {
 		await message.channel.send('Restarting claudiscord service...');
 		// Use execFile (async) so the message is sent before the process dies
 		execFile('systemctl', ['restart', 'claudiscord'], (err) => {
