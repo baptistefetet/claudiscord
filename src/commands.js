@@ -1,4 +1,4 @@
-const { execFileSync } = require('child_process');
+const { execFileSync, execFile } = require('child_process');
 const { AUTHORIZED_USER_ID } = require('./config');
 const sessions = require('./sessions');
 const { writeCredentials, hasCredentials, ensureContainer, containerName } = require('./container');
@@ -34,13 +34,14 @@ async function handleCommand(message) {
 
 \`/help\` — Affiche cette aide
 \`/clear\` — Reinitialise la session (nouvelle conversation)
-\`/upgrade\` — Met a jour Claude Code dans ton container sandbox
+\`/upgrade\` — Met a jour le container sandbox (apt + Claude Code)
 \`/login\` — Instructions d'authentification sandbox
 \`/login <json>\` — Enregistre tes credentials`;
 		if (isAdmin) {
 			help += `
 \`/admin\` — Passe en mode admin (hote)
 \`/sandbox\` — Passe en mode sandbox (container)
+\`/restart\` — Relance le service claudiscord
 \`/status\` — Affiche le mode actuel et le statut d'authentification`;
 		}
 		await message.channel.send(help);
@@ -51,7 +52,14 @@ async function handleCommand(message) {
 		try {
 			ensureContainer(userId);
 			const name = containerName(userId);
-			await message.channel.send('Mise a jour de Claude Code en cours...');
+			// APT upgrade (as root in container)
+			await message.channel.send('Mise a jour des paquets du container...');
+			execFileSync('docker', [
+				'exec', '-u', 'root', name, 'bash', '-c',
+				'apt-get update -qq && apt-get upgrade -y -qq 2>&1 | tail -10',
+			], { encoding: 'utf8', timeout: 300000 });
+			// Claude Code upgrade
+			await message.channel.send('Mise a jour de Claude Code...');
 			const output = execFileSync('docker', [
 				'exec', name, 'bash', '-c',
 				'curl -fsSL https://claude.ai/install.sh | bash 2>&1 | tail -5',
@@ -66,7 +74,7 @@ async function handleCommand(message) {
 			try {
 				version = execFileSync('docker', ['exec', name, 'claude', '--version'], { encoding: 'utf8', timeout: 10000 }).trim();
 			} catch {}
-			await message.channel.send(`Claude Code mis a jour.${version ? `\nVersion : \`${version}\`` : ''}`);
+			await message.channel.send(`Container mis a jour.${version ? `\nClaude Code : \`${version}\`` : ''}`);
 		} catch (err) {
 			log.error('Upgrade error:', err.message);
 			await message.channel.send(`Erreur lors de la mise a jour : ${err.message.slice(0, 300)}`);
@@ -99,6 +107,15 @@ async function handleCommand(message) {
 		sessions.setAdminMode(false);
 		sessions.clearSession(userId);
 		await message.channel.send('Mode bascule vers **sandbox**. Session reinitialisee.');
+		return true;
+	}
+
+	if (content === '/restart' && userId === AUTHORIZED_USER_ID) {
+		await message.channel.send('Redemarrage du service claudiscord...');
+		// Use execFile (async) so the message is sent before the process dies
+		execFile('systemctl', ['restart', 'claudiscord'], (err) => {
+			if (err) log.error('Restart error:', err.message);
+		});
 		return true;
 	}
 

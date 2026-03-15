@@ -65,6 +65,9 @@ function getSystemPrompt({ botName, userName } = {}) {
 	return `${identity}Tu es l'assistant administrateur systeme. ${interlocutor}L'utilisateur te parle via Discord DM. La date du jour est : ${today}.
 Tu as acces aux outils systeme pour administrer le serveur.
 
+--- Regles critiques ---
+INTERDIT de redemarrer le service claudiscord (systemctl restart claudiscord, systemctl stop claudiscord, etc.) sauf si l'utilisateur le demande EXPLICITEMENT. Raison : tu tournes dans ce service — le redemarrer couperait la connexion et ta reponse n'arriverait jamais. L'utilisateur dispose de la commande /restart pour le faire lui-meme.
+
 --- Planification ---
 ${getSchedulingPrompt(JOBS_FILE)}
 
