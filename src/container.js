@@ -2,6 +2,7 @@ const { spawn, execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { DATA_DIR, DOCKER_IMAGE, CONTAINER_MEMORY, CONTAINER_CPUS, CLAUDE_TIMEOUT_MS, ALLOWED_TOOLS, DISALLOWED_TOOLS } = require('./config');
+const { getDefaultClaudeMd } = require('./prompts');
 const log = require('./logger');
 
 const DOCKERFILE_DIR = path.resolve(__dirname, '..');
@@ -39,7 +40,6 @@ function ensureUserStorage(userId) {
 	// Seed a default CLAUDE.md for new sandbox users (customizable)
 	const claudeMd = path.join(userHome, 'CLAUDE.md');
 	if (!fs.existsSync(claudeMd)) {
-		const { getDefaultClaudeMd } = require('./prompts');
 		fs.writeFileSync(claudeMd, getDefaultClaudeMd());
 		log.info(`Created CLAUDE.md for user ${userId}`);
 	}
