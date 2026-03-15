@@ -63,7 +63,7 @@ async function handleCommand(message) {
 			const output = execFileSync('docker', [
 				'exec', name, 'bash', '-c',
 				'curl -fsSL https://claude.ai/install.sh | bash 2>&1 | tail -5',
-			], { encoding: 'utf8', timeout: 120000 });
+			], { encoding: 'utf8', timeout: 300000 });
 			// Copy upgraded binary to /usr/local/bin so it takes priority in PATH
 			execFileSync('docker', [
 				'exec', '-u', 'root', name, 'bash', '-c',
