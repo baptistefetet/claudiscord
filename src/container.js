@@ -36,12 +36,14 @@ const CONTAINER_GID = 1001;
 
 function ensureUserStorage(userId) {
 	const userHome = path.join(DATA_DIR, userId, 'home');
+	const isNew = !fs.existsSync(userHome);
 	fs.mkdirSync(userHome, { recursive: true });
 
 	// Seed a default CLAUDE.md for new sandbox users (customizable)
 	const claudeMd = path.join(userHome, 'CLAUDE.md');
 	if (!fs.existsSync(claudeMd)) {
 		fs.writeFileSync(claudeMd, getDefaultClaudeMd());
+		execFileSync('chown', [`${CONTAINER_UID}:${CONTAINER_GID}`, claudeMd], { timeout: 5000 });
 		log.info(`Created CLAUDE.md for user ${userId}`);
 	}
 
@@ -53,8 +55,11 @@ function ensureUserStorage(userId) {
 	const claudiscordDir = path.join(userHome, '.claudiscord');
 	fs.mkdirSync(claudiscordDir, { recursive: true });
 
-	// Ensure all files are owned by the container's claude user
-	execFileSync('chown', ['-R', `${CONTAINER_UID}:${CONTAINER_GID}`, userHome], { timeout: 5000 });
+	// Only chown -R on first creation; afterwards the home may contain
+	// thousands of files and recursive chown would timeout on the Pi
+	if (isNew) {
+		execFileSync('chown', ['-R', `${CONTAINER_UID}:${CONTAINER_GID}`, userHome], { timeout: 10000 });
+	}
 }
 
 function containerName(userId) {
