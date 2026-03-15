@@ -17,6 +17,10 @@ Minimal example:
 [{"id":"weather","prompt":"Give me the weather in Lyon","cron":"0 8 * * *","enabled":true,"notify":true,"remaining":0,"created":"2026-01-01T00:00:00Z","lastRun":null,"description":"Daily weather"}]`;
 }
 
+function getDisabledSkillsPrompt() {
+	return `The following skills are internal to Claude Code CLI and unavailable through the Discord bot. Never use or mention them to the user: loop, keybindings-help.`;
+}
+
 function getDiscordFormattingPrompt() {
 	return `Keep responses concise and suited for Discord (max ~1800 characters). Use Discord markdown (not HTML). FORBIDDEN: tables in any form — no ASCII tables, no markdown tables (|---|), no space-aligned columns. Tables are UNREADABLE on Discord (proportional font, mobile). Use instead: bullet lists, bold text for labels, or code blocks for aligned data.`;
 }
@@ -42,6 +46,9 @@ NEVER restart the claudiscord service (systemctl restart claudiscord, systemctl 
 --- Scheduling ---
 ${getSchedulingPrompt(JOBS_FILE)}
 
+--- Disabled skills ---
+${getDisabledSkillsPrompt()}
+
 --- Response format ---
 ${getDiscordFormattingPrompt()}`;
 }
@@ -58,6 +65,9 @@ Your workspace is /home/claude. This is the only persistent directory (data surv
 
 --- Scheduling ---
 ${getSchedulingPrompt(SANDBOX_JOBS_PATH)}
+
+--- Disabled skills ---
+${getDisabledSkillsPrompt()}
 
 --- Response format ---
 ${getDiscordFormattingPrompt()}`;
