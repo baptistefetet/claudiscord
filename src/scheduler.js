@@ -202,7 +202,7 @@ async function executeJob(job) {
 	log.info(`Job '${key}' starting`);
 
 	const today = new Date().toISOString().slice(0, 10);
-	const fullPrompt = `Date du jour : ${today}\n\n${prompt}`;
+	const fullPrompt = `Today's date: ${today}\n\n${prompt}`;
 	const targetUser = userId || AUTHORIZED_USER_ID;
 
 	try {
@@ -252,12 +252,12 @@ async function executeJob(job) {
 		if (err.code === 124) {
 			log.error(`Job '${key}': TIMEOUT`);
 			if (notify) {
-				await sendDM(targetUser, `\u{1F6A8} **Job '${id}' \u2014 TIMEOUT**\nPas de reponse apres ${CLAUDE_TIMEOUT_MS / 1000}s.`).catch(e => log.error('Notify failed:', e.message));
+				await sendDM(targetUser, `\u{1F6A8} **Job '${id}' \u2014 TIMEOUT**\nNo response after ${CLAUDE_TIMEOUT_MS / 1000}s.`).catch(e => log.error('Notify failed:', e.message));
 			}
 		} else {
 			log.error(`Job '${key}': ERROR (code ${err.code || 'unknown'})`, err.message);
 			if (notify) {
-				await sendDM(targetUser, `\u{1F6A8} **Job '${id}' \u2014 ERREUR**\nClaude a echoue avec le code ${err.code || 'unknown'}.`).catch(e => log.error('Notify failed:', e.message));
+				await sendDM(targetUser, `\u{1F6A8} **Job '${id}' \u2014 ERROR**\nClaude failed with code ${err.code || 'unknown'}.`).catch(e => log.error('Notify failed:', e.message));
 			}
 		}
 	} finally {

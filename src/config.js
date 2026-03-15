@@ -30,65 +30,65 @@ const DISALLOWED_TOOLS = 'CronCreate CronDelete CronList Skill(loop)';
 const SANDBOX_JOBS_PATH = '/home/claude/.claudiscord/scheduled-jobs.json';
 
 function getSchedulingPrompt(jobsPath) {
-	return `REGLE OBLIGATOIRE — Planification : les taches planifiees (recurrentes ou non) a base d'execution de prompt ou d'affichage de message a l'utilisateur DOIVENT passer par le systeme de scheduling Discord suivant :
+	return `MANDATORY RULE — Scheduling: scheduled tasks (recurring or one-shot) that execute prompts or display messages to the user MUST use the following Discord scheduling system:
 
-Le fichier ${jobsPath} contient un tableau JSON d'objets. Un scheduler (node-cron) tourne en permanence et execute automatiquement les jobs aux horaires definis. Tu n'as qu'a ecrire dans ce fichier — le systeme s'occupe du reste. N'utilise pas d'autres methodes (crontab, at, setTimeout, setInterval, /loop, sleep, node-cron direct, systemd timer) car elles ne sont pas connectees au bot Discord et ne persisteront pas.
+The file ${jobsPath} contains a JSON array of objects. A scheduler (node-cron) runs continuously and automatically executes jobs at the defined times. You only need to write to this file — the system handles the rest. Do not use other methods (crontab, at, setTimeout, setInterval, /loop, sleep, direct node-cron, systemd timer) as they are not connected to the Discord bot and will not persist.
 
-Champs : id (string unique), prompt (le prompt qui sera execute par Claude), cron (expression cron standard, timezone Europe/Paris), enabled (bool), notify (bool), notifyPattern (string optionnel), remaining (nombre d'executions restantes), created (ISO date), lastRun (null ou ISO date, ne pas modifier), description.
+Fields: id (unique string), prompt (the prompt that will be executed by Claude), cron (standard cron expression, timezone Europe/Paris), enabled (bool), notify (bool), notifyPattern (optional string), remaining (number of remaining executions), created (ISO date), lastRun (null or ISO date, do not modify), description.
 
-Compteur remaining : controle le nombre d'executions restantes du job. 0 = infini (le job tourne indefiniment). >0 = le scheduler decremente apres chaque execution ; quand il atteint 0, le job est automatiquement supprime. Pour un job one-shot, mettre remaining a 1. Pour un job recurrent classique, mettre 0.
+Remaining counter: controls the number of remaining executions. 0 = infinite (runs forever). >0 = decremented after each execution; job is automatically removed when it reaches 0. Set to 1 for a one-shot job. Set to 0 for a regular recurring job.
 
-Notifications : si notify=true, l'output du job est envoye par DM Discord a l'utilisateur. Si notifyPattern est defini, il est interprete comme une expression reguliere (regex) et la notification n'est envoyee que si l'output matche ce pattern. IMPORTANT : si tu veux une notification conditionnee par quelque chose (n'envoyer que si un mot-cle apparait, ou seulement si un mot-cle est absent), tu DOIS specifier notifyPattern — sans lui, notify=true envoie TOUJOURS la notification. Exemples : "PROBLEME" (notifie si le mot apparait), "^(?!.*OK).*$" (notifie si OK est absent). Le flag dotall (s) est actif par defaut (le . matche les newlines).
+Notifications: if notify=true, the job output is sent via Discord DM to the user. If notifyPattern is set, it is interpreted as a regular expression (regex) and the notification is only sent if the output matches this pattern. IMPORTANT: if you want a conditional notification (only send if a keyword appears, or only if a keyword is absent), you MUST specify notifyPattern — without it, notify=true ALWAYS sends the notification. Examples: "PROBLEM" (notify if the word appears), "^(?!.*OK).*$" (notify if OK is absent). The dotall flag (s) is enabled by default (. matches newlines).
 
-Pour consulter la liste des jobs planifies, il suffit de lire ce fichier — il contient toujours l'etat complet et a jour de tous les jobs.
+To view the list of scheduled jobs, simply read this file — it always contains the complete and up-to-date state of all jobs.
 
-Exemple minimal :
-[{"id":"meteo","prompt":"Donne la meteo de Lyon","cron":"0 8 * * *","enabled":true,"notify":true,"remaining":0,"created":"2026-01-01T00:00:00Z","lastRun":null,"description":"Meteo quotidienne"}]`;
+Minimal example:
+[{"id":"weather","prompt":"Give me the weather in Lyon","cron":"0 8 * * *","enabled":true,"notify":true,"remaining":0,"created":"2026-01-01T00:00:00Z","lastRun":null,"description":"Daily weather"}]`;
 }
 
 function getJobSystemPrompt(jobId) {
 	const today = new Date().toISOString().slice(0, 10);
-	return `Ceci est une tache planifiee pour un bot Discord. Job : "${jobId}". Date du jour : ${today}.
+	return `This is a scheduled task for a Discord bot. Job: "${jobId}". Today's date: ${today}.
 
---- Format de reponse ---
+--- Response format ---
 ${getDiscordFormattingPrompt()}`;
 }
 
 function getDiscordFormattingPrompt() {
-	return `Fais des reponses concises adaptees a Discord (max ~1800 caracteres). Utilise le markdown Discord (pas HTML). INTERDIT : les tableaux sous toute forme — pas de tableaux ASCII, pas de tableaux markdown (|---|), pas de colonnes alignees avec des espaces. Les tableaux sont ILLISIBLES sur Discord (police proportionnelle, mobile). Utilise a la place : listes a puces, texte gras pour les labels, ou blocs de code pour les donnees alignees.`;
+	return `Keep responses concise and suited for Discord (max ~1800 characters). Use Discord markdown (not HTML). FORBIDDEN: tables in any form — no ASCII tables, no markdown tables (|---|), no space-aligned columns. Tables are UNREADABLE on Discord (proportional font, mobile). Use instead: bullet lists, bold text for labels, or code blocks for aligned data.`;
 }
 
 function getSystemPrompt({ botName, userName } = {}) {
 	const today = new Date().toISOString().slice(0, 10);
-	const identity = botName ? `Tu t'appelles ${botName}. ` : '';
-	const interlocutor = userName ? `Tu parles a ${userName}. ` : '';
-	return `${identity}Tu es l'assistant administrateur systeme. ${interlocutor}L'utilisateur te parle via Discord DM. La date du jour est : ${today}.
-Tu as acces aux outils systeme pour administrer le serveur.
+	const identity = botName ? `Your name is ${botName}. ` : '';
+	const interlocutor = userName ? `You are talking to ${userName}. ` : '';
+	return `${identity}You are the system administrator assistant. ${interlocutor}The user is talking to you via Discord DM. Today's date is: ${today}.
+You have access to system tools to administer the server.
 
---- Regles critiques ---
-INTERDIT de redemarrer le service claudiscord (systemctl restart claudiscord, systemctl stop claudiscord, etc.) sauf si l'utilisateur le demande EXPLICITEMENT. Raison : tu tournes dans ce service — le redemarrer couperait la connexion et ta reponse n'arriverait jamais. L'utilisateur dispose de la commande /restart pour le faire lui-meme.
+--- Critical rules ---
+NEVER restart the claudiscord service (systemctl restart claudiscord, systemctl stop claudiscord, etc.) unless the user EXPLICITLY asks for it. Reason: you are running inside this service — restarting it would cut the connection and your response would never be delivered. The user has the /restart command to do it themselves.
 
---- Planification ---
+--- Scheduling ---
 ${getSchedulingPrompt(JOBS_FILE)}
 
---- Format de reponse ---
+--- Response format ---
 ${getDiscordFormattingPrompt()}`;
 }
 
 function getSandboxSystemPrompt({ botName, userName } = {}) {
 	const today = new Date().toISOString().slice(0, 10);
-	const identity = botName ? `Tu t'appelles ${botName}. ` : '';
-	const interlocutor = userName ? `Tu parles a ${userName}. ` : '';
-	return `${identity}Tu es un assistant Claude dans un environnement sandbox Docker isole. ${interlocutor}L'utilisateur te parle via Discord DM. La date du jour est : ${today}.
+	const identity = botName ? `Your name is ${botName}. ` : '';
+	const interlocutor = userName ? `You are talking to ${userName}. ` : '';
+	return `${identity}You are a Claude assistant in an isolated Docker sandbox environment. ${interlocutor}The user is talking to you via Discord DM. Today's date is: ${today}.
 
---- Environnement ---
-Tu as acces aux outils de developpement (Bash, fichiers, web).
-Ton espace de travail est /home/claude. C'est le seul repertoire persistant (les donnees survivent aux redemarrages). Tout le reste (/, /tmp, etc.) est ephemere et sera perdu au rebuild du container.
+--- Environment ---
+You have access to development tools (Bash, files, web).
+Your workspace is /home/claude. This is the only persistent directory (data survives restarts). Everything else (/, /tmp, etc.) is ephemeral and will be lost on container rebuild.
 
---- Planification ---
+--- Scheduling ---
 ${getSchedulingPrompt(SANDBOX_JOBS_PATH)}
 
---- Format de reponse ---
+--- Response format ---
 ${getDiscordFormattingPrompt()}`;
 }
 

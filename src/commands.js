@@ -4,22 +4,22 @@ const sessions = require('./sessions');
 const { writeCredentials, hasCredentials, ensureContainer, containerName } = require('./container');
 const log = require('./logger');
 
-const LOGIN_INSTRUCTIONS = `**Authentification sandbox**
+const LOGIN_INSTRUCTIONS = `**Sandbox authentication**
 
-Tu dois t'authentifier sur ta propre machine puis envoyer tes credentials :
+You need to authenticate on your own machine and send your credentials:
 
-**1.** Installe Claude Code : \`curl -fsSL https://claude.ai/install.sh | bash\`
-**2.** Lance : \`claude auth login\` et autorise l'acces dans ton navigateur
-**3.** Copie les credentials :
+**1.** Install Claude Code: \`curl -fsSL https://claude.ai/install.sh | bash\`
+**2.** Run: \`claude auth login\` and authorize access in your browser
+**3.** Copy your credentials:
 
-> **Linux** : \`cat ~/.claude/.credentials.json\`
-> **Mac** : les credentials sont dans le Keychain. Lance cette commande :
+> **Linux**: \`cat ~/.claude/.credentials.json\`
+> **Mac**: credentials are stored in the Keychain. Run:
 > \`security find-generic-password -s "claude-credentials" -w\`
-> **Windows** : \`type %USERPROFILE%\\.claude\\.credentials.json\`
+> **Windows**: \`type %USERPROFILE%\\.claude\\.credentials.json\`
 
-**4.** Envoie ici : \`/login {"claudeAiOauth":...}\`
+**4.** Send here: \`/login {"claudeAiOauth":...}\`
 
-Le message sera supprime automatiquement apres enregistrement.`;
+The message will be automatically deleted after registration.`;
 
 /**
  * Handle special commands. Returns true if the message was a command.
@@ -30,19 +30,19 @@ async function handleCommand(message) {
 
 	if (content === '/help') {
 		const isAdmin = userId === AUTHORIZED_USER_ID;
-		let help = `**Commandes disponibles**
+		let help = `**Available commands**
 
-\`/help\` — Affiche cette aide
-\`/clear\` — Reinitialise la session (nouvelle conversation)
-\`/upgrade\` — Met a jour le container sandbox (apt + Claude Code)
-\`/login\` — Instructions d'authentification sandbox
-\`/login <json>\` — Enregistre tes credentials`;
+\`/help\` — Show this help
+\`/clear\` — Reset session (new conversation)
+\`/upgrade\` — Update sandbox container (apt + Claude Code)
+\`/login\` — Sandbox authentication instructions
+\`/login <json>\` — Save your credentials`;
 		if (isAdmin) {
 			help += `
-\`/admin\` — Passe en mode admin (hote)
-\`/sandbox\` — Passe en mode sandbox (container)
-\`/restart\` — Relance le service claudiscord
-\`/status\` — Affiche le mode actuel et le statut d'authentification`;
+\`/admin\` — Switch to admin mode (host)
+\`/sandbox\` — Switch to sandbox mode (container)
+\`/restart\` — Restart the claudiscord service
+\`/status\` — Show current mode and authentication status`;
 		}
 		await message.channel.send(help);
 		return true;
@@ -53,13 +53,13 @@ async function handleCommand(message) {
 			ensureContainer(userId);
 			const name = containerName(userId);
 			// APT upgrade (as root in container)
-			await message.channel.send('Mise a jour des paquets du container...');
+			await message.channel.send('Updating container packages...');
 			execFileSync('docker', [
 				'exec', '-u', 'root', name, 'bash', '-c',
 				'apt-get update -qq && apt-get upgrade -y -qq 2>&1 | tail -10',
 			], { encoding: 'utf8', timeout: 300000 });
 			// Claude Code upgrade
-			await message.channel.send('Mise a jour de Claude Code...');
+			await message.channel.send('Updating Claude Code...');
 			const output = execFileSync('docker', [
 				'exec', name, 'bash', '-c',
 				'curl -fsSL https://claude.ai/install.sh | bash 2>&1 | tail -5',
@@ -74,44 +74,44 @@ async function handleCommand(message) {
 			try {
 				version = execFileSync('docker', ['exec', name, 'claude', '--version'], { encoding: 'utf8', timeout: 10000 }).trim();
 			} catch {}
-			await message.channel.send(`Container mis a jour.${version ? `\nClaude Code : \`${version}\`` : ''}`);
+			await message.channel.send(`Container updated.${version ? `\nClaude Code: \`${version}\`` : ''}`);
 		} catch (err) {
 			log.error('Upgrade error:', err.message);
-			await message.channel.send(`Erreur lors de la mise a jour : ${err.message.slice(0, 300)}`);
+			await message.channel.send(`Upgrade error: ${err.message.slice(0, 300)}`);
 		}
 		return true;
 	}
 
 	if (content === '/clear') {
 		sessions.clearSession(userId);
-		await message.channel.send('Conversation reinitialisee.');
+		await message.channel.send('Session reset.');
 		return true;
 	}
 
 	if (content === '/admin' && userId === AUTHORIZED_USER_ID) {
 		if (sessions.isAdminMode()) {
-			await message.channel.send('Deja en mode **admin**.');
+			await message.channel.send('Already in **admin** mode.');
 			return true;
 		}
 		sessions.setAdminMode(true);
 		sessions.clearSession(userId);
-		await message.channel.send('Mode bascule vers **admin**. Session reinitialisee.');
+		await message.channel.send('Switched to **admin** mode. Session reset.');
 		return true;
 	}
 
 	if (content === '/sandbox' && userId === AUTHORIZED_USER_ID) {
 		if (!sessions.isAdminMode()) {
-			await message.channel.send('Deja en mode **sandbox**.');
+			await message.channel.send('Already in **sandbox** mode.');
 			return true;
 		}
 		sessions.setAdminMode(false);
 		sessions.clearSession(userId);
-		await message.channel.send('Mode bascule vers **sandbox**. Session reinitialisee.');
+		await message.channel.send('Switched to **sandbox** mode. Session reset.');
 		return true;
 	}
 
 	if (content === '/restart' && userId === AUTHORIZED_USER_ID) {
-		await message.channel.send('Redemarrage du service claudiscord...');
+		await message.channel.send('Restarting claudiscord service...');
 		// Use execFile (async) so the message is sent before the process dies
 		execFile('systemctl', ['restart', 'claudiscord'], (err) => {
 			if (err) log.error('Restart error:', err.message);
@@ -120,9 +120,9 @@ async function handleCommand(message) {
 	}
 
 	if (content === '/status' && userId === AUTHORIZED_USER_ID) {
-		const current = sessions.isAdminMode() ? 'admin (hote)' : 'sandbox (container)';
-		const authed = hasCredentials(userId) ? 'oui' : 'non';
-		await message.channel.send(`Mode actuel : **${current}**\nAuthentifie (sandbox) : **${authed}**`);
+		const current = sessions.isAdminMode() ? 'admin (host)' : 'sandbox (container)';
+		const authed = hasCredentials(userId) ? 'yes' : 'no';
+		await message.channel.send(`Current mode: **${current}**\nAuthenticated (sandbox): **${authed}**`);
 		return true;
 	}
 
@@ -138,21 +138,21 @@ async function handleCommand(message) {
 		try {
 			const parsed = JSON.parse(arg);
 			if (!parsed.claudeAiOauth || !parsed.claudeAiOauth.accessToken) {
-				await message.channel.send('Format invalide. Le JSON doit contenir `claudeAiOauth.accessToken`.');
+				await message.channel.send('Invalid format. JSON must contain `claudeAiOauth.accessToken`.');
 				return true;
 			}
 
 			writeCredentials(userId, arg);
-			await message.channel.send('Credentials enregistrees. Tu peux maintenant utiliser le sandbox.');
+			await message.channel.send('Credentials saved. You can now use the sandbox.');
 
 			// Delete the message containing credentials for security
 			try { await message.delete(); } catch {}
 		} catch (err) {
 			if (err instanceof SyntaxError) {
-				await message.channel.send('JSON invalide. Envoie le contenu exact de `~/.claude/.credentials.json`.');
+				await message.channel.send('Invalid JSON. Send the exact content of `~/.claude/.credentials.json`.');
 			} else {
 				log.error('Login error:', err.message);
-				await message.channel.send(`Erreur : ${err.message}`);
+				await message.channel.send(`Error: ${err.message}`);
 			}
 		}
 		return true;

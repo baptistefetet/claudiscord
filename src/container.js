@@ -39,7 +39,7 @@ function ensureUserStorage(userId) {
 	// Seed a default CLAUDE.md for new sandbox users (customizable)
 	const claudeMd = path.join(userHome, 'CLAUDE.md');
 	if (!fs.existsSync(claudeMd)) {
-		fs.writeFileSync(claudeMd, '# Sandbox Claude\nTu es dans un environnement sandbox Docker isole.\nPersonnalise ce fichier pour adapter le comportement de Claude a tes besoins.\n');
+		fs.writeFileSync(claudeMd, '# Sandbox Claude\nYou are in an isolated Docker sandbox environment.\nCustomize this file to adapt Claude\'s behavior to your needs.\n');
 		log.info(`Created CLAUDE.md for user ${userId}`);
 	}
 

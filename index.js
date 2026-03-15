@@ -66,7 +66,7 @@ client.on(Events.MessageCreate, async message => {
 			sessions.setSessionId(userId, result.sessionId);
 		}
 
-		const responseText = result.result || 'Reponse vide de Claude Code.';
+		const responseText = result.result || 'Empty response from Claude Code.';
 		const chunks = splitMessage(responseText);
 		for (const chunk of chunks) {
 			await message.channel.send(chunk);
@@ -76,11 +76,11 @@ client.on(Events.MessageCreate, async message => {
 
 		let errMsg;
 		if (err.code === 124) {
-			errMsg = 'Claude Code a pris trop de temps, timeout !';
+			errMsg = 'Claude Code took too long, timeout!';
 		} else if (err.message === 'NOT_AUTHENTICATED') {
-			errMsg = 'Tu n\'es pas authentifie dans le sandbox. Envoie `/login` pour les instructions.';
+			errMsg = 'You are not authenticated in the sandbox. Send `/login` for instructions.';
 		} else {
-			errMsg = `Erreur Claude Code : ${err.message?.slice(0, 300) || 'unknown'}`;
+			errMsg = `Claude Code error: ${err.message?.slice(0, 300) || 'unknown'}`;
 		}
 		await message.channel.send(errMsg).catch(e => log.error('Failed to send error message:', e));
 	}
