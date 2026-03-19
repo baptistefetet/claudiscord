@@ -55,7 +55,7 @@ async function handleCommand(message) {
 		return true;
 	}
 
-	if (content === '/upgrade' && sessions.isAdminMode()) {
+	if (content === '/upgrade' && !sessions.isAdminMode()) {
 		try {
 			ensureContainer(userId);
 			const name = containerName(userId);
@@ -133,7 +133,7 @@ async function handleCommand(message) {
 		return true;
 	}
 
-	if (content.startsWith('/login') && sessions.isAdminMode()) {
+	if (content.startsWith('/login') && !sessions.isAdminMode()) {
 		const arg = content.slice('/login'.length).trim();
 
 		if (!arg) {
