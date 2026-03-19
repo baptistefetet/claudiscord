@@ -30,19 +30,23 @@ async function handleCommand(message) {
 
 	if (content === '/help') {
 		const isAdmin = userId === AUTHORIZED_USER_ID;
+		const inAdmin = sessions.isAdminMode();
 		let help = `**Available commands**
 
 \`/help\` — Show this help
-\`/clear\` — Reset session (new conversation)
+\`/clear\` — Reset session (new conversation)`;
+		if (!inAdmin) {
+			help += `
 \`/upgrade\` — Update sandbox container (apt + Claude Code)
 \`/login\` — Sandbox authentication instructions
 \`/login <json>\` — Save your credentials`;
+		}
 		if (isAdmin) {
 			help += `
 \`/admin\` — Switch to admin mode (host)
 \`/sandbox\` — Switch to sandbox mode (container)
 \`/status\` — Show current mode and authentication status`;
-			if (sessions.isAdminMode()) {
+			if (inAdmin) {
 				help += `
 \`/restart\` — Restart the claudiscord service`;
 			}
@@ -51,7 +55,7 @@ async function handleCommand(message) {
 		return true;
 	}
 
-	if (content === '/upgrade') {
+	if (content === '/upgrade' && sessions.isAdminMode()) {
 		try {
 			ensureContainer(userId);
 			const name = containerName(userId);
@@ -129,7 +133,7 @@ async function handleCommand(message) {
 		return true;
 	}
 
-	if (content.startsWith('/login')) {
+	if (content.startsWith('/login') && sessions.isAdminMode()) {
 		const arg = content.slice('/login'.length).trim();
 
 		if (!arg) {
