@@ -2,3 +2,4 @@
 scheduled-jobs.json
 node_modules/
 sessions.json
+._*
