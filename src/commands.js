@@ -1,5 +1,5 @@
 const { execFileSync, execFile } = require('child_process');
-const { AUTHORIZED_USER_ID } = require('./config');
+const { AUTHORIZED_USER_ID, UPGRADE_TIMEOUT_MS } = require('./config');
 const sessions = require('./sessions');
 const { writeCredentials, hasCredentials, ensureContainer, containerName } = require('./container');
 const log = require('./logger');
@@ -64,13 +64,13 @@ async function handleCommand(message) {
 			execFileSync('docker', [
 				'exec', '-u', 'root', name, 'bash', '-c',
 				'DEBIAN_FRONTEND=noninteractive apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" 2>&1 | tail -10',
-			], { encoding: 'utf8', timeout: 300000 });
+			], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
 			// Claude Code upgrade
 			await message.channel.send('Updating Claude Code...');
 			const output = execFileSync('docker', [
 				'exec', name, 'bash', '-c',
 				'curl -fsSL https://claude.ai/install.sh | bash 2>&1 | tail -5',
-			], { encoding: 'utf8', timeout: 300000 });
+			], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
 			// Copy upgraded binary to /usr/local/bin so it takes priority in PATH
 			execFileSync('docker', [
 				'exec', '-u', 'root', name, 'bash', '-c',

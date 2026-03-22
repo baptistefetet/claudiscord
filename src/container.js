@@ -1,7 +1,7 @@
 const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { DATA_DIR, DOCKER_IMAGE, CONTAINER_MEMORY, CONTAINER_CPUS, CLAUDE_TIMEOUT_MS, ALLOWED_TOOLS, DISALLOWED_TOOLS } = require('./config');
+const { DATA_DIR, DOCKER_IMAGE, CONTAINER_MEMORY, CONTAINER_CPUS, CLAUDE_TIMEOUT_MS, DOCKER_CMD_TIMEOUT, ALLOWED_TOOLS, DISALLOWED_TOOLS } = require('./config');
 const { getDefaultClaudeMd } = require('./prompts');
 const { buildClaudeArgs, spawnWithTimeout, parseClaudeOutput } = require('./claude');
 const log = require('./logger');
@@ -12,7 +12,7 @@ const DOCKERFILE_DIR = path.resolve(__dirname, '..');
 const containerQueues = new Map();
 
 function docker(...args) {
-	return execFileSync('docker', args, { encoding: 'utf8', timeout: 30000 }).trim();
+	return execFileSync('docker', args, { encoding: 'utf8', timeout: DOCKER_CMD_TIMEOUT }).trim();
 }
 
 function ensureImage() {
