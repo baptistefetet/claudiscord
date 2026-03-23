@@ -1,4 +1,6 @@
 const { spawn } = require('child_process');
+const fs = require('fs');
+const path = require('path');
 const { CLAUDE_BIN, CLAUDE_TIMEOUT_MS, ALLOWED_TOOLS, DISALLOWED_TOOLS } = require('./config');
 const { getSystemPrompt } = require('./prompts');
 const log = require('./logger');
@@ -95,16 +97,65 @@ function spawnWithTimeout(cmd, args, options = {}) {
 }
 
 /**
- * Parse Claude CLI output (JSON or text).
+ * Extract the last assistant text from a session JSONL file.
+ * Used as fallback when the CLI result field is empty (happens when the
+ * last assistant turn ends on a tool_use instead of end_turn).
  */
-function parseClaudeOutput(stdout, outputFormat, label = 'Claude') {
+function extractLastTextFromSessionLog(sessionId, claudeHome) {
+	if (!sessionId || !claudeHome) return '';
+	try {
+		// Session logs live under ~/.claude/projects/{cwd-encoded}/
+		const projectsDir = path.join(claudeHome, '.claude', 'projects');
+		if (!fs.existsSync(projectsDir)) return '';
+
+		// Find the JSONL file matching this session across all project dirs
+		let jsonlPath = null;
+		for (const dir of fs.readdirSync(projectsDir)) {
+			const candidate = path.join(projectsDir, dir, `${sessionId}.jsonl`);
+			if (fs.existsSync(candidate)) { jsonlPath = candidate; break; }
+		}
+		if (!jsonlPath) return '';
+
+		const lines = fs.readFileSync(jsonlPath, 'utf8').split('\n');
+		let lastText = '';
+		for (const line of lines) {
+			if (!line.trim()) continue;
+			try {
+				const obj = JSON.parse(line);
+				if (obj.type !== 'assistant') continue;
+				const content = obj.message?.content;
+				if (!Array.isArray(content)) continue;
+				for (const block of content) {
+					if (block.type === 'text' && block.text) lastText = block.text;
+				}
+			} catch {}
+		}
+		return lastText;
+	} catch (err) {
+		log.warn(`Failed to read session log for ${sessionId}:`, err.message);
+		return '';
+	}
+}
+
+/**
+ * Parse Claude CLI output (JSON or text).
+ * claudeHome is the home dir where .claude/ lives (for JSONL fallback).
+ */
+function parseClaudeOutput(stdout, outputFormat, label = 'Claude', claudeHome = null) {
 	if (outputFormat === 'json') {
 		try {
 			const parsed = JSON.parse(stdout);
-			return {
-				result: parsed.result || '',
-				sessionId: parsed.session_id || null,
-			};
+			let result = parsed.result || '';
+			const sessionId = parsed.session_id || null;
+
+			// Fallback: when result is empty (last turn ended on tool_use),
+			// extract the last assistant text from the session JSONL
+			if (!result && sessionId) {
+				result = extractLastTextFromSessionLog(sessionId, claudeHome);
+				if (result) log.info(`${label}: recovered text from session log (result was empty)`);
+			}
+
+			return { result, sessionId };
 		} catch (err) {
 			log.error(`Failed to parse ${label} JSON output:`, stdout.slice(0, 200));
 			return { result: stdout, sessionId: null };
@@ -149,7 +200,7 @@ async function executeClaudeCommand(prompt, options = {}) {
 		throw Object.assign(new Error(errMsg), { code: result.code });
 	}
 
-	return parseClaudeOutput(result.stdout, outputFormat);
+	return parseClaudeOutput(result.stdout, outputFormat, 'Claude', '/root');
 }
 
 /**

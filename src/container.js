@@ -162,7 +162,8 @@ async function executeInContainer(userId, prompt, options = {}) {
 		log.warn(`Failed to merge jobs for user ${userId}:`, err.message);
 	}
 
-	return parseClaudeOutput(result.stdout, outputFormat, label);
+	const claudeHome = path.join(DATA_DIR, userId, 'home');
+	return parseClaudeOutput(result.stdout, outputFormat, label, claudeHome);
 }
 
 /**
