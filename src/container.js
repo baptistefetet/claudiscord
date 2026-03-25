@@ -97,6 +97,19 @@ function ensureContainer(userId) {
 	log.info(`Created and started container '${name}'`);
 }
 
+/**
+ * Kill all claude -p processes inside a container (cleanup after timeout).
+ * Killing docker exec only kills the host-side pipe, not the container process.
+ */
+function killClaudeInContainer(name, label) {
+	try {
+		execFileSync('docker', ['exec', name, 'pkill', '-9', '-f', 'claude.*-p'], { timeout: 5000 });
+		log.info(`${label}: killed orphaned claude processes after timeout`);
+	} catch {
+		// Process already dead or pkill found nothing — either way, fine
+	}
+}
+
 async function executeInContainer(userId, prompt, options = {}) {
 	const {
 		sessionId = null,
@@ -123,10 +136,19 @@ async function executeInContainer(userId, prompt, options = {}) {
 	log.info(`${label}: ${sessionId ? `resume ${sessionId}` : 'new session'}, prompt length: ${prompt.length}`);
 
 	// First attempt
-	let result = await spawnWithTimeout(
-		'docker', ['exec', '-i', name, 'claude', ...claudeArgs],
-		{ timeoutMs, label },
-	);
+	let result;
+	try {
+		result = await spawnWithTimeout(
+			'docker', ['exec', '-i', name, 'claude', ...claudeArgs],
+			{ timeoutMs, label },
+		);
+	} catch (err) {
+		if (err.code === 124) {
+			// Timeout: docker exec was killed but claude may still run inside the container
+			killClaudeInContainer(name, label);
+		}
+		throw err;
+	}
 
 	// Fallback: if resume failed, retry with new session
 	if (result.code !== 0 && sessionId) {
@@ -139,10 +161,17 @@ async function executeInContainer(userId, prompt, options = {}) {
 			outputFormat,
 			extraArgs: ['--dangerously-skip-permissions'],
 		});
-		result = await spawnWithTimeout(
-			'docker', ['exec', '-i', name, 'claude', ...retryArgs],
-			{ timeoutMs, label },
-		);
+		try {
+			result = await spawnWithTimeout(
+				'docker', ['exec', '-i', name, 'claude', ...retryArgs],
+				{ timeoutMs, label },
+			);
+		} catch (err) {
+			if (err.code === 124) {
+				killClaudeInContainer(name, label);
+			}
+			throw err;
+		}
 	}
 
 	if (result.code !== 0) {
