@@ -65,11 +65,15 @@ async function handleCommand(message) {
 				'exec', '-u', 'root', name, 'bash', '-c',
 				'DEBIAN_FRONTEND=noninteractive apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" 2>&1 | tail -10',
 			], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
-			// Claude Code upgrade
+			// Claude Code upgrade (download then execute to avoid pipe breakage)
 			await message.channel.send('Updating Claude Code...');
+			execFileSync('docker', [
+				'exec', name, 'bash', '-c',
+				'curl -fsSL https://claude.ai/install.sh -o /tmp/claude-install.sh',
+			], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
 			const output = execFileSync('docker', [
 				'exec', name, 'bash', '-c',
-				'curl -fsSL https://claude.ai/install.sh | bash 2>&1 | tail -5',
+				'bash /tmp/claude-install.sh 2>&1 | tail -5 ; rm -f /tmp/claude-install.sh',
 			], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
 			// Copy upgraded binary to /usr/local/bin so it takes priority in PATH
 			execFileSync('docker', [
