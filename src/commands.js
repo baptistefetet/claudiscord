@@ -1,8 +1,12 @@
-const { execFileSync, execFile } = require('child_process');
-const { AUTHORIZED_USER_ID, UPGRADE_TIMEOUT_MS } = require('./config');
+const { execFileSync, execSync, execFile } = require('child_process');
+const { AUTHORIZED_USER_ID, UPGRADE_TIMEOUT_MS, DISCORD_MAX_MSG_LENGTH } = require('./config');
 const sessions = require('./sessions');
 const { writeCredentials, hasCredentials, ensureContainer, containerName } = require('./container');
 const log = require('./logger');
+
+const SHELL_TIMEOUT_MS = 30_000;
+// Reserve space for code block markers (``` + newline + ``` + safety margin)
+const SHELL_MAX_OUTPUT = DISCORD_MAX_MSG_LENGTH - 20;
 
 const LOGIN_INSTRUCTIONS = `**Sandbox authentication**
 
@@ -22,11 +26,71 @@ You need to authenticate on your own machine and send your credentials:
 The message will be automatically deleted after registration.`;
 
 /**
+ * Execute a shell command and return truncated output for Discord.
+ */
+function executeShell(command, { inContainer, containerNameStr } = {}) {
+	try {
+		let stdout;
+		if (inContainer) {
+			stdout = execFileSync('docker', ['exec', containerNameStr, 'bash', '-c', command], {
+				encoding: 'utf8',
+				timeout: SHELL_TIMEOUT_MS,
+				stdio: ['pipe', 'pipe', 'pipe'],
+			});
+		} else {
+			stdout = execSync(command, {
+				encoding: 'utf8',
+				timeout: SHELL_TIMEOUT_MS,
+				cwd: '/root',
+				stdio: ['pipe', 'pipe', 'pipe'],
+			});
+		}
+		return stdout || '(no output)';
+	} catch (err) {
+		if (err.killed || err.signal === 'SIGTERM') {
+			return `(timeout after ${SHELL_TIMEOUT_MS / 1000}s)`;
+		}
+		// Command failed but produced output (non-zero exit code)
+		const output = (err.stdout || '') + (err.stderr || '');
+		return output || `(exit code ${err.status})`;
+	}
+}
+
+/**
  * Handle special commands. Returns true if the message was a command.
  */
 async function handleCommand(message) {
 	const content = message.content.trim();
 	const userId = message.author.id;
+
+	// Shell command: !<command> (authorized user only)
+	if (content.startsWith('!') && userId === AUTHORIZED_USER_ID) {
+		const command = content.slice(1).trim();
+		if (!command) return false;
+
+		const isAdmin = sessions.isAdminMode();
+		let output;
+
+		if (isAdmin) {
+			output = executeShell(command);
+		} else {
+			// Sandbox mode: run in user's container
+			ensureContainer(userId);
+			const name = containerName(userId);
+			output = executeShell(command, { inContainer: true, containerNameStr: name });
+		}
+
+		// Truncate and wrap in code block
+		let truncated = false;
+		if (output.length > SHELL_MAX_OUTPUT) {
+			output = output.slice(0, SHELL_MAX_OUTPUT);
+			truncated = true;
+		}
+
+		const response = '```\n' + output + (truncated ? '\n... (truncated)' : '') + '\n```';
+		await message.channel.send(response);
+		return true;
+	}
 
 	if (content === '/help') {
 		const isAdmin = userId === AUTHORIZED_USER_ID;
@@ -45,7 +109,8 @@ async function handleCommand(message) {
 			help += `
 \`/admin\` — Switch to admin mode (host)
 \`/sandbox\` — Switch to sandbox mode (container)
-\`/status\` — Show current mode and authentication status`;
+\`/status\` — Show current mode and authentication status
+\`!<command>\` — Execute a shell command (${inAdmin ? 'host' : 'container'})`;
 			if (inAdmin) {
 				help += `
 \`/restart\` — Restart the claudiscord service`;
