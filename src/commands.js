@@ -5,8 +5,8 @@ const { writeCredentials, hasCredentials, ensureContainer, containerName } = req
 const log = require('./logger');
 
 const SHELL_TIMEOUT_MS = 30_000;
-// Reserve space for code block markers (``` + newline + ``` + safety margin)
-const SHELL_MAX_OUTPUT = DISCORD_MAX_MSG_LENGTH - 20;
+// Worst case: "```\n" (4) + output + "\n... (truncated)\n```" (21) = 25 overhead
+const SHELL_MAX_OUTPUT = DISCORD_MAX_MSG_LENGTH - 25;
 
 const LOGIN_INSTRUCTIONS = `**Sandbox authentication**
 
@@ -88,7 +88,12 @@ async function handleCommand(message) {
 		}
 
 		const response = '```\n' + output + (truncated ? '\n... (truncated)' : '') + '\n```';
-		await message.channel.send(response);
+		try {
+			await message.channel.send(response);
+		} catch (err) {
+			log.error('Shell send error:', err.message);
+			await message.channel.send('Output too large or failed to send.').catch(() => {});
+		}
 		return true;
 	}
 
