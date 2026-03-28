@@ -2,12 +2,12 @@
 
 ## Objectif
 
-Permettre l'exécution de tâches de développement en arrière-plan via OpenCode (utilisant l'abonnement GitHub Copilot), sans bloquer la conversation principale avec Claude, et sans consommer l'abonnement Anthropic.
+Permettre l'exécution de tâches de développement en arrière-plan via OpenCode CLI (utilisant l'abonnement GitHub Copilot), sans bloquer la conversation principale avec Claude, et sans consommer l'abonnement Anthropic.
 
 ## Contexte
 
 - **Claude CLI** (`claude -p`) : mode one-shot, bloquant, utilise l'abonnement Anthropic
-- **OpenCode** (`opencode serve`) : serveur HTTP REST, sessions persistantes, supporte GitHub Copilot comme provider (modèles Claude inclus dans l'abonnement Copilot)
+- **OpenCode CLI** (`opencode -p`) : mode one-shot, même pattern que Claude, supporte GitHub Copilot comme provider (modèles Claude inclus dans l'abonnement Copilot)
 - **Claudiscord** : process Node.js unique, queues par user, communication Discord DM
 
 ## Architecture cible
@@ -15,145 +15,121 @@ Permettre l'exécution de tâches de développement en arrière-plan via OpenCod
 ```
 User DM (admin mode uniquement, cwd: /root)
   ├─ message normal      → claude -p (inchangé)
-  ├─ /opencode <prompt>  → OpenCode HTTP API (bypass total de Claude)
-  └─ Claude délègue      → écriture dans background-tasks.json → OpenCode HTTP API
+  ├─ /opencode <prompt>  → opencode -p (subprocess fire-and-forget)
+  └─ Claude délègue      → écriture dans background-tasks.json → opencode -p
 
-OpenCode daemon
-  ← opencode serve (port 4096, localhost uniquement)
-  ← provider: GitHub Copilot (via GITHUB_TOKEN)
-  ← modèle: celui configuré dans OpenCode par l'utilisateur
-  ← cwd: /root (même environnement que Claude en mode admin)
+Pas de daemon OpenCode — CLI one-shot uniquement.
 ```
 
-## Composants
+## CLI OpenCode — Paramètres
 
-### 1. Service OpenCode (systemd)
-
-**Fichier** : `/etc/systemd/system/opencode.service`
-
-OpenCode tourne en tant que `root` (même contexte que Claude en mode admin) dans `/root`.
-
-```ini
-[Unit]
-Description=OpenCode Server
-After=network.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/root
-ExecStart=/chemin/vers/opencode serve --port 4096 --hostname 127.0.0.1
-Environment=GITHUB_TOKEN=<token>
-Environment=OPENCODE_SERVER_PASSWORD=<password>
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
+```bash
+opencode -p "prompt" -f text -q -c /root
 ```
 
-- Tourne en `root` pour accéder au système comme Claude en mode admin
-- `WorkingDirectory=/root` : charge le même `CLAUDE.md` principal que Claude
-- Écoute uniquement sur localhost (pas d'exposition externe)
-- Auth HTTP Basic pour sécuriser l'API
-- Le modèle utilisé est celui configuré dans la config OpenCode (pas géré par claudiscord)
+| Flag | Description |
+|------|-------------|
+| `-p "prompt"` | Mode one-shot (non-interactif) |
+| `-f text` | Format de sortie texte (aussi : `json`) |
+| `-q` | Quiet — supprime le spinner (pour scripts) |
+| `-c /root` | Working directory (charge le CLAUDE.md de /root) |
 
-### 2. Module `src/opencode.js`
+**Permissions** : en mode `-p`, toutes les permissions sont **auto-approuvées** pour la session. Pas de flag supplémentaire nécessaire (équivalent au `--dangerously-skip-permissions` de Claude).
 
-Nouveau module responsable de toute la communication avec OpenCode.
+**Configuration** : modèle et provider configurés dans `~/.opencode.json` (pas via CLI).
 
-```
-Responsabilités :
-- Créer/réutiliser des sessions OpenCode
-- Envoyer des prompts (sync HTTP, async côté claudiscord)
-- Gérer les tâches background (non-bloquant pour la conv principale)
-- Notifier l'utilisateur via Discord DM à la fin
-```
-
-#### Constantes et configuration
-
-```javascript
-const OPENCODE_BASE_URL = 'http://127.0.0.1:4096';
-const OPENCODE_TIMEOUT_MS = 600_000; // 10 min (tâches de dev longues)
-const OPENCODE_USER = 'opencode';
-const OPENCODE_PASSWORD = process.env.OPENCODE_PASSWORD || '';
-```
-
-Ajout dans `.env` :
-```
-OPENCODE_PASSWORD=<le même que OPENCODE_SERVER_PASSWORD>
-```
-
-#### Fonctions principales
-
-**`createSession()`**
-- `POST /session`
-- Retourne un `sessionId`
-- Le cwd est celui du service OpenCode (`/root`)
-- Appelée une fois par tâche
-
-**`sendPrompt(sessionId, prompt)`**
-- `POST /session/{id}/message`
-- Body : `{ parts: [{ type: "text", text: prompt }] }`
-- Auth : HTTP Basic (`Authorization: Basic base64(user:pass)`)
-- Bloquant côté HTTP (attend la réponse complète d'OpenCode)
-- Mais non-bloquant côté claudiscord (Promise indépendante de la queue admin)
-- Timeout : `AbortController` avec `OPENCODE_TIMEOUT_MS`
-- Retourne le texte de la réponse de l'agent
-
-**`runBackground(userId, prompt)`**
-- Orchestrateur haut niveau pour les tâches background
-- Flow :
-  1. Génère un `taskId` unique (`crypto.randomUUID()`)
-  2. Enregistre la tâche dans `backgroundTasks` (Map en mémoire)
-  3. Lance `createSession()` + `sendPrompt()` dans une Promise séparée (fire-and-forget)
-  4. Au resolve : envoie le résultat en DM via `sendDM()`
-  5. Au reject (erreur/timeout) : envoie l'erreur en DM
-  6. Dans tous les cas : nettoie `backgroundTasks`
-- Retourne le `taskId` immédiatement (pour que l'appelant puisse confirmer à l'utilisateur)
-
-**`abortTask(taskId)`**
-- Récupère la tâche dans `backgroundTasks`
-- `POST /session/{id}/abort` pour arrêter OpenCode
-- Trigger l'`AbortController` côté fetch
-- Nettoie la Map
-
-**`getStatus()`**
-- Retourne la liste des tâches en cours (depuis la Map en mémoire)
-- Pour chaque tâche : id, prompt (tronqué), durée depuis le lancement
-
-**`isAvailable()`**
-- `GET /global/health` avec timeout court (3s)
-- Vérifie que le service OpenCode répond
-- Utilisée par `/opencode` pour un message d'erreur clair
-
-### 3. System prompt OpenCode
-
-OpenCode reçoit un system prompt dédié via le paramètre `system` de l'API `/session/{id}/message`. Ce prompt reprend les mêmes blocs que le system prompt admin de claudiscord, sans la partie scheduling.
-
-Nouvelle fonction dans `src/prompts.js` :
-
-```javascript
-function getOpenCodeSystemPrompt({ userName } = {}) {
-  const today = new Date().toISOString().slice(0, 10);
-  return `Your name is DevBot. You are a development agent. ${userName ? `Working for ${userName}. ` : ''}The user is talking to you via Discord DM. Today's date is: ${today}.
-You are invoked for coding tasks delegated from the main assistant (BatBot).
-This is a one-shot task, not a conversation. Do not ask clarifying questions — make reasonable assumptions and proceed. Return a concise summary of what you did and the key changes made.
-
---- Critical rules ---
-NEVER restart the claudiscord service (systemctl restart claudiscord, systemctl stop claudiscord, etc.).
-
---- Disabled skills ---
-${getDisabledSkillsPrompt()}
-
---- Response format ---
-${getDiscordFormattingPrompt()}`;
+```json
+{
+  "providers": {
+    "copilot": { "disabled": false }
+  },
+  "agents": {
+    "coder": { "model": "claude-sonnet-4-20250514", "maxTokens": 16000 }
+  }
 }
 ```
 
+**Authentification Copilot** : via variable d'environnement `GITHUB_TOKEN`.
+
+**System prompt** : pas de flag CLI pour le system prompt. Deux options :
+1. Le `CLAUDE.md` dans le cwd (`/root`) est chargé automatiquement par OpenCode
+2. Les instructions DevBot sont **prepend au prompt** dans `getOpenCodePrompt()`
+
+## Composants
+
+### 1. Intégration dans `src/claude.js`
+
+Pas de nouveau module. On réutilise `spawnWithTimeout` existant pour lancer OpenCode en subprocess.
+
+Nouvelle fonction (ou ajout dans `src/opencode.js` minimaliste ~40 lignes) :
+
+```javascript
+const crypto = require('crypto');
+const { spawnWithTimeout } = require('./claude');
+const { sendDM } = require('./discord');
+const { OPENCODE_BIN, OPENCODE_TIMEOUT_MS } = require('./config');
+const log = require('./logger');
+
+/** @type {Map<string, BackgroundTask>} */
+const backgroundTasks = new Map();
+
+function getOpenCodePrompt(prompt, userName) {
+  const today = new Date().toISOString().slice(0, 10);
+  return `[System] Your name is DevBot. You are a development agent working for ${userName || 'the admin'}. Today: ${today}.
+You are invoked for a coding task delegated from the main assistant (BatBot).
+This is a one-shot task. Do not ask clarifying questions — make reasonable assumptions and proceed.
+Return a concise summary of what you did and the key changes made.
+NEVER restart the claudiscord service.
+Keep your response under 1800 characters (Discord limit).
+
+[Task] ${prompt}`;
+}
+
+function runBackground(userId, prompt, userName) {
+  const taskId = crypto.randomUUID();
+  const startedAt = Date.now();
+
+  const child = spawnWithTimeout(
+    OPENCODE_BIN,
+    ['-p', getOpenCodePrompt(prompt, userName), '-f', 'text', '-q', '-c', '/root'],
+    { timeoutMs: OPENCODE_TIMEOUT_MS, label: `DevBot:${taskId.slice(0, 8)}` }
+  );
+
+  backgroundTasks.set(taskId, { id: taskId, userId, prompt, startedAt, child });
+
+  child
+    .then(result => {
+      const duration = formatDuration(Date.now() - startedAt);
+      const output = (result.stdout || '').trim() || '(no output)';
+      sendDM(userId, `✅ **DevBot — Tâche terminée**\n> ${prompt.slice(0, 80)}\n${output}\n⏱️ ${duration}`);
+    })
+    .catch(err => {
+      const duration = formatDuration(Date.now() - startedAt);
+      if (err.code === 124) {
+        sendDM(userId, `⏰ **DevBot — Timeout**\n> ${prompt.slice(0, 80)}\nPas de réponse après ${OPENCODE_TIMEOUT_MS / 60000} minutes.`);
+      } else {
+        sendDM(userId, `❌ **DevBot — Erreur**\n> ${prompt.slice(0, 80)}\n${err.message}`);
+      }
+    })
+    .finally(() => backgroundTasks.delete(taskId));
+
+  return taskId;
+}
+
+function abortTask(taskId) { /* SIGTERM le child process */ }
+function getStatus() { /* liste des tâches depuis backgroundTasks */ }
+function formatDuration(ms) { /* "2m 34s" */ }
+
+module.exports = { runBackground, abortTask, getStatus, backgroundTasks };
+```
+
+### 2. System prompt DevBot
+
+Pas de flag CLI pour le system prompt → les instructions DevBot sont **intégrées au prompt** via `getOpenCodePrompt()`.
+
 Le `CLAUDE.md` de `/root` est automatiquement chargé par OpenCode (même cwd), fournissant la connaissance du système, des projets et des permissions sans duplication.
 
-### 4. Commande `/opencode`
+### 3. Commande `/opencode`
 
 Ajout dans `src/commands.js`. Réservée à l'admin (AUTHORIZED_USER_ID) en mode admin uniquement.
 
@@ -162,11 +138,10 @@ Ajout dans `src/commands.js`. Réservée à l'admin (AUTHORIZED_USER_ID) en mode
 **`/opencode <prompt>`** — Exécution directe (bypass Claude)
 ```
 1. Vérifier que l'utilisateur est admin et en mode admin
-2. Valider que OpenCode est disponible (isAvailable)
-3. Répondre immédiatement : "⏳ Tâche envoyée à DevBot..."
-4. Appeler runBackground(userId, prompt)
-5. L'utilisateur continue de discuter normalement avec BatBot
-6. Quand c'est fini : DM avec le résultat
+2. Répondre immédiatement : "⏳ Tâche envoyée à DevBot..."
+3. Appeler runBackground(userId, prompt, userName)
+4. L'utilisateur continue de discuter normalement avec BatBot
+5. Quand c'est fini : DM avec le résultat
 ```
 
 **`/opencode status`** — État des tâches en cours
@@ -190,7 +165,7 @@ Affiche la liste des tâches background actives :
 - Mode admin uniquement (pas en sandbox)
 - Message d'erreur clair si utilisé en sandbox ou par un non-admin
 
-### 5. Délégation depuis Claude (phase 2)
+### 4. Délégation depuis Claude (phase 2)
 
 Permettre au Claude principal (BatBot) de décider lui-même de déléguer une tâche à OpenCode (DevBot).
 
@@ -209,7 +184,7 @@ Permettre au Claude principal (BatBot) de décider lui-même de déléguer une t
 
 - Claude écrit dans ce fichier (il a déjà accès à Write via le tool `Edit`/`Write`)
 - Claudiscord watch ce fichier (même pattern que `scheduled-jobs.json` : `fs.watch` sur le répertoire + debounce 2s)
-- Les tâches `pending` sont envoyées à OpenCode via `runBackground()`
+- Les tâches `pending` sont envoyées à `runBackground()`
 - Le statut passe à `running` puis `done` ou `error`
 - Fichier gitignored
 
@@ -225,7 +200,7 @@ You can continue the conversation while DevBot works.
 Do NOT delegate tasks on files you are currently modifying (risk of conflicts).
 ```
 
-### 6. Gestion des résultats
+### 5. Gestion des résultats
 
 #### Notification Discord
 
@@ -260,7 +235,7 @@ Pour que BatBot soit au courant des résultats des tâches background :
 - Ajouter une instruction dans le system prompt admin : *"Consulte background-results/ pour les résultats des tâches déléguées à DevBot"*
 - BatBot peut alors lire ces fichiers et en discuter avec l'utilisateur
 
-### 7. Suivi en mémoire
+### 6. Suivi en mémoire
 
 ```javascript
 /** @type {Map<string, BackgroundTask>} */
@@ -271,51 +246,47 @@ const backgroundTasks = new Map();
  * @property {string} id
  * @property {string} userId
  * @property {string} prompt
- * @property {string} sessionId - OpenCode session ID
  * @property {string} status - 'running' | 'done' | 'error' | 'aborted'
  * @property {Date} startedAt
- * @property {AbortController} controller - Pour annulation
+ * @property {object} child - Promise retournée par spawnWithTimeout (pour abort)
  */
 ```
 
-Non persisté (perdu au restart du service). Acceptable pour des tâches ponctuelles — une tâche OpenCode dure quelques minutes, pas des heures.
+Non persisté (perdu au restart du service). Acceptable pour des tâches ponctuelles — une tâche dure quelques minutes, pas des heures.
 
 ## Fichiers modifiés / créés
 
 ### Créés
-- `src/opencode.js` — Module de communication OpenCode (~150 lignes)
-- `/etc/systemd/system/opencode.service` — Service systemd
+- `src/opencode.js` — Module minimaliste (~40 lignes) : `runBackground`, `abortTask`, `getStatus`, `getOpenCodePrompt`
 
 ### Modifiés
 - `src/commands.js` — Ajout commande `/opencode` et sous-commandes
-- `src/config.js` — Ajout constantes OpenCode (`OPENCODE_BASE_URL`, `OPENCODE_TIMEOUT_MS`, `OPENCODE_PASSWORD`)
-- `src/prompts.js` — Ajout `getOpenCodeSystemPrompt()` + instructions background dans system prompt admin (phase 2)
-- `.env` — Ajout `OPENCODE_PASSWORD`
+- `src/config.js` — Ajout constantes `OPENCODE_BIN`, `OPENCODE_TIMEOUT_MS`
+- `src/prompts.js` — Instructions background dans system prompt admin (phase 2)
 - `CLAUDE.md` — Documentation de la nouvelle fonctionnalité
-- `index.js` — Aucun changement (OpenCode est vérifié à la demande, pas au démarrage)
 
 ### Non modifiés
-- `src/claude.js` — Aucun changement
+- `src/claude.js` — Aucun changement (on réutilise `spawnWithTimeout` et `parseClaudeOutput`)
 - `src/container.js` — Aucun changement
 - `src/scheduler.js` — Aucun changement
 - `src/sessions.js` — Aucun changement
-- `src/discord.js` — Aucun changement (on réutilise `sendDM` et `splitMessage` existants)
+- `src/discord.js` — Aucun changement (on réutilise `sendDM` et `splitMessage`)
+- `index.js` — Aucun changement
+- `.env` — Aucun changement (`GITHUB_TOKEN` est dans l'environnement système ou dans `~/.opencode.json`)
 
 ## Plan d'implémentation par phases
 
 ### Phase 1 — MVP : commande `/opencode` (priorité haute)
 
-1. Installer OpenCode sur la machine (vérifier qu'un binaire ARM64 existe)
-2. Configurer le provider GitHub Copilot (GITHUB_TOKEN)
-3. Tester `opencode serve` manuellement
-4. Créer le service systemd
-5. Implémenter `src/opencode.js` (createSession, sendPrompt, runBackground, abortTask, getStatus, isAvailable)
-6. Implémenter `getOpenCodeSystemPrompt()` dans `src/prompts.js`
-7. Implémenter `/opencode`, `/opencode status`, `/opencode stop` dans `src/commands.js`
-8. Ajouter les constantes dans `src/config.js` et `.env`
-9. Ajouter `/opencode` au `/help` (visible en mode admin uniquement)
-10. Tester end-to-end
-11. Mettre à jour `CLAUDE.md`
+1. Installer OpenCode (vérifier binaire ARM64 : `GOARCH=arm64 go install github.com/opencode-ai/opencode@latest`)
+2. Configurer `~/.opencode.json` (provider Copilot, modèle, GITHUB_TOKEN)
+3. Tester `opencode -p "hello" -f text -q` manuellement
+4. Créer `src/opencode.js` (~40 lignes : runBackground, abortTask, getStatus)
+5. Ajouter `OPENCODE_BIN` et `OPENCODE_TIMEOUT_MS` dans `src/config.js`
+6. Implémenter `/opencode`, `/opencode status`, `/opencode stop` dans `src/commands.js`
+7. Ajouter `/opencode` au `/help` (visible en mode admin uniquement)
+8. Tester end-to-end
+9. Mettre à jour `CLAUDE.md`
 
 **Résultat** : l'admin peut lancer `/opencode <prompt>` et recevoir le résultat en DM pendant qu'il continue de discuter avec BatBot.
 
@@ -332,26 +303,25 @@ Non persisté (perdu au restart du service). Acceptable pour des tâches ponctue
 
 1. Injection des résultats dans le contexte BatBot (`background-results/`)
 2. Historique des tâches (persisté en JSON)
-3. Streaming d'updates intermédiaires via SSE OpenCode (envoi de messages "DevBot travaille encore..." périodiques)
 
 ## Prérequis
 
-- [ ] OpenCode installé (binaire ARM64 ou build depuis les sources)
+- [ ] OpenCode installé (binaire ARM64 ou `go install`)
 - [ ] GitHub Copilot subscription active
 - [ ] GITHUB_TOKEN avec scope `copilot` généré
-- [ ] Tester `opencode serve` manuellement avant d'automatiser
-- [ ] Choisir et configurer le modèle dans la config OpenCode
+- [ ] `~/.opencode.json` configuré (provider, modèle)
+- [ ] Tester `opencode -p` manuellement
 
 ## Risques et mitigations
 
-**OpenCode indisponible** → `isAvailable()` vérifie avant chaque tâche. Message clair : "DevBot is not available. Is the opencode service running?". Service systemd avec `Restart=on-failure`.
+**Pas de binaire ARM64** → OpenCode est écrit en Go, cross-compilation facile : `GOARCH=arm64 go install github.com/opencode-ai/opencode@latest`. Bloqueur si ça ne compile pas.
 
-**Tâche qui tourne indéfiniment** → `AbortController` avec timeout de 10 min. `/opencode stop` en dernier recours. Le timeout est configurable (`OPENCODE_TIMEOUT_MS`).
+**Tâche qui tourne indéfiniment** → `spawnWithTimeout` envoie SIGTERM puis SIGKILL après 5s. `/opencode stop` en dernier recours. Timeout configurable (`OPENCODE_TIMEOUT_MS`).
 
 **Consommation Copilot** → Pas de rate limiting prévu (usage personnel). À surveiller si l'usage augmente.
 
 **Conflits de fichiers** → DevBot et BatBot pourraient modifier les mêmes fichiers simultanément. Mitigation : avertissement dans le system prompt admin ("Do NOT delegate tasks on files you are currently modifying"). L'utilisateur garde le contrôle via `/opencode` (explicite) ou la délégation BatBot (phase 2, avec consigne de prudence).
 
-**Perte des tâches au restart** → Acceptable. Les tâches background sont ponctuelles (quelques minutes). Si claudiscord redémarre, les tâches en cours sont perdues mais OpenCode continue de tourner — le résultat est simplement perdu côté notification.
+**Perte des tâches au restart** → Acceptable. Les tâches background durent quelques minutes. Si claudiscord redémarre, les subprocess sont tués — l'utilisateur relance manuellement.
 
-**Pas de binaire ARM64** → OpenCode est écrit en Go, cross-compilation facile. Sinon, `GOARCH=arm64 go install github.com/opencode-ai/opencode@latest`.
+**Pas de system prompt CLI** → Contourné en prepend les instructions DevBot au prompt via `getOpenCodePrompt()`. Le CLAUDE.md est chargé automatiquement via le cwd.
