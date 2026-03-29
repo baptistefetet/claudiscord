@@ -38,6 +38,18 @@ function saveJobs(jobs) {
 	fs.renameSync(tmp, JOBS_FILE);
 }
 
+/**
+ * Atomic read-modify-write: reads the latest jobs, applies updateFn, writes back.
+ * Minimizes the race window by keeping read → modify → write synchronous.
+ * updateFn(jobs) must return { jobs, changed, ...extra }. Extra fields are passed through.
+ */
+function updateJobs(updateFn) {
+	const jobs = loadJobs();
+	const result = updateFn(jobs);
+	if (result.changed) saveJobs(result.jobs);
+	return result;
+}
+
 // --- Job key (userId + id composite) ---
 
 function jobKey(job) {
@@ -108,72 +120,70 @@ function mergeUserJobs(userId) {
 		try { fs.writeFileSync(userJobsFile, JSON.stringify(validJobs, null, 2), 'utf8'); } catch {}
 	}
 
-	// Load central jobs
-	const centralJobs = loadJobs();
-
-	// Build map of existing user jobs in central file (by job id)
-	const existingUserJobIds = new Set();
-	for (const job of centralJobs) {
-		if (job.userId === userId) {
-			existingUserJobIds.add(job.id);
+	// Merge into central file (atomic read-modify-write via updateJobs)
+	const { userJobsFromCentral } = updateJobs(centralJobs => {
+		// Build map of existing user jobs in central file (by job id)
+		const existingUserJobIds = new Set();
+		for (const job of centralJobs) {
+			if (job.userId === userId) {
+				existingUserJobIds.add(job.id);
+			}
 		}
-	}
 
-	// Build set of user's current job ids
-	const currentUserJobIds = new Set(validJobs.map(j => j.id));
+		// Build set of user's current job ids
+		const currentUserJobIds = new Set(validJobs.map(j => j.id));
 
-	// Remove jobs that user deleted (present in central but not in user file)
-	const removedIds = new Set();
-	for (const id of existingUserJobIds) {
-		if (!currentUserJobIds.has(id)) {
-			removedIds.add(id);
+		// Remove jobs that user deleted (present in central but not in user file)
+		const removedIds = new Set();
+		for (const id of existingUserJobIds) {
+			if (!currentUserJobIds.has(id)) {
+				removedIds.add(id);
+			}
 		}
-	}
 
-	// Filter out removed jobs, build index for update
-	const filteredJobs = [];
-	const centralIndex = new Map();
-	for (const job of centralJobs) {
-		if (job.userId === userId && removedIds.has(job.id)) {
-			log.info(`Removed job '${userId}:${job.id}' (deleted by user)`);
-			continue;
+		// Filter out removed jobs, build index for update
+		const filteredJobs = [];
+		const centralIndex = new Map();
+		for (const job of centralJobs) {
+			if (job.userId === userId && removedIds.has(job.id)) {
+				log.info(`Removed job '${userId}:${job.id}' (deleted by user)`);
+				continue;
+			}
+			if (job.userId === userId) {
+				centralIndex.set(job.id, filteredJobs.length);
+			}
+			filteredJobs.push(job);
 		}
-		if (job.userId === userId) {
-			centralIndex.set(job.id, filteredJobs.length);
+
+		// Add or update user jobs
+		for (const userJob of validJobs) {
+			const mergedJob = { ...userJob, userId };
+			const idx = centralIndex.get(userJob.id);
+			if (idx !== undefined) {
+				// Update: preserve lastRun from central
+				mergedJob.lastRun = filteredJobs[idx].lastRun;
+				filteredJobs[idx] = mergedJob;
+				log.info(`Updated job '${userId}:${userJob.id}'`);
+			} else {
+				// New job
+				filteredJobs.push(mergedJob);
+				log.info(`Added job '${userId}:${userJob.id}'`);
+			}
 		}
-		filteredJobs.push(job);
-	}
 
-	// Add or update user jobs
-	for (const userJob of validJobs) {
-		// Stamp userId
-		const mergedJob = { ...userJob, userId };
+		const changed = JSON.stringify(filteredJobs) !== JSON.stringify(centralJobs);
 
-		const idx = centralIndex.get(userJob.id);
-		if (idx !== undefined) {
-			// Update: preserve lastRun from central
-			mergedJob.lastRun = filteredJobs[idx].lastRun;
-			filteredJobs[idx] = mergedJob;
-			log.info(`Updated job '${userId}:${userJob.id}'`);
-		} else {
-			// New job
-			filteredJobs.push(mergedJob);
-			log.info(`Added job '${userId}:${userJob.id}'`);
-		}
-	}
+		// Compute user's jobs for sync-back to sandbox
+		const userJobsFromCentral = filteredJobs
+			.filter(j => j.userId === userId)
+			.map(({ userId: _uid, ...rest }) => rest);
 
-	// Save if anything changed
-	if (JSON.stringify(filteredJobs) !== JSON.stringify(centralJobs)) {
-		saveJobs(filteredJobs);
-		// fs.watch will detect this and trigger scheduleTasks()
-	}
+		return { jobs: filteredJobs, changed, userJobsFromCentral };
+	});
 
 	// Write back user's jobs to sandbox file (sync central → sandbox)
 	// This ensures the sandbox always has the complete, up-to-date list
 	// (including lastRun updates) so the user can always see and manage their jobs
-	const userJobsFromCentral = filteredJobs
-		.filter(j => j.userId === userId)
-		.map(({ userId: _uid, ...rest }) => rest);
 	try {
 		fs.writeFileSync(userJobsFile, JSON.stringify(userJobsFromCentral, null, 2), 'utf8');
 	} catch (err) {
@@ -262,45 +272,45 @@ async function executeJob(job) {
 			}
 		}
 	} finally {
-		// Update lastRun + handle remaining counter
+		// Update lastRun + handle remaining counter (atomic read-modify-write)
 		lastRunMinutes.set(key, nowMinute);
 		try {
-			const jobs = loadJobs();
-			const idx = jobs.findIndex(j => jobKey(j) === key);
-			if (idx !== -1) {
-				const jobEntry = jobs[idx];
-				jobEntry.lastRun = new Date().toISOString();
+			const { removed } = updateJobs(jobs => {
+				const idx = jobs.findIndex(j => jobKey(j) === key);
+				if (idx === -1) return { jobs, changed: false, removed: null };
+
+				jobs[idx].lastRun = new Date().toISOString();
+				let removed = null;
 
 				// Remaining counter: 0 = infinite, >0 = decrement then remove at 0
-				if (typeof jobEntry.remaining === 'number' && jobEntry.remaining > 0) {
-					jobEntry.remaining--;
-					if (jobEntry.remaining === 0) {
-						const removedUserId = jobEntry.userId;
-						const removedJobId = jobEntry.id;
+				if (typeof jobs[idx].remaining === 'number' && jobs[idx].remaining > 0) {
+					jobs[idx].remaining--;
+					if (jobs[idx].remaining === 0) {
+						removed = { userId: jobs[idx].userId, jobId: jobs[idx].id };
 						jobs.splice(idx, 1);
 						log.info(`Job '${key}' removed (remaining reached 0)`);
-
-						// Sync sandbox file: remove the job from the user's file too
-						if (removedUserId) {
-							try {
-								const userJobsFile = path.join(DATA_DIR, removedUserId, 'home', SANDBOX_JOBS_PATH.replace('/home/claude/', ''));
-								const raw = fs.readFileSync(userJobsFile, 'utf8');
-								const userJobs = JSON.parse(raw);
-								if (Array.isArray(userJobs)) {
-									const filtered = userJobs.filter(j => j.id !== removedJobId);
-									if (filtered.length !== userJobs.length) {
-										fs.writeFileSync(userJobsFile, JSON.stringify(filtered, null, 2), 'utf8');
-										log.info(`Job '${removedJobId}' also removed from sandbox file for user ${removedUserId}`);
-									}
-								}
-							} catch (syncErr) {
-								log.warn(`Failed to sync sandbox file after job removal:`, syncErr.message);
-							}
-						}
 					}
 				}
 
-				saveJobs(jobs);
+				return { jobs, changed: true, removed };
+			});
+
+			// Sync sandbox file if job was removed (separate file, no conflict)
+			if (removed?.userId) {
+				try {
+					const userJobsFile = path.join(DATA_DIR, removed.userId, 'home', SANDBOX_JOBS_PATH.replace('/home/claude/', ''));
+					const raw = fs.readFileSync(userJobsFile, 'utf8');
+					const userJobs = JSON.parse(raw);
+					if (Array.isArray(userJobs)) {
+						const filtered = userJobs.filter(j => j.id !== removed.jobId);
+						if (filtered.length !== userJobs.length) {
+							fs.writeFileSync(userJobsFile, JSON.stringify(filtered, null, 2), 'utf8');
+							log.info(`Job '${removed.jobId}' also removed from sandbox file for user ${removed.userId}`);
+						}
+					}
+				} catch (syncErr) {
+					log.warn(`Failed to sync sandbox file after job removal:`, syncErr.message);
+				}
 			}
 		} catch (err) {
 			log.error(`Failed to update lastRun for job '${key}':`, err.message);

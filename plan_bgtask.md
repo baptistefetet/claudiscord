@@ -59,29 +59,45 @@ User DM
 
 `scheduled-jobs.json` est modifié par deux acteurs indépendants :
 
-- **BatBot** (process `claude -p` externe) : lit le fichier, ajoute une entrée, réécrit le fichier
-- **Claudiscord** (Node.js, dans `executeJob() finally`) : lit le fichier, met à jour `lastRun`/`remaining`, réécrit le fichier
+- **BatBot** (process `claude -p` externe) : lit le fichier, ajoute une entrée, réécrit le fichier via le Write tool
+- **Claudiscord** (Node.js, dans `executeJob()` et `mergeUserJobs()`) : lit le fichier, met à jour `lastRun`/`remaining`, réécrit le fichier
 
-Si les deux écrivent au même instant, l'un écrase les modifications de l'autre. Ce problème existe déjà avec les jobs cron mais est quasi invisible (les modifications se chevauchent rarement). Avec les tâches immédiates, le risque augmente car l'exécution est déclenchée par une écriture de BatBot.
+Sans protection, un read-modify-write côté scheduler peut écraser un ajout de BatBot (ou inversement).
 
-### Scénario de race condition
+### Solution primaire : `updateJobs()` (merge-on-write optimiste)
+
+**Déjà implémenté** dans `scheduler.js`. Toutes les écritures du scheduler (`executeJob()` finally, `mergeUserJobs()`) passent par `updateJobs()`, qui lit la version **la plus récente** du fichier juste avant d'écrire, de manière synchrone :
+
+```javascript
+function updateJobs(updateFn) {
+  const jobs = loadJobs();          // re-lit la version fraîche
+  const result = updateFn(jobs);    // applique les modifications
+  if (result.changed) saveJobs(result.jobs);  // écrit atomiquement (tmp + rename)
+  return result;
+}
+```
+
+Le read → modify → write est **synchrone** (bloquant). La fenêtre de race se réduit à quelques **microsecondes** (durée du `writeFileSync`), contre plusieurs secondes avec l'ancien pattern `loadJobs()` ... logique ... `saveJobs()`. En pratique, la probabilité de collision devient quasi nulle.
+
+### Protection complémentaire pour les tâches immédiates
+
+`updateJobs()` protège les écritures **du scheduler**. Mais BatBot (process externe) peut toujours écrire le fichier complet via le Write tool. Scénario résiduel :
 
 ```
 1. BatBot lit le fichier : [jobA, jobB]
-2. jobA se termine → scheduler lit [jobA, jobB], supprime jobA, écrit [jobB]
-3. BatBot écrit [jobA, jobB, taskC]  (il avait lu avant la suppression)
-4. jobA réapparaît avec remaining: 0 → traité comme job infini → ré-exécution en boucle !
+2. jobA se termine → updateJobs() supprime jobA → fichier = [jobB]
+3. BatBot écrit [jobA, jobB, taskC] (stale read) → jobA réapparaît en fantôme
 ```
 
-### Solution : démarrage différé + tracking en mémoire
+Trois filets de sécurité pour les tâches immédiates (`cron: null`) :
 
-**Principe 1 — Démarrage différé** : les tâches immédiates (`cron: null`) ne sont PAS déclenchées par le `fs.watch`. Elles sont démarrées uniquement **après la fin de l'exécution DM** de BatBot, via un appel explicite `processImmediateTasks()` depuis `index.js`. Ainsi, au moment du pickup, BatBot a terminé d'écrire → le fichier est dans un état stable.
+**Principe 1 — Démarrage différé** : les tâches immédiates ne sont PAS déclenchées par le `fs.watch`. Elles sont démarrées uniquement **après la fin de l'exécution DM** via `processImmediateTasks()`. Au moment du pickup, BatBot a terminé d'écrire → fichier stable.
 
 ```
 BatBot écrit la tâche → BatBot finit → processImmediateTasks() → pickup safe
 ```
 
-**Principe 2 — `completedKeys` Set** : un `Set<string>` en mémoire dans le scheduler stocke les clés des tâches immédiates terminées. Si une tâche supprimée réapparaît dans le fichier (à cause d'un write concurrent de BatBot), le scheduler l'ignore.
+**Principe 2 — `completedKeys` Set** : un `Set<string>` en mémoire stocke les clés des tâches immédiates terminées. Si une tâche réapparaît (ghost dû à un write concurrent de BatBot), elle est ignorée.
 
 ```javascript
 const completedKeys = new Set();
@@ -93,27 +109,15 @@ if (completedKeys.has(key)) return; // déjà exécutée, ignorer
 completedKeys.add(key);
 ```
 
-**Principe 3 — Nettoyage des fantômes** : dans `scheduleTasks()` (appelée par fs.watch à chaque modification du fichier), les tâches immédiates présentes dans `completedKeys` sont supprimées du fichier. Cela nettoie les éventuels fantômes laissés par un write concurrent.
+**Principe 3 — Nettoyage des fantômes** : dans `scheduleTasks()`, les tâches immédiates présentes dans `completedKeys` sont supprimées du fichier via `updateJobs()`.
 
-```javascript
-// Dans scheduleTasks(), après le chargement :
-const jobs = loadJobs();
-let cleaned = false;
-for (let i = jobs.length - 1; i >= 0; i--) {
-  if (jobs[i].cron === null && completedKeys.has(jobKey(jobs[i]))) {
-    jobs.splice(i, 1);
-    cleaned = true;
-  }
-}
-if (cleaned) saveJobs(jobs);
-```
-
-### Résultat : sécurité complète
+### Résultat
 
 | Scénario | Protection |
 |----------|-----------|
-| BatBot écrit pendant le pickup | Impossible : pickup déclenché après fin DM |
-| Tâche se termine pendant que BatBot écrit | `completedKeys` empêche la ré-exécution |
+| Scheduler et BatBot écrivent en même temps | `updateJobs()` re-lit la version fraîche → pas d'écrasement côté scheduler |
+| BatBot écrit pendant le pickup d'une tâche | Impossible : pickup déclenché après fin DM (démarrage différé) |
+| Tâche se termine pendant que BatBot écrit | `completedKeys` empêche la ré-exécution du fantôme |
 | Tâche fantôme dans le fichier | Nettoyée par `scheduleTasks()` au prochain reload |
 | Double pickup (watcher + post-DM) | `acquireJobLock()` existant empêche le doublon |
 
@@ -136,22 +140,22 @@ Le `fs.watch` / `scheduleTasks()` ne déclenche PAS `processImmediateTasks()` di
 // Nouveau : Set des tâches immédiates complétées
 const completedKeys = new Set();
 
-// Modifié : scheduleTasks() — séparer cron et immédiat
+// Modifié : scheduleTasks() — séparer cron et immédiat, nettoyer fantômes via updateJobs
 function scheduleTasks() {
   for (const [, task] of tasks) task.stop();
   tasks.clear();
 
-  const jobs = loadJobs();
-
-  // Nettoyer les fantômes (tâches immédiates déjà complétées)
-  let cleaned = false;
-  for (let i = jobs.length - 1; i >= 0; i--) {
-    if (jobs[i].cron === null && completedKeys.has(jobKey(jobs[i]))) {
-      jobs.splice(i, 1);
-      cleaned = true;
+  // Nettoyer les fantômes (tâches immédiates déjà complétées) — atomic read-modify-write
+  const { jobs } = updateJobs(jobs => {
+    let cleaned = false;
+    for (let i = jobs.length - 1; i >= 0; i--) {
+      if (jobs[i].cron === null && completedKeys.has(jobKey(jobs[i]))) {
+        jobs.splice(i, 1);
+        cleaned = true;
+      }
     }
-  }
-  if (cleaned) saveJobs(jobs);
+    return { jobs, changed: cleaned };
+  });
 
   // Ne scheduler que les jobs avec cron
   for (const job of jobs) {
@@ -176,11 +180,11 @@ function processImmediateTasks() {
   executeJob(next).catch(err => log.error(`Immediate task '${key}' error:`, err));
 }
 
-// Modifié : executeJob() finally — ajouter au completedKeys si immédiat + appeler processImmediateTasks
-// (dans le bloc finally existant, après saveJobs)
+// Modifié : executeJob() finally — dans le callback updateJobs existant, ajouter :
 if (job.cron === null) {
   completedKeys.add(key);
 }
+// Après updateJobs (toujours dans le finally) :
 processImmediateTasks(); // un job (cron ou immédiat) pourrait avoir créé une nouvelle tâche
 
 // Modifié : validateJob() — accepter cron: null
@@ -268,7 +272,7 @@ Seul ajout : documenter les tâches immédiates dans `getSandboxSystemPrompt()`.
 
 ## Risques et mitigations
 
-**Race condition fichier** — Couvert par la solution en 3 couches : démarrage différé (post-DM), `completedKeys` (anti ré-exécution), nettoyage fantômes (dans `scheduleTasks()`). Voir section dédiée ci-dessus.
+**Race condition fichier** — Couvert par `updateJobs()` (merge-on-write optimiste, déjà implémenté) qui réduit la fenêtre de race à ~microsecondes côté scheduler. Pour les tâches immédiates, 3 filets de sécurité supplémentaires : démarrage différé (post-DM), `completedKeys` (anti ré-exécution), nettoyage fantômes (dans `scheduleTasks()`). Voir section dédiée ci-dessus.
 
 **Tâche qui tourne indéfiniment** — `spawnWithTimeout` avec SIGTERM → SIGKILL (même timeout que les DM : `CLAUDE_TIMEOUT_MS`).
 
@@ -280,4 +284,4 @@ Seul ajout : documenter les tâches immédiates dans `getSandboxSystemPrompt()`.
 
 **Boucle infinie** — Le `getJobSystemPrompt()` n'inclut PAS les instructions de scheduling → une tâche ne peut pas en créer une autre.
 
-**Fuite mémoire `completedKeys`** — Chaque tâche ajoute une entrée au Set (jamais nettoyée en phase 1). En pratique négligeable (quelques strings par jour). Phase 3 prévoit un nettoyage périodique si nécessaire.
+**Fuite mémoire `completedKeys`** — Chaque tâche immédiate ajoute une entrée au Set (jamais nettoyée en phase 1). En pratique négligeable (quelques strings par jour, uniquement les tâches `cron: null`). Phase 3 prévoit un nettoyage périodique si nécessaire.
