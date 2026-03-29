@@ -2,7 +2,12 @@
 
 ## Objectif
 
-Permettre l'exécution de tâches en arrière-plan via la queue de jobs existante, sans bloquer la conversation principale. Une tâche background est simplement un job sans `cron` : même fichier, même watcher, même exécution, même merge sandbox.
+Permettre l'exécution de tâches en arrière-plan via la queue de jobs existante. Une tâche background est simplement un job sans `cron` : même fichier, même watcher, même exécution, même merge sandbox.
+
+Point important sur le comportement attendu :
+
+- **Mode admin / host** : la tâche background peut tourner en parallèle de la conversation principale, car les DM passent par `executeDM()` alors que les jobs host passent par `executeClaudeCommand()`
+- **Mode sandbox** : la tâche background ne bloque pas la réponse courante qui l'a créée, mais elle **bloque les messages suivants du même utilisateur** tant qu'elle tourne, car jobs et DM sandbox partagent la même queue `executeInContainerQueued(userId, ...)`
 
 ## Concept
 
@@ -33,14 +38,14 @@ Pas de nouveau fichier, pas de nouveau module, pas de nouveau watcher.
 
 ```
 User DM
-  ├─ message normal       → executeDM() avec mutex admin (inchangé)
+  ├─ message normal       → exécution normale du message
   └─ BatBot délègue       → écrit N jobs cron:null dans scheduled-jobs.json
                                 ↓
                           (BatBot finit sa réponse)
                                 ↓
                           index.js appelle processImmediateTasks()
                                 ↓
-                          pickup de la 1ère tâche pending → executeJob() HORS mutex DM
+                          pickup de la 1ère tâche pending → executeJob()
                                 ↓
                           notification DM → remaining: 1 → 0 → auto-supprimé
                                 ↓
@@ -52,6 +57,11 @@ User DM
 ```
 
 **Exécution séquentielle** : une seule tâche background à la fois. Cela garantit qu'il n'y a pas de conflits entre tâches (ex: deux tâches qui modifient le même projet). L'ordre d'exécution suit l'ordre dans le tableau JSON.
+
+**Concurrence avec la conversation** :
+
+- **Host/admin** : oui, la tâche background est hors de la `dmQueue` et peut tourner pendant qu'une autre instance Claude traite un message
+- **Sandbox** : non, la tâche background et les messages du même utilisateur passent tous deux par `executeInContainerQueued(userId, ...)` ; ils sont donc sérialisés
 
 ## Accès concurrent au fichier — Analyse et solution
 
@@ -212,7 +222,7 @@ scheduler.processImmediateTasks();
 Ajouter la documentation des tâches immédiates dans `getSchedulingPrompt()` :
 
 ```
-Background tasks: to run a task in the background without blocking the conversation, create a job with cron set to null and remaining set to 1. The task will be executed automatically after your current response ends, in a separate Claude process with no access to the conversation context. The prompt must be self-contained with all necessary information. The task is auto-removed after execution. Tasks are executed sequentially (one at a time) in array order — if you create multiple tasks, they will run one after the other. This means you can safely chain dependent tasks by ordering them correctly in the array.
+Background tasks: to run a task after your current response ends, create a job with cron set to null and remaining set to 1. The task will be executed automatically in a separate Claude process with no access to the conversation context. The prompt must be self-contained with all necessary information. The task is auto-removed after execution. Tasks are executed sequentially (one at a time) in array order — if you create multiple tasks, they will run one after the other. In admin/host mode, this does not block the main conversation. In sandbox mode, the current response can finish first, but subsequent messages from the same user will wait until the background task completes because both use the same per-user container queue.
 
 Background task example:
 [{"id":"refactor-auth","prompt":"Refactor /var/www/html/badly/src/auth.js to use async/await. Read the file, apply changes, ensure it works.","cron":null,"enabled":true,"notify":true,"remaining":1,"created":"2026-03-29T14:00:00Z","lastRun":null,"description":"Refactor badly auth"}]
@@ -256,13 +266,22 @@ Pas de nouveau module, pas de nouveau fichier JSON, pas de nouveau watcher.
 8. Tester end-to-end
 9. Mettre à jour `CLAUDE.md`
 
-**Résultat** : BatBot peut créer un job `cron: null` pour déléguer une tâche. Elle s'exécute dès que BatBot finit sa réponse. Le résultat arrive en DM. L'utilisateur peut continuer à discuter.
+**Résultat** : BatBot peut créer un job `cron: null` pour déléguer une tâche. Elle s'exécute dès que BatBot finit sa réponse et le résultat arrive en DM. En mode admin/host, l'utilisateur peut continuer à discuter pendant l'exécution. En mode sandbox, les messages suivants du même utilisateur attendront la fin de la tâche.
 
 ### Phase 2 — Sandbox
 
-Déjà supporté ! Le merge sandbox (`mergeUserJobs`) fonctionne tel quel : un utilisateur sandbox crée un job `cron: null, remaining: 1` dans son fichier, le merge le ramène dans le fichier central, `processImmediateTasks()` le pickup.
+Support technique partiel seulement. Le merge sandbox (`mergeUserJobs`) fonctionne tel quel : un utilisateur sandbox crée un job `cron: null, remaining: 1` dans son fichier, le merge le ramène dans le fichier central, `processImmediateTasks()` le pickup.
 
-Seul ajout : documenter les tâches immédiates dans `getSandboxSystemPrompt()`.
+Mais avec l'architecture actuelle, cela **ne fournit pas un vrai background non bloquant** pour cet utilisateur :
+
+- la réponse courante peut se terminer
+- ensuite la tâche démarre dans le container
+- pendant qu'elle tourne, les nouveaux messages sandbox du même utilisateur restent en queue
+
+Donc deux options possibles :
+
+1. **Documenter explicitement cette limite** dans `getSandboxSystemPrompt()` et accepter un "background différé mais bloquant pour les messages suivants"
+2. **Faire évoluer l'architecture** pour séparer les files sandbox `chat` et `job` par utilisateur si l'objectif est un vrai parallélisme conversation + tâche
 
 ### Phase 3 — Enrichissements (optionnel)
 
@@ -278,7 +297,7 @@ Seul ajout : documenter les tâches immédiates dans `getSandboxSystemPrompt()`.
 
 **Tâches perdues au restart** — Les tâches `cron: null` encore dans le fichier au redémarrage seront re-pickupées par `processImmediateTasks()` dans `start()`. Pas de perte.
 
-**Conflits de fichiers source** — La tâche background et BatBot pourraient modifier les mêmes fichiers du projet simultanément. Instruction dans le system prompt : ne pas déléguer de tâches sur des fichiers en cours de modification.
+**Conflits de fichiers source** — En mode admin/host, la tâche background et BatBot pourraient modifier les mêmes fichiers du projet simultanément. Instruction dans le system prompt : ne pas déléguer de tâches sur des fichiers en cours de modification. En mode sandbox actuel, ce risque est plus faible pour un même utilisateur car les exécutions sont sérialisées.
 
 **Prompt autosuffisant** — La tâche n'a aucun accès au contexte de conversation. Instruction claire dans le prompt : inclure toutes les informations nécessaires.
 
