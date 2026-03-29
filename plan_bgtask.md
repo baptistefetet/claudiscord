@@ -34,18 +34,24 @@ Pas de nouveau fichier, pas de nouveau module, pas de nouveau watcher.
 ```
 User DM
   ├─ message normal       → executeDM() avec mutex admin (inchangé)
-  └─ BatBot délègue       → écrit un job cron:null dans scheduled-jobs.json
+  └─ BatBot délègue       → écrit N jobs cron:null dans scheduled-jobs.json
                                 ↓
                           (BatBot finit sa réponse)
                                 ↓
                           index.js appelle processImmediateTasks()
                                 ↓
-                          executeJob() HORS mutex DM (indépendant)
+                          pickup de la 1ère tâche pending → executeJob() HORS mutex DM
                                 ↓
-                          notification DM (succès/erreur/timeout)
+                          notification DM → remaining: 1 → 0 → auto-supprimé
                                 ↓
-                          remaining: 1 → 0 → job auto-supprimé
+                          executeJob() finally rappelle processImmediateTasks()
+                                ↓
+                          pickup de la 2ème tâche pending → ...
+                                ↓
+                          (chaînage séquentiel jusqu'à épuisement de la queue)
 ```
+
+**Exécution séquentielle** : une seule tâche background à la fois. Cela garantit qu'il n'y a pas de conflits entre tâches (ex: deux tâches qui modifient le même projet). L'ordre d'exécution suit l'ordre dans le tableau JSON.
 
 ## Accès concurrent au fichier — Analyse et solution
 
@@ -154,20 +160,20 @@ function scheduleTasks() {
   }
 }
 
-// Nouveau : pickup des tâches immédiates
+// Nouveau : pickup séquentiel des tâches immédiates (une seule à la fois)
 function processImmediateTasks() {
   const jobs = loadJobs();
 
-  for (const job of jobs) {
-    if (job.cron !== null || !job.enabled) continue;
+  // Trouver la première tâche immédiate pending (ordre du tableau = ordre d'exécution)
+  const next = jobs.find(j => j.cron === null && j.enabled && !completedKeys.has(jobKey(j)));
+  if (!next) return;
 
-    const key = jobKey(job);
-    if (completedKeys.has(key)) continue;
-    if (!acquireJobLock(key)) continue;
+  const key = jobKey(next);
+  if (!acquireJobLock(key)) return; // déjà en cours
 
-    // Fire-and-forget : executeJob gère tout (exécution, notification, remaining, cleanup)
-    executeJob(job).catch(err => log.error(`Immediate task '${key}' error:`, err));
-  }
+  // Une seule tâche : executeJob() rappellera processImmediateTasks() dans son finally
+  // → chaînage séquentiel automatique (tâche 1 → fin → tâche 2 → fin → ...)
+  executeJob(next).catch(err => log.error(`Immediate task '${key}' error:`, err));
 }
 
 // Modifié : executeJob() finally — ajouter au completedKeys si immédiat + appeler processImmediateTasks
@@ -202,7 +208,7 @@ scheduler.processImmediateTasks();
 Ajouter la documentation des tâches immédiates dans `getSchedulingPrompt()` :
 
 ```
-Background tasks: to run a task in the background without blocking the conversation, create a job with cron set to null and remaining set to 1. The task will be executed automatically after your current response ends, in a separate Claude process with no access to the conversation context. The prompt must be self-contained with all necessary information. The task is auto-removed after execution.
+Background tasks: to run a task in the background without blocking the conversation, create a job with cron set to null and remaining set to 1. The task will be executed automatically after your current response ends, in a separate Claude process with no access to the conversation context. The prompt must be self-contained with all necessary information. The task is auto-removed after execution. Tasks are executed sequentially (one at a time) in array order — if you create multiple tasks, they will run one after the other. This means you can safely chain dependent tasks by ordering them correctly in the array.
 
 Background task example:
 [{"id":"refactor-auth","prompt":"Refactor /var/www/html/badly/src/auth.js to use async/await. Read the file, apply changes, ensure it works.","cron":null,"enabled":true,"notify":true,"remaining":1,"created":"2026-03-29T14:00:00Z","lastRun":null,"description":"Refactor badly auth"}]
