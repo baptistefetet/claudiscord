@@ -1,4 +1,6 @@
 const { execFileSync, execSync, execFile } = require('child_process');
+const { promisify } = require('util');
+const execFileAsync = promisify(execFile);
 const { AUTHORIZED_USER_ID, UPGRADE_TIMEOUT_MS, DISCORD_MAX_MSG_LENGTH } = require('./config');
 const sessions = require('./sessions');
 const { writeCredentials, hasCredentials, ensureContainer, containerName } = require('./container');
@@ -131,31 +133,32 @@ async function handleCommand(message) {
 			const name = containerName(userId);
 			// APT upgrade (as root in container)
 			await message.channel.send('Updating container packages...');
-			execFileSync('docker', [
+			await execFileAsync('docker', [
 				'exec', '-u', 'root', name, 'bash', '-c',
 				'DEBIAN_FRONTEND=noninteractive apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" 2>&1 | tail -10',
 			], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
-			// Claude Code upgrade (download then execute to avoid pipe breakage)
+			// Claude Code upgrade — use async exec to avoid blocking the event loop
+			// (execFileSync blocks heartbeats; >41s block kills the Discord WebSocket)
 			await message.channel.send('Updating Claude Code...');
-			execFileSync('docker', [
+			await execFileAsync('docker', [
 				'exec', name, 'bash', '-c',
 				'curl -fsSL https://claude.ai/install.sh -o /tmp/claude-install.sh',
 			], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
-			const output = execFileSync('docker', [
+			await execFileAsync('docker', [
 				'exec', name, 'bash', '-c',
 				'bash /tmp/claude-install.sh 2>&1 | tail -5 ; rm -f /tmp/claude-install.sh',
 			], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
 			// Copy upgraded binary to /usr/local/bin so it takes priority in PATH
-			execFileSync('docker', [
+			await execFileAsync('docker', [
 				'exec', '-u', 'root', name, 'bash', '-c',
 				'cp /home/claude/.local/share/claude/versions/$(ls -t /home/claude/.local/share/claude/versions/ | head -1) /usr/local/bin/claude && chmod 755 /usr/local/bin/claude',
 			], { encoding: 'utf8', timeout: 10000 });
 			// Get new version
 			let version = '';
 			try {
-				version = execFileSync('docker', ['exec', name, 'claude', '--version'], { encoding: 'utf8', timeout: 10000 }).trim();
+				version = (await execFileAsync('docker', ['exec', name, 'claude', '--version'], { encoding: 'utf8', timeout: 10000 })).stdout.trim();
 			} catch {}
-			await message.channel.send(`Container updated.${version ? `\nClaude Code: \`${version}\`` : ''}`);
+			await message.channel.send(`Container updated.${version ? `\nVersion: \`${version}\`` : ''}`);
 		} catch (err) {
 			log.error('Upgrade error:', err.message);
 			await message.channel.send(`Upgrade error: ${err.message.slice(0, 300)}`);
