@@ -120,6 +120,14 @@ function mergeUserJobs(userId) {
 		try { fs.writeFileSync(userJobsFile, JSON.stringify(validJobs, null, 2), 'utf8'); } catch {}
 	}
 
+	// Early return if sandbox jobs haven't changed since last sync
+	const centralUserJobs = loadJobs()
+		.filter(j => j.userId === userId)
+		.map(({ userId: _uid, ...rest }) => rest);
+	if (JSON.stringify(validJobs) === JSON.stringify(centralUserJobs)) {
+		return;
+	}
+
 	// Merge into central file (atomic read-modify-write via updateJobs)
 	const { userJobsFromCentral } = updateJobs(centralJobs => {
 		// Build map of existing user jobs in central file (by job id)
