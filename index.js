@@ -48,7 +48,7 @@ client.on(Events.MessageCreate, async message => {
 				sessionId,
 				systemPrompt: getSystemPrompt({ botName, userName }),
 				allowedTools: ALLOWED_TOOLS,
-				outputFormat: 'json',
+				outputFormat: 'stream-json',
 			});
 		} else {
 			// Sandbox mode: execute in container
@@ -56,7 +56,7 @@ client.on(Events.MessageCreate, async message => {
 				sessionId,
 				systemPrompt: getSandboxSystemPrompt({ botName, userName }),
 				allowedTools: ALLOWED_TOOLS,
-				outputFormat: 'json',
+				outputFormat: 'stream-json',
 			});
 		}
 

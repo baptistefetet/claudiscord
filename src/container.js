@@ -133,6 +133,7 @@ async function executeInContainer(userId, prompt, options = {}) {
 	});
 
 	const label = `Container [${name}]`;
+	const isStreamJson = outputFormat === 'stream-json';
 	log.info(`${label}: ${sessionId ? `resume ${sessionId}` : 'new session'}, prompt length: ${prompt.length}`);
 
 	// First attempt
@@ -140,7 +141,11 @@ async function executeInContainer(userId, prompt, options = {}) {
 	try {
 		result = await spawnWithTimeout(
 			'docker', ['exec', '-i', name, 'claude', ...claudeArgs],
-			{ timeoutMs, label },
+			{
+				timeoutMs, label,
+				streamJson: isStreamJson,
+				onEarlyKill: () => killClaudeInContainer(name, label),
+			},
 		);
 	} catch (err) {
 		if (err.code === 124) {
@@ -164,7 +169,11 @@ async function executeInContainer(userId, prompt, options = {}) {
 		try {
 			result = await spawnWithTimeout(
 				'docker', ['exec', '-i', name, 'claude', ...retryArgs],
-				{ timeoutMs, label },
+				{
+					timeoutMs, label,
+					streamJson: isStreamJson,
+					onEarlyKill: () => killClaudeInContainer(name, label),
+				},
 			);
 		} catch (err) {
 			if (err.code === 124) {

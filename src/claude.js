@@ -36,6 +36,7 @@ function buildClaudeArgs(prompt, options = {}) {
 	}
 
 	args.push('--output-format', outputFormat);
+	if (outputFormat === 'stream-json') args.push('--verbose');
 	args.push('--allowedTools', allowedTools);
 	args.push('--disallowedTools', disallowedTools);
 	args.push('--model', model);
@@ -47,12 +48,21 @@ function buildClaudeArgs(prompt, options = {}) {
 /**
  * Spawn a command with timeout, stdout/stderr collection, and SIGTERM→SIGKILL.
  * Returns { stdout, stderr, code }.
+ *
+ * When streamJson is true (for --output-format stream-json), the promise
+ * resolves as soon as the {"type":"result",...} event appears on stdout,
+ * without waiting for the process to exit.  This prevents deadlocks when
+ * background tasks (e.g. gws auth login) keep the process alive after the
+ * conversation has ended.  onEarlyKill is called after killing the process
+ * so the caller can clean up (e.g. kill orphaned processes in a container).
  */
 function spawnWithTimeout(cmd, args, options = {}) {
 	const {
 		timeoutMs = CLAUDE_TIMEOUT_MS,
 		cwd,
 		label = 'process',
+		streamJson = false,
+		onEarlyKill = null,
 	} = options;
 
 	return new Promise((resolve, reject) => {
@@ -65,12 +75,40 @@ function spawnWithTimeout(cmd, args, options = {}) {
 
 		let stdout = '';
 		let stderr = '';
+		let resolved = false;
 
-		child.stdout.on('data', chunk => { stdout += chunk; });
+		child.stdout.on('data', chunk => {
+			stdout += chunk;
+
+			// Stream-JSON: resolve as soon as we see the result event
+			if (streamJson && !resolved) {
+				for (const line of stdout.split('\n')) {
+					const trimmed = line.trim();
+					if (!trimmed) continue;
+					try {
+						const event = JSON.parse(trimmed);
+						if (event.type === 'result') {
+							resolved = true;
+							clearTimeout(timer);
+							log.info(`${label}: stream result received, resolving early`);
+							resolve({ stdout, stderr, code: 0 });
+							child.kill('SIGTERM');
+							setTimeout(() => {
+								try { child.kill('SIGKILL'); } catch (_) {}
+							}, 5000);
+							if (onEarlyKill) onEarlyKill();
+							return;
+						}
+					} catch (_) {}
+				}
+			}
+		});
+
 		child.stderr.on('data', chunk => { stderr += chunk; });
 
 		let killed = false;
 		const timer = setTimeout(() => {
+			if (resolved) return;
 			killed = true;
 			log.warn(`${label} timeout after ${timeoutMs}ms, sending SIGTERM`);
 			child.kill('SIGTERM');
@@ -81,6 +119,7 @@ function spawnWithTimeout(cmd, args, options = {}) {
 
 		child.on('close', (code) => {
 			clearTimeout(timer);
+			if (resolved) return; // Already resolved via stream-json early detection
 			if (killed) {
 				reject(Object.assign(new Error('timeout'), { code: 124 }));
 				return;
@@ -91,6 +130,7 @@ function spawnWithTimeout(cmd, args, options = {}) {
 
 		child.on('error', (err) => {
 			clearTimeout(timer);
+			if (resolved) return;
 			reject(err);
 		});
 	});
@@ -138,10 +178,27 @@ function extractLastTextFromSessionLog(sessionId, claudeHome) {
 }
 
 /**
- * Parse Claude CLI output (JSON or text).
+ * Parse Claude CLI output (JSON, stream-json, or text).
  * claudeHome is the home dir where .claude/ lives (for JSONL fallback).
  */
 function parseClaudeOutput(stdout, outputFormat, label = 'Claude', claudeHome = null) {
+	if (outputFormat === 'stream-json') {
+		// Stream JSON: multiple JSON lines, find the result event (scan from end)
+		const lines = stdout.split('\n');
+		for (let i = lines.length - 1; i >= 0; i--) {
+			const trimmed = lines[i].trim();
+			if (!trimmed) continue;
+			try {
+				const event = JSON.parse(trimmed);
+				if (event.type === 'result') {
+					return { result: event.result || '', sessionId: event.session_id || null };
+				}
+			} catch (_) {}
+		}
+		log.warn(`${label}: no result event in stream-json output`);
+		return { result: stdout.slice(-500), sessionId: null };
+	}
+
 	if (outputFormat === 'json') {
 		try {
 			const parsed = JSON.parse(stdout);
@@ -175,6 +232,7 @@ async function executeClaudeCommand(prompt, options = {}) {
 	} = options;
 
 	const spawnOpts = { systemPrompt, allowedTools, disallowedTools, outputFormat };
+	const isStreamJson = outputFormat === 'stream-json';
 
 	log.info(`Spawning claude: ${sessionId ? `resume ${sessionId}` : 'new session'}, prompt length: ${prompt.length}, format: ${outputFormat}`);
 
@@ -182,7 +240,7 @@ async function executeClaudeCommand(prompt, options = {}) {
 	let result = await spawnWithTimeout(
 		CLAUDE_BIN,
 		buildClaudeArgs(prompt, { ...spawnOpts, sessionId }),
-		{ timeoutMs, cwd: '/root', label: 'Claude' },
+		{ timeoutMs, cwd: '/root', label: 'Claude', streamJson: isStreamJson },
 	);
 
 	// Fallback: if resume failed, retry with new session
@@ -191,7 +249,7 @@ async function executeClaudeCommand(prompt, options = {}) {
 		result = await spawnWithTimeout(
 			CLAUDE_BIN,
 			buildClaudeArgs(prompt, { ...spawnOpts, sessionId: null }),
-			{ timeoutMs, cwd: '/root', label: 'Claude' },
+			{ timeoutMs, cwd: '/root', label: 'Claude', streamJson: isStreamJson },
 		);
 	}
 
