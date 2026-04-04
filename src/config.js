@@ -27,7 +27,7 @@ const DISCORD_MAX_MSG_LENGTH = 2000;
 const TYPING_INTERVAL_MS = 8000;
 
 const ALLOWED_TOOLS = 'Bash(*) Read Write Edit Glob Grep WebSearch WebFetch Task';
-const DISALLOWED_TOOLS = 'CronCreate CronDelete CronList Skill(loop)';
+const DISALLOWED_TOOLS = 'CronCreate CronDelete CronList Skill(loop) Skill(keybindings-help) Skill(schedule)';
 
 const SANDBOX_JOBS_PATH = '/home/claude/.claudiscord/scheduled-jobs.json';
 

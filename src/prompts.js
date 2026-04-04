@@ -18,7 +18,7 @@ Minimal example:
 }
 
 function getDisabledSkillsPrompt() {
-	return `The following skills are internal to Claude Code CLI and unavailable through the Discord bot. Never use or mention them to the user: loop, keybindings-help.`;
+	return `The following skills are internal to Claude Code CLI and unavailable through the Discord bot. Never use or mention them to the user: loop, keybindings-help, schedule.`;
 }
 
 function getDiscordFormattingPrompt() {
