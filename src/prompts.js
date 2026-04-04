@@ -1,7 +1,11 @@
 const { JOBS_FILE, SANDBOX_JOBS_PATH } = require('./config');
 
-function getSchedulingPrompt(jobsPath) {
-	return `MANDATORY RULE — Scheduling: scheduled tasks (recurring or one-shot) that execute prompts or display messages to the user MUST use the following Discord scheduling system:
+// ---------------------------------------------------------------------------
+// Prompt constants
+// ---------------------------------------------------------------------------
+
+const SCHEDULING_PROMPT = (jobsPath) => `--- Scheduling ---
+MANDATORY RULE — Scheduling: scheduled tasks (recurring or one-shot) that execute prompts or display messages to the user MUST use the following Discord scheduling system:
 
 The file ${jobsPath} contains a JSON array of objects. A scheduler (node-cron) runs continuously and automatically executes jobs at the defined times. You only need to write to this file — the system handles the rest. Do not use other methods (crontab, at, setTimeout, setInterval, /loop, sleep, direct node-cron, systemd timer) as they are not connected to the Discord bot and will not persist.
 
@@ -15,69 +19,69 @@ To view the list of scheduled jobs, simply read this file — it always contains
 
 Minimal example:
 [{"id":"weather","prompt":"Give me the weather in Lyon","cron":"0 8 * * *","enabled":true,"notify":true,"remaining":0,"created":"2026-01-01T00:00:00Z","lastRun":null,"description":"Daily weather"}]`;
-}
 
-function getDisabledSkillsPrompt() {
-	return `The following skills are internal to Claude Code CLI and unavailable through the Discord bot. Never use or mention them to the user: loop, keybindings-help, schedule.`;
-}
+const DISABLED_SKILLS_PROMPT = `--- Disabled skills ---
+The following skills are internal to Claude Code CLI and unavailable through the Discord bot. Never use or mention them to the user: loop, keybindings-help, schedule.`;
 
-function getDiscordFormattingPrompt() {
-	return `Keep responses concise and suited for Discord (max ~1800 characters). Use Discord markdown (not HTML). FORBIDDEN: tables in any form — no ASCII tables, no markdown tables (|---|), no space-aligned columns. Tables are UNREADABLE on Discord (proportional font, mobile). Use instead: bullet lists, bold text for labels, or code blocks for aligned data.`;
-}
+const DISCORD_FORMATTING_PROMPT = `--- Response format ---
+Keep responses concise and suited for Discord (max ~1800 characters). Use Discord markdown (not HTML). FORBIDDEN: tables in any form — no ASCII tables, no markdown tables (|---|), no space-aligned columns. Tables are UNREADABLE on Discord (proportional font, mobile). Use instead: bullet lists, bold text for labels, or code blocks for aligned data.`;
+
+const NO_RESTART_PROMPT = `--- Critical rules ---
+NEVER restart the claudiscord service (systemctl restart claudiscord, systemctl stop claudiscord, etc.) unless the user EXPLICITLY asks for it. Reason: you are running inside this service — restarting it would cut the connection and your response would never be delivered. The user has the /restart command to do it themselves.`;
+
+const SANDBOX_ENV_PROMPT = `--- Environment ---
+You have access to development tools (Bash, files, web).
+Your workspace is /home/claude. This is the only persistent directory (data survives restarts). Everything else (/, /tmp, etc.) is ephemeral and will be lost on container rebuild.`;
+
+const JOB_INTRO = (jobId, today) => `This is a scheduled task for a Discord bot. Job: "${jobId}". Today's date: ${today}.`;
+
+const ADMIN_INTRO = (identity, interlocutor, today) => `${identity}You are the system administrator assistant. ${interlocutor}The user is talking to you via Discord DM. Today's date is: ${today}.
+You have access to system tools to administer the server.`;
+
+const SANDBOX_INTRO = (identity, interlocutor, today) => `${identity}You are a Claude assistant in an isolated Docker sandbox environment. ${interlocutor}The user is talking to you via Discord DM. Today's date is: ${today}.`;
+
+const DEFAULT_CLAUDE_MD = `# Sandbox Claude
+You are in an isolated Docker sandbox environment.
+Customize this file to adapt Claude's behavior to your needs.
+`;
+
+// ---------------------------------------------------------------------------
+// Builder methods
+// ---------------------------------------------------------------------------
 
 function getJobSystemPrompt(jobId) {
 	const today = new Date().toISOString().slice(0, 10);
-	return `This is a scheduled task for a Discord bot. Job: "${jobId}". Today's date: ${today}.
-
---- Response format ---
-${getDiscordFormattingPrompt()}`;
+	return [JOB_INTRO(jobId, today), DISCORD_FORMATTING_PROMPT].join('\n\n');
 }
 
 function getSystemPrompt({ botName, userName } = {}) {
 	const today = new Date().toISOString().slice(0, 10);
 	const identity = botName ? `Your name is ${botName}. ` : '';
 	const interlocutor = userName ? `You are talking to ${userName}. ` : '';
-	return `${identity}You are the system administrator assistant. ${interlocutor}The user is talking to you via Discord DM. Today's date is: ${today}.
-You have access to system tools to administer the server.
-
---- Critical rules ---
-NEVER restart the claudiscord service (systemctl restart claudiscord, systemctl stop claudiscord, etc.) unless the user EXPLICITLY asks for it. Reason: you are running inside this service — restarting it would cut the connection and your response would never be delivered. The user has the /restart command to do it themselves.
-
---- Scheduling ---
-${getSchedulingPrompt(JOBS_FILE)}
-
---- Disabled skills ---
-${getDisabledSkillsPrompt()}
-
---- Response format ---
-${getDiscordFormattingPrompt()}`;
+	return [
+		ADMIN_INTRO(identity, interlocutor, today),
+		NO_RESTART_PROMPT,
+		SCHEDULING_PROMPT(JOBS_FILE),
+		DISABLED_SKILLS_PROMPT,
+		DISCORD_FORMATTING_PROMPT,
+	].join('\n\n');
 }
 
 function getSandboxSystemPrompt({ botName, userName } = {}) {
 	const today = new Date().toISOString().slice(0, 10);
 	const identity = botName ? `Your name is ${botName}. ` : '';
 	const interlocutor = userName ? `You are talking to ${userName}. ` : '';
-	return `${identity}You are a Claude assistant in an isolated Docker sandbox environment. ${interlocutor}The user is talking to you via Discord DM. Today's date is: ${today}.
-
---- Environment ---
-You have access to development tools (Bash, files, web).
-Your workspace is /home/claude. This is the only persistent directory (data survives restarts). Everything else (/, /tmp, etc.) is ephemeral and will be lost on container rebuild.
-
---- Scheduling ---
-${getSchedulingPrompt(SANDBOX_JOBS_PATH)}
-
---- Disabled skills ---
-${getDisabledSkillsPrompt()}
-
---- Response format ---
-${getDiscordFormattingPrompt()}`;
+	return [
+		SANDBOX_INTRO(identity, interlocutor, today),
+		SANDBOX_ENV_PROMPT,
+		SCHEDULING_PROMPT(SANDBOX_JOBS_PATH),
+		DISABLED_SKILLS_PROMPT,
+		DISCORD_FORMATTING_PROMPT,
+	].join('\n\n');
 }
 
 function getDefaultClaudeMd() {
-	return `# Sandbox Claude
-You are in an isolated Docker sandbox environment.
-Customize this file to adapt Claude's behavior to your needs.
-`;
+	return DEFAULT_CLAUDE_MD;
 }
 
 module.exports = { getSystemPrompt, getSandboxSystemPrompt, getJobSystemPrompt, getDefaultClaudeMd };
