@@ -6,7 +6,7 @@ const sessions = require('./sessions');
 const { writeCredentials, hasCredentials, ensureContainer, containerName } = require('./container');
 const log = require('./logger');
 
-const SHELL_TIMEOUT_MS = 30_000;
+const SHELL_TIMEOUT_MS = 300_000;
 // Worst case: "```\n" (4) + output + "\n... (truncated)\n```" (21) = 25 overhead
 const SHELL_MAX_OUTPUT = DISCORD_MAX_MSG_LENGTH - 25;
 
