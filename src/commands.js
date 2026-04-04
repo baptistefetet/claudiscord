@@ -1,12 +1,12 @@
-const { execFileSync, execSync, execFile } = require('child_process');
+const { spawn, execFileSync, execFile } = require('child_process');
 const { promisify } = require('util');
 const execFileAsync = promisify(execFile);
-const { AUTHORIZED_USER_ID, UPGRADE_TIMEOUT_MS, DISCORD_MAX_MSG_LENGTH } = require('./config');
+const { AUTHORIZED_USER_ID, UPGRADE_TIMEOUT_MS, SHELL_TIMEOUT_MS, DISCORD_MAX_MSG_LENGTH } = require('./config');
 const sessions = require('./sessions');
 const { writeCredentials, hasCredentials, ensureContainer, containerName } = require('./container');
 const log = require('./logger');
 
-const SHELL_TIMEOUT_MS = 300_000;
+const KILL_GRACE_MS = 5000;
 // Worst case: "```\n" (4) + output + "\n... (truncated)\n```" (21) = 25 overhead
 const SHELL_MAX_OUTPUT = DISCORD_MAX_MSG_LENGTH - 25;
 
@@ -28,34 +28,67 @@ You need to authenticate on your own machine and send your credentials:
 The message will be automatically deleted after registration.`;
 
 /**
- * Execute a shell command and return truncated output for Discord.
+ * Execute a shell command asynchronously and return output for Discord.
+ * Uses spawn to avoid blocking the event loop (which would kill the Discord
+ * WebSocket heartbeat on long-running commands). Implements SIGTERM→SIGKILL
+ * with process group kill (host) or container cleanup (sandbox).
  */
 function executeShell(command, { inContainer, containerNameStr } = {}) {
-	try {
-		let stdout;
-		if (inContainer) {
-			stdout = execFileSync('docker', ['exec', containerNameStr, 'bash', '-c', command], {
-				encoding: 'utf8',
-				timeout: SHELL_TIMEOUT_MS,
-				stdio: ['pipe', 'pipe', 'pipe'],
-			});
-		} else {
-			stdout = execSync(command, {
-				encoding: 'utf8',
-				timeout: SHELL_TIMEOUT_MS,
-				cwd: '/root',
-				stdio: ['pipe', 'pipe', 'pipe'],
-			});
-		}
-		return stdout || '(no output)';
-	} catch (err) {
-		if (err.killed || err.signal === 'SIGTERM') {
-			return `(timeout after ${SHELL_TIMEOUT_MS / 1000}s)`;
-		}
-		// Command failed but produced output (non-zero exit code)
-		const output = (err.stdout || '') + (err.stderr || '');
-		return output || `(exit code ${err.status})`;
-	}
+	return new Promise((resolve) => {
+		const spawnArgs = inContainer
+			? { cmd: 'docker', args: ['exec', containerNameStr, 'bash', '-c', command], opts: { stdio: ['pipe', 'pipe', 'pipe'] } }
+			: { cmd: 'bash', args: ['-c', command], opts: { cwd: '/root', stdio: ['pipe', 'pipe', 'pipe'], detached: true } };
+
+		const child = spawn(spawnArgs.cmd, spawnArgs.args, spawnArgs.opts);
+		child.stdin.end();
+
+		let stdout = '';
+		let stderr = '';
+		let killed = false;
+
+		child.stdout.on('data', chunk => { stdout += chunk; });
+		child.stderr.on('data', chunk => { stderr += chunk; });
+
+		const timer = setTimeout(() => {
+			killed = true;
+			log.warn(`Shell timeout after ${SHELL_TIMEOUT_MS / 1000}s, sending SIGTERM`);
+			if (inContainer) {
+				child.kill('SIGTERM');
+			} else {
+				try { process.kill(-child.pid, 'SIGTERM'); } catch (_) {}
+			}
+			setTimeout(() => {
+				if (inContainer) {
+					try { child.kill('SIGKILL'); } catch (_) {}
+					// Kill orphaned processes in container
+					try {
+						execFileSync('docker', ['exec', containerNameStr, 'pkill', '-9', '-f', command.slice(0, 80)], { timeout: 5000 });
+					} catch (_) {}
+				} else {
+					try { process.kill(-child.pid, 'SIGKILL'); } catch (_) {}
+				}
+			}, KILL_GRACE_MS);
+		}, SHELL_TIMEOUT_MS);
+
+		child.on('close', (code) => {
+			clearTimeout(timer);
+			if (killed) {
+				resolve(`(timeout after ${SHELL_TIMEOUT_MS / 1000}s)`);
+				return;
+			}
+			const output = (stdout + stderr).trim();
+			if (code === 0) {
+				resolve(output || '(no output)');
+			} else {
+				resolve(output || `(exit code ${code})`);
+			}
+		});
+
+		child.on('error', (err) => {
+			clearTimeout(timer);
+			resolve(`(error: ${err.message})`);
+		});
+	});
 }
 
 /**
@@ -74,12 +107,12 @@ async function handleCommand(message) {
 		let output;
 
 		if (isAdmin) {
-			output = executeShell(command);
+			output = await executeShell(command);
 		} else {
 			// Sandbox mode: run in user's container
 			ensureContainer(userId);
 			const name = containerName(userId);
-			output = executeShell(command, { inContainer: true, containerNameStr: name });
+			output = await executeShell(command, { inContainer: true, containerNameStr: name });
 		}
 
 		// Truncate and wrap in code block
