@@ -76,22 +76,23 @@ function spawnWithTimeout(cmd, args, options = {}) {
 		let stdout = '';
 		let stderr = '';
 		let resolved = false;
+		let earlyResult = null;
 
 		child.stdout.on('data', chunk => {
 			stdout += chunk;
 
-			// Stream-JSON: resolve as soon as we see the result event
+			// Stream-JSON: capture the result as soon as it appears, then
+			// terminate the process but wait for close before resolving.
 			if (streamJson && !resolved) {
 				for (const line of stdout.split('\n')) {
 					const trimmed = line.trim();
 					if (!trimmed) continue;
 					try {
 						const event = JSON.parse(trimmed);
-						if (event.type === 'result') {
-							resolved = true;
+						if (event.type === 'result' && !earlyResult) {
+							earlyResult = { stdout, stderr, code: 0 };
 							clearTimeout(timer);
-							log.info(`${label}: stream result received, resolving early`);
-							resolve({ stdout, stderr, code: 0 });
+							log.info(`${label}: stream result received, terminating process`);
 							child.kill('SIGTERM');
 							setTimeout(() => {
 								try { child.kill('SIGKILL'); } catch (_) {}
@@ -119,7 +120,12 @@ function spawnWithTimeout(cmd, args, options = {}) {
 
 		child.on('close', (code) => {
 			clearTimeout(timer);
-			if (resolved) return; // Already resolved via stream-json early detection
+			if (resolved) return;
+			if (earlyResult) {
+				resolved = true;
+				resolve({ stdout: earlyResult.stdout, stderr, code: 0 });
+				return;
+			}
 			if (killed) {
 				reject(Object.assign(new Error('timeout'), { code: 124 }));
 				return;
