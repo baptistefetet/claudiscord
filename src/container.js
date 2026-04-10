@@ -106,7 +106,7 @@ function ensureContainer(userId) {
 function killClaudeInContainer(name, label) {
 	try {
 		execFileSync('docker', ['exec', name, 'sh', '-c',
-			'ps -eo pid=,comm= | awk \'$1 != 1 && $2 != "sleep" { print $1 }\' | xargs -r kill -9 2>/dev/null; true',
+			'for proc in /proc/[0-9]*; do pid=${proc#/proc/}; [ "$pid" = 1 ] && continue; [ "$pid" = "$$" ] && continue; comm=$(cat "$proc/comm" 2>/dev/null || true); [ "$comm" = "sleep" ] && continue; kill -9 "$pid" 2>/dev/null || true; done; true',
 		], { timeout: 5000 });
 		log.info(`${label}: killed orphaned processes`);
 	} catch {
