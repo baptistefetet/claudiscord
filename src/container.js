@@ -86,6 +86,7 @@ function ensureContainer(userId) {
 	docker(
 		'create',
 		'--name', name,
+		'--init',
 		'--memory', CONTAINER_MEMORY,
 		'--cpus', String(CONTAINER_CPUS),
 		'--restart', 'unless-stopped',
@@ -98,15 +99,18 @@ function ensureContainer(userId) {
 }
 
 /**
- * Kill all claude -p processes inside a container (cleanup after timeout).
+ * Kill all non-essential processes inside a container (cleanup after timeout/early result).
  * Killing docker exec only kills the host-side pipe, not the container process.
+ * With --init, PID 1 is tini; we also spare the 'sleep' process that keeps the container alive.
  */
 function killClaudeInContainer(name, label) {
 	try {
-		execFileSync('docker', ['exec', name, 'pkill', '-9', '-f', 'claude.*-p'], { timeout: 5000 });
-		log.info(`${label}: killed orphaned claude processes after timeout`);
+		execFileSync('docker', ['exec', name, 'sh', '-c',
+			'ps -eo pid=,comm= | awk \'$1 != 1 && $2 != "sleep" { print $1 }\' | xargs -r kill -9 2>/dev/null; true',
+		], { timeout: 5000 });
+		log.info(`${label}: killed orphaned processes`);
 	} catch {
-		// Process already dead or pkill found nothing — either way, fine
+		// Process already dead or nothing to kill — either way, fine
 	}
 }
 
