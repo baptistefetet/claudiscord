@@ -66,7 +66,7 @@ scheduled-jobs.json   # Scheduled jobs array (gitignored)
 - **Limits**: 512 MB RAM, 1 CPU
 - **Volume**: `DATA_DIR/{userId}/home` -> `/home/claude`
 - **Network**: bridge (internet access for Claude API)
-- **User**: `claude` (non-root)
+- **User**: `claude` (non-root, required for `--dangerously-skip-permissions`)
 - **CMD**: `sleep infinity` (container kept alive, commands via `docker exec`)
 - Containers survive reboots and service restarts
 - User data (credentials, files, CLAUDE.md) persists in volumes
@@ -113,7 +113,9 @@ Existing containers must be removed first (they use the old image). They are rec
 
 - `claude -p` with `--output-format json` (DMs) or `text` (jobs)
 - `--resume <sessionId>` for DMs, falls back to new session on failure
-- `--allowedTools` same for both modes (tools not in the list are blocked by `-p` non-interactive mode)
+- `--allowedTools` depends on context (admin on host, sandbox in container)
+- `--disallowedTools` blocks tools that shouldn't be available (CronCreate, Monitor, etc.)
+- `--dangerously-skip-permissions` in sandbox (the container IS the sandbox)
 - `--model opus`
 - stdin closed immediately (`child.stdin.end()`)
 - Host cwd: `/root` (auto-loads `/root/CLAUDE.md`)
@@ -162,7 +164,7 @@ After each Claude execution in a container, `mergeUserJobs(userId)`:
 ### Execution
 
 - `userId: null` -> host, all admin tools (`Bash(*) Read Write Edit Glob Grep WebSearch WebFetch Task`)
-- `userId: <id>` -> user's container, same allowed tools
+- `userId: <id>` -> user's container, all sandbox tools (`--dangerously-skip-permissions`)
 
 ### Behavior
 

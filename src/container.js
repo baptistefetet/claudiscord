@@ -1,7 +1,7 @@
 const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { DATA_DIR, DOCKER_IMAGE, CONTAINER_MEMORY, CONTAINER_CPUS, CLAUDE_TIMEOUT_MS, DOCKER_CMD_TIMEOUT, ALLOWED_TOOLS } = require('./config');
+const { DATA_DIR, DOCKER_IMAGE, CONTAINER_MEMORY, CONTAINER_CPUS, CLAUDE_TIMEOUT_MS, DOCKER_CMD_TIMEOUT, ALLOWED_TOOLS, DISALLOWED_TOOLS } = require('./config');
 const { getDefaultClaudeMd } = require('./prompts');
 const { buildClaudeArgs, spawnWithTimeout, parseClaudeOutput } = require('./claude');
 const log = require('./logger');
@@ -119,6 +119,7 @@ async function executeInContainer(userId, prompt, options = {}) {
 		sessionId = null,
 		systemPrompt = null,
 		allowedTools = ALLOWED_TOOLS,
+		disallowedTools = DISALLOWED_TOOLS,
 		outputFormat = 'json',
 		timeoutMs = CLAUDE_TIMEOUT_MS,
 	} = options;
@@ -130,7 +131,9 @@ async function executeInContainer(userId, prompt, options = {}) {
 		sessionId,
 		systemPrompt,
 		allowedTools,
+		disallowedTools,
 		outputFormat,
+		extraArgs: ['--dangerously-skip-permissions'],
 	});
 
 	const label = `Container [${name}]`;
@@ -163,7 +166,9 @@ async function executeInContainer(userId, prompt, options = {}) {
 			sessionId: null,
 			systemPrompt,
 			allowedTools,
+			disallowedTools,
 			outputFormat,
+			extraArgs: ['--dangerously-skip-permissions'],
 		});
 		try {
 			result = await spawnWithTimeout(
