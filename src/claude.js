@@ -1,7 +1,7 @@
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { CLAUDE_BIN, CLAUDE_TIMEOUT_MS, ALLOWED_TOOLS, DISALLOWED_TOOLS } = require('./config');
+const { CLAUDE_BIN, CLAUDE_TIMEOUT_MS, ALLOWED_TOOLS } = require('./config');
 const { getSystemPrompt } = require('./prompts');
 const log = require('./logger');
 
@@ -20,7 +20,6 @@ function buildClaudeArgs(prompt, options = {}) {
 		sessionId = null,
 		systemPrompt = null,
 		allowedTools = ALLOWED_TOOLS,
-		disallowedTools = DISALLOWED_TOOLS,
 		model = 'opus',
 		outputFormat = 'json',
 		extraArgs = [],
@@ -38,7 +37,6 @@ function buildClaudeArgs(prompt, options = {}) {
 	args.push('--output-format', outputFormat);
 	if (outputFormat === 'stream-json') args.push('--verbose');
 	args.push('--allowedTools', allowedTools);
-	args.push('--disallowedTools', disallowedTools);
 	args.push('--model', model);
 	args.push('--', prompt);
 
@@ -232,12 +230,11 @@ async function executeClaudeCommand(prompt, options = {}) {
 		sessionId = null,
 		systemPrompt = getSystemPrompt(),
 		allowedTools = ALLOWED_TOOLS,
-		disallowedTools = DISALLOWED_TOOLS,
 		outputFormat = 'json',
 		timeoutMs = CLAUDE_TIMEOUT_MS,
 	} = options;
 
-	const spawnOpts = { systemPrompt, allowedTools, disallowedTools, outputFormat };
+	const spawnOpts = { systemPrompt, allowedTools, outputFormat };
 	const isStreamJson = outputFormat === 'stream-json';
 
 	log.info(`Spawning claude: ${sessionId ? `resume ${sessionId}` : 'new session'}, prompt length: ${prompt.length}, format: ${outputFormat}`);
