@@ -20,6 +20,12 @@ To view the list of scheduled jobs, simply read this file — it always contains
 Minimal example:
 [{"id":"weather","prompt":"Give me the weather in Lyon","cron":"0 8 * * *","enabled":true,"notify":true,"remaining":0,"created":"2026-01-01T00:00:00Z","lastRun":null,"description":"Daily weather"}]`;
 
+const CLAUDE_CODE_CLI_PROMPT = `--- CLAUDE_CODE_CLI ---
+Claude Code CLI is executed with \`claude -p\` in non-interactive mode.
+Do not rely on interactive confirmations, prompts, menus, or any workflow that requires user input during execution.
+All tasks must be started in the foreground and fully completed before you return control to the user. Do not start detached/background work with &, nohup, disown, screen, tmux, or similar methods.
+Only reply once everything requested is actually finished, unless you explicitly use the scheduling system described below.`;
+
 const DISABLED_SKILLS_PROMPT = `--- Disabled skills ---
 The following skills are internal to Claude Code CLI and unavailable through the Discord bot. Never use or mention them to the user: loop, keybindings-help, schedule.`;
 
@@ -31,7 +37,8 @@ NEVER restart the claudiscord service (systemctl restart claudiscord, systemctl 
 
 const SANDBOX_ENV_PROMPT = `--- Environment ---
 You have access to development tools (Bash, files, web).
-Your workspace is /home/claude. This is the only persistent directory (data survives restarts). Everything else (/, /tmp, etc.) is ephemeral and will be lost on container rebuild.`;
+Your workspace is /home/claude. This is the only persistent directory (data survives restarts). Everything else (/, /tmp, etc.) is ephemeral and will be lost on container rebuild.
+You are not root on this machine. Avoid software installations or system changes that may require root privileges. If such an operation is necessary, warn the user first and do not attempt it without telling them.`;
 
 const JOB_INTRO = (jobId, today) => `This is a scheduled task for a Discord bot. Job: "${jobId}". Today's date: ${today}.`;
 
@@ -61,6 +68,7 @@ function getSystemPrompt({ botName, userName } = {}) {
 	return [
 		ADMIN_INTRO(identity, interlocutor, today),
 		NO_RESTART_PROMPT,
+		CLAUDE_CODE_CLI_PROMPT,
 		SCHEDULING_PROMPT(JOBS_FILE),
 		DISABLED_SKILLS_PROMPT,
 		DISCORD_FORMATTING_PROMPT,
@@ -74,6 +82,7 @@ function getSandboxSystemPrompt({ botName, userName } = {}) {
 	return [
 		SANDBOX_INTRO(identity, interlocutor, today),
 		SANDBOX_ENV_PROMPT,
+		CLAUDE_CODE_CLI_PROMPT,
 		SCHEDULING_PROMPT(SANDBOX_JOBS_PATH),
 		DISABLED_SKILLS_PROMPT,
 		DISCORD_FORMATTING_PROMPT,
