@@ -114,40 +114,19 @@ function killClaudeInContainer(name, label) {
 	}
 }
 
-async function executeInContainer(userId, prompt, options = {}) {
-	const {
-		sessionId = null,
-		systemPrompt = null,
-		allowedTools = ALLOWED_TOOLS,
-		disallowedTools = DISALLOWED_TOOLS,
-		outputFormat = 'json',
+async function executeClaudeInContainer(name, prompt, claudeOptions, {
 		timeoutMs = CLAUDE_TIMEOUT_MS,
-	} = options;
-
-	ensureContainer(userId);
-	const name = containerName(userId);
-
-	const claudeArgs = buildClaudeArgs(prompt, {
-		sessionId,
-		systemPrompt,
-		allowedTools,
-		disallowedTools,
-		outputFormat,
-		extraArgs: ['--dangerously-skip-permissions'],
-	});
-
-	const label = `Container [${name}]`;
-	const isStreamJson = outputFormat === 'stream-json';
-	log.info(`${label}: ${sessionId ? `resume ${sessionId}` : 'new session'}, prompt length: ${prompt.length}`);
-
-	// First attempt
-	let result;
+		label = `Container [${name}]`,
+		streamJson = false,
+	} = {}) {
+	const claudeArgs = buildClaudeArgs(prompt, claudeOptions);
 	try {
-		result = await spawnWithTimeout(
+		return await spawnWithTimeout(
 			'docker', ['exec', '-i', name, 'claude', ...claudeArgs],
 			{
-				timeoutMs, label,
-				streamJson: isStreamJson,
+				timeoutMs,
+				label,
+				streamJson,
 				onEarlyKill: () => killClaudeInContainer(name, label),
 			},
 		);
@@ -158,33 +137,46 @@ async function executeInContainer(userId, prompt, options = {}) {
 		}
 		throw err;
 	}
+}
+
+async function executeInContainer(userId, prompt, {
+		sessionId = null,
+		systemPrompt = null,
+		allowedTools = ALLOWED_TOOLS,
+		disallowedTools = DISALLOWED_TOOLS,
+		outputFormat = 'json',
+		timeoutMs = CLAUDE_TIMEOUT_MS,
+	} = {}) {
+	ensureContainer(userId);
+	const name = containerName(userId);
+	const claudeOptions = {
+		sessionId,
+		systemPrompt,
+		allowedTools,
+		disallowedTools,
+		outputFormat,
+		extraArgs: ['--dangerously-skip-permissions'],
+	};
+
+	const label = `Container [${name}]`;
+	const isStreamJson = outputFormat === 'stream-json';
+	log.info(`${label}: ${sessionId ? `resume ${sessionId}` : 'new session'}, prompt length: ${prompt.length}`);
+
+	// First attempt
+	let result = await executeClaudeInContainer(name, prompt, claudeOptions, {
+		timeoutMs,
+		label,
+		streamJson: isStreamJson,
+	});
 
 	// Fallback: if resume failed, retry with new session
 	if (result.code !== 0 && sessionId) {
 		log.warn(`${label} resume failed (exit ${result.code}), retrying with new session...`);
-		const retryArgs = buildClaudeArgs(prompt, {
-			sessionId: null,
-			systemPrompt,
-			allowedTools,
-			disallowedTools,
-			outputFormat,
-			extraArgs: ['--dangerously-skip-permissions'],
+		result = await executeClaudeInContainer(name, prompt, { ...claudeOptions, sessionId: null }, {
+			timeoutMs,
+			label,
+			streamJson: isStreamJson,
 		});
-		try {
-			result = await spawnWithTimeout(
-				'docker', ['exec', '-i', name, 'claude', ...retryArgs],
-				{
-					timeoutMs, label,
-					streamJson: isStreamJson,
-					onEarlyKill: () => killClaudeInContainer(name, label),
-				},
-			);
-		} catch (err) {
-			if (err.code === 124) {
-				killClaudeInContainer(name, label);
-			}
-			throw err;
-		}
 	}
 
 	if (result.code !== 0) {
