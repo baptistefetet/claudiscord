@@ -91,7 +91,7 @@ Claude Code's harness blocks `sleep` commands over 2 seconds in foreground Bash 
 
 Files:
 - `claude/wait-background.sh` — hook template (seeded by `ensureUserStorage`)
-- `claude/sandbox-settings.json` — settings template registering the hook (660s timeout)
+- `claude/settings.json` — settings template registering the hook (660s timeout)
 - User volume: `~/.claude/hooks/wait-background.sh` + `~/.claude/settings.json`
 
 **Note**: the output path encoding replaces every `/` with `-` including the leading one (`/home/claude` → `-home-claude`).

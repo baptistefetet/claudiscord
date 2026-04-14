@@ -64,7 +64,7 @@ function ensureUserStorage(userId) {
 	// Seed settings.json with hook config
 	const settingsFile = path.join(claudeDir, 'settings.json');
 	if (!fs.existsSync(settingsFile)) {
-		fs.copyFileSync(path.join(__dirname, '..', 'claude', 'sandbox-settings.json'), settingsFile);
+		fs.copyFileSync(path.join(__dirname, '..', 'claude', 'settings.json'), settingsFile);
 		log.info(`Created settings.json for user ${userId}`);
 	}
 
