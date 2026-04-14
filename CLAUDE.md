@@ -90,8 +90,8 @@ Claude Code's harness blocks `sleep` commands over 2 seconds in foreground Bash 
 **Workaround**: a PostToolUse hook (`wait-background.sh`) intercepts Bash tool results containing a `backgroundTaskId`, reconstructs the output file path (`/tmp/claude-{UID}/{cwd-encoded}/{session_id}/tasks/{taskId}.output`), and blocks (polling every 2s) until the file has content. Claude Code waits for the hook to finish before returning control to the model, so the background task completes and the model receives the actual output.
 
 Files:
-- `sandbox/wait-background.sh` — hook template (seeded by `ensureUserStorage`)
-- `sandbox/settings.json` — settings template registering the hook (660s timeout)
+- `scripts/wait-background.sh` — hook template (seeded by `ensureUserStorage`)
+- `scripts/sandbox-settings.json` — settings template registering the hook (660s timeout)
 - User volume: `~/.claude/hooks/wait-background.sh` + `~/.claude/settings.json`
 
 **Note**: the output path encoding replaces every `/` with `-` including the leading one (`/home/claude` → `-home-claude`).
