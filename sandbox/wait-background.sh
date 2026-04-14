@@ -4,13 +4,21 @@
 
 INPUT=$(cat)
 
-# Only act on background tasks (check for "run_in_background": true in tool_input)
-echo "$INPUT" | grep -q '"run_in_background"' || exit 0
-echo "$INPUT" | grep -q '"run_in_background": *true' || exit 0
+# Only act on background tasks
+echo "$INPUT" | grep -q '"run_in_background" *: *true' || exit 0
 
-# Extract the output file path from the tool result
-OUTPUT_PATH=$(echo "$INPUT" | grep -oP 'Output is being written to: \K\S+')
-[ -z "$OUTPUT_PATH" ] && exit 0
+# Extract backgroundTaskId and session_id to reconstruct the output path
+# tool_response contains: {"backgroundTaskId":"xxx", ...}
+# The output file is at: /tmp/claude-{UID}/{cwd-encoded}/{session_id}/tasks/{taskId}.output
+TASK_ID=$(echo "$INPUT" | grep -oP '"backgroundTaskId" *: *"\K[^"]+')
+SESSION_ID=$(echo "$INPUT" | grep -oP '"session_id" *: *"\K[^"]+')
+CWD=$(echo "$INPUT" | grep -oP '"cwd" *: *"\K[^"]+')
+[ -z "$TASK_ID" ] || [ -z "$SESSION_ID" ] && exit 0
+
+# Reconstruct path: CWD is encoded by replacing / with -  (leading / becomes -)
+CWD_ENCODED=$(echo "$CWD" | sed 's|/|-|g')
+UID_NUM=$(id -u)
+OUTPUT_PATH="/tmp/claude-${UID_NUM}/${CWD_ENCODED}/${SESSION_ID}/tasks/${TASK_ID}.output"
 
 # Wait for output (poll every 2s, max 10 minutes)
 ELAPSED=0
@@ -21,7 +29,6 @@ done
 
 if [ -s "$OUTPUT_PATH" ]; then
   RESULT=$(cat "$OUTPUT_PATH")
-  # Escape for JSON: backslashes, quotes, newlines, tabs
   RESULT=$(printf '%s' "$RESULT" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g' | awk '{printf "%s\\n", $0}' | sed '$ s/\\n$//')
   printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"Background task completed. Output:\\n%s"}}\n' "$RESULT"
 else
