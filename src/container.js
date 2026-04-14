@@ -51,6 +51,23 @@ function ensureUserStorage(userId) {
 	const claudeDir = path.join(userHome, '.claude');
 	fs.mkdirSync(claudeDir, { recursive: true });
 
+	// Seed hooks: wait-background.sh blocks until run_in_background tasks complete
+	const hooksDir = path.join(claudeDir, 'hooks');
+	const hookScript = path.join(hooksDir, 'wait-background.sh');
+	if (!fs.existsSync(hookScript)) {
+		fs.mkdirSync(hooksDir, { recursive: true });
+		fs.copyFileSync(path.join(__dirname, '..', 'sandbox', 'wait-background.sh'), hookScript);
+		fs.chmodSync(hookScript, 0o755);
+		log.info(`Created wait-background.sh hook for user ${userId}`);
+	}
+
+	// Seed settings.json with hook config
+	const settingsFile = path.join(claudeDir, 'settings.json');
+	if (!fs.existsSync(settingsFile)) {
+		fs.copyFileSync(path.join(__dirname, '..', 'sandbox', 'settings.json'), settingsFile);
+		log.info(`Created settings.json for user ${userId}`);
+	}
+
 	// Ensure .claudiscord dir exists for scheduled jobs
 	const claudiscordDir = path.join(userHome, '.claudiscord');
 	fs.mkdirSync(claudiscordDir, { recursive: true });
