@@ -31,7 +31,8 @@ Scheduled jobs
 index.js              # Entry point, Discord handler, mode routing, shutdown
 Dockerfile            # Sandbox image (node:22-slim + Claude CLI + user claude)
 src/
-  config.js           # .env + constants + system prompts + Docker config
+  config.js           # .env + constants + Docker config
+  prompts.js          # System prompts (admin, sandbox, job) + default CLAUDE.md
   logger.js           # Logging to stdout/stderr (journald)
   discord.js          # Discord client, sendDM, splitMessage, typing indicator
   claude.js           # Spawn Claude CLI on host, DM mutex, job locks
@@ -39,6 +40,11 @@ src/
   sessions.js         # In-memory map + persistence to sessions.json (sessions + adminMode)
   scheduler.js        # node-cron, auto-reload, executeJob, remaining counter
   commands.js         # /clear, /admin, /sandbox, /login, /status, /upgrade
+claude/
+  wait-background.sh  # PostToolUse hook: blocks until background tasks complete
+  settings.json       # Claude Code settings template (hooks config)
+scripts/
+  rebuild-sandbox.sh  # Rebuild Docker sandbox image
 sessions.json         # { adminMode, sessions: { userId: sessionId } } (gitignored)
 scheduled-jobs.json   # Scheduled jobs array (gitignored)
 .env                  # AUTHORIZED_USER_ID, CLAUDE_BIN, DISCORD_TOKEN, DATA_DIR
