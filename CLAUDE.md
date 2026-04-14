@@ -83,6 +83,21 @@ DATA_DIR/
         scheduled-jobs.json  # User's scheduled jobs
 ```
 
+### Background task hook workaround
+
+Claude Code's harness blocks `sleep` commands over 2 seconds in foreground Bash and returns an error suggesting `run_in_background: true`. The model follows this suggestion, gets back a background task ID, and immediately does `end_turn` — at which point claudiscord kills the process and the background task never completes.
+
+**Workaround**: a PostToolUse hook (`wait-background.sh`) intercepts Bash tool results containing a `backgroundTaskId`, reconstructs the output file path (`/tmp/claude-{UID}/{cwd-encoded}/{session_id}/tasks/{taskId}.output`), and blocks (polling every 2s) until the file has content. Claude Code waits for the hook to finish before returning control to the model, so the background task completes and the model receives the actual output.
+
+Files:
+- `sandbox/wait-background.sh` — hook template (seeded by `ensureUserStorage`)
+- `sandbox/settings.json` — settings template registering the hook (660s timeout)
+- User volume: `~/.claude/hooks/wait-background.sh` + `~/.claude/settings.json`
+
+**Note**: the output path encoding replaces every `/` with `-` including the leading one (`/home/claude` → `-home-claude`).
+
+**TODO**: Remove if Claude Code adds a way to disable the `run_in_background` suggestion or to keep the process alive until background tasks complete.
+
 ### Skills symlink workaround
 
 Claude Code has a hardcoded protection that blocks all tool writes (Write, Edit, Bash) to `~/.claude/` even with `--dangerously-skip-permissions` ([#37157](https://github.com/anthropics/claude-code/issues/37157)). The exemption list only includes `.claude/commands` and `.claude/agents`, not `.claude/skills` (bug). This prevents sandbox users from creating or editing skills.
