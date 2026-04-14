@@ -56,7 +56,7 @@ function ensureUserStorage(userId) {
 	const hookScript = path.join(hooksDir, 'wait-background.sh');
 	if (!fs.existsSync(hookScript)) {
 		fs.mkdirSync(hooksDir, { recursive: true });
-		fs.copyFileSync(path.join(__dirname, '..', 'scripts', 'wait-background.sh'), hookScript);
+		fs.copyFileSync(path.join(__dirname, '..', 'claude', 'wait-background.sh'), hookScript);
 		fs.chmodSync(hookScript, 0o755);
 		log.info(`Created wait-background.sh hook for user ${userId}`);
 	}
@@ -64,7 +64,7 @@ function ensureUserStorage(userId) {
 	// Seed settings.json with hook config
 	const settingsFile = path.join(claudeDir, 'settings.json');
 	if (!fs.existsSync(settingsFile)) {
-		fs.copyFileSync(path.join(__dirname, '..', 'scripts', 'sandbox-settings.json'), settingsFile);
+		fs.copyFileSync(path.join(__dirname, '..', 'claude', 'sandbox-settings.json'), settingsFile);
 		log.info(`Created settings.json for user ${userId}`);
 	}
 
