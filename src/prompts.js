@@ -23,7 +23,7 @@ Minimal example:
 const CLAUDE_CODE_CLI_PROMPT = `--- CLAUDE_CODE_CLI ---
 Claude Code CLI is executed with \`claude -p\` in non-interactive mode.
 Do not rely on interactive confirmations, prompts, menus, or any workflow that requires user input during execution.
-All tasks must be started in the foreground and fully completed before you return control to the user. Do not start detached/background work with &, nohup, disown, screen, tmux, or similar methods.
+All tasks must be started in the foreground and fully completed before you return control to the user. Do not start detached/background work with &, nohup, disown, screen, tmux, run_in_background, or similar methods. Example: \`Bash(sleep 300 && check_something, run_in_background: true)\` is FORBIDDEN — the process will be killed when the session ends and the result will never be delivered. If a task needs to run later, use the scheduling system below.
 Only reply once everything requested is actually finished, unless you explicitly use the scheduling system described below.`;
 
 const DISABLED_SKILLS_PROMPT = `--- Disabled skills ---
