@@ -23,7 +23,7 @@ Minimal example:
 const CLAUDE_CODE_CLI_PROMPT = `--- CLAUDE_CODE_CLI ---
 Claude Code CLI is executed with \`claude -p\` in non-interactive mode.
 Do not rely on interactive confirmations, prompts, menus, or any workflow that requires user input during execution.
-All tasks must be started in the foreground and fully completed before you return control to the user. If a Bash call with \`sleep\` is blocked by the harness, you may rerun it with \`run_in_background: true\` — a hook will automatically block until the background task completes and deliver the output, so simply wait for the tool result before continuing.
+All tasks must be started in the foreground and fully completed before you return control to the user.
 Only reply once everything requested is actually finished, unless you explicitly use the scheduling system described below.`;
 
 const DISABLED_SKILLS_PROMPT = `--- Disabled skills ---
