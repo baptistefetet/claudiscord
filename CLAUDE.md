@@ -39,8 +39,9 @@ src/
   claude.js           # Host Claude CLI execution + host mutex
   container.js        # Docker: ensureImage, ensureContainer, executeInContainer, credentials
   executor.js         # Route host/container Claude execution from userId
+  jobs-store.js       # Central jobs file + sandbox merge/sync helpers
   sessions.js         # In-memory map + persistence to sessions.json (sessions + adminMode)
-  scheduler.js        # node-cron, auto-reload, executeJob, job locks, remaining counter
+  scheduler.js        # node-cron, auto-reload, executeJob, job locks
   commands.js         # /clear, /admin, /sandbox, /login, /status, /upgrade
 claude/
   wait-background.sh  # PostToolUse hook: blocks until background tasks complete
@@ -176,7 +177,7 @@ The central file is `scheduled-jobs.json` (admin). Sandbox users write to `/home
 
 ### Sandbox merge
 
-After each Claude execution in a container, `mergeUserJobs(userId)`:
+After each successful sandbox Claude execution, `mergeUserJobs(userId)`:
 1. Reads `DATA_DIR/{userId}/home/.claudiscord/scheduled-jobs.json`
 2. Validates each job (required fields, valid cron). Cleans the file if invalid.
 3. Compares with the user's jobs in the central file:

@@ -4,6 +4,7 @@ const log = require('./src/logger');
 const sessions = require('./src/sessions');
 const { ensureImage } = require('./src/container');
 const { executeForUser } = require('./src/executor');
+const { mergeUserJobs } = require('./src/jobs-store');
 const { createClient, login, splitMessage, startTypingIndicator } = require('./src/discord');
 const { handleCommand } = require('./src/commands');
 const scheduler = require('./src/scheduler');
@@ -52,6 +53,13 @@ client.on(Events.MessageCreate, async message => {
 		};
 		const targetUserId = isAdminDm ? null : userId;
 		const result = await executeForUser(targetUserId, content, dmOptions);
+		if (targetUserId != null) {
+			try {
+				mergeUserJobs(targetUserId);
+			} catch (err) {
+				log.warn(`Failed to merge jobs for user ${targetUserId}:`, err.message);
+			}
+		}
 
 		stopTyping();
 		stopTyping = null;

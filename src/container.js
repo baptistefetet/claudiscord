@@ -209,14 +209,6 @@ async function executeInContainer(userId, prompt, {
 		throw Object.assign(new Error(errMsg), { code: result.code });
 	}
 
-	// Merge user scheduled jobs after successful execution
-	try {
-		const { mergeUserJobs } = require('./scheduler');
-		mergeUserJobs(userId);
-	} catch (err) {
-		log.warn(`Failed to merge jobs for user ${userId}:`, err.message);
-	}
-
 	const claudeHome = path.join(DATA_DIR, userId, 'home');
 	return parseClaudeOutput(result.stdout, outputFormat, label, claudeHome);
 }
