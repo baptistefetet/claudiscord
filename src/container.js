@@ -161,6 +161,8 @@ async function executeInContainer(userId, prompt, {
 		systemPrompt = null,
 		allowedTools = ALLOWED_TOOLS,
 		disallowedTools = DISALLOWED_TOOLS,
+		model = null,
+		effort = null,
 		outputFormat = 'json',
 		timeoutMs = CLAUDE_TIMEOUT_MS,
 	} = {}) {
@@ -171,6 +173,8 @@ async function executeInContainer(userId, prompt, {
 		systemPrompt,
 		allowedTools,
 		disallowedTools,
+		model,
+		effort,
 		outputFormat,
 		extraArgs: ['--dangerously-skip-permissions'],
 	};

@@ -8,20 +8,21 @@ See `README.md` for installation, setup, configuration, and Discord commands ref
 
 ```
 DM (sandbox mode, default)
-  -> executeInContainerQueued(userId, prompt) -> docker exec -> claude -p -> Discord
+  -> executeForUser(userId, prompt) -> user's container -> claude -p -> Discord
 
 DM (admin mode, via /admin and /sandbox)
-  -> executeDM(prompt) -> host spawn (direct CLI)
+  -> executeForUser(null, prompt) -> host -> claude -p -> Discord
 
 Scheduled jobs
-  -> userId: null  -> executeClaudeCommand() -> host
-  -> userId: <id>  -> executeInContainerQueued() -> user's container
+  -> executeForUser(userId, prompt)
+     -> userId: null  -> host
+     -> userId: <id>  -> user's container
 ```
 
 - DM: prompt goes to Claude CLI, response sent back to Discord
 - Jobs: `node-cron` triggers `executeJob()`, output sent via DM if `notify: true`
 - Sessions: `sessions.json` stores session IDs only (no message history) + admin mode flag
-- Admin DM mutex: single Claude at a time for host DMs (in-memory queue)
+- Host mutex: single Claude at a time for host executions (DMs and host jobs)
 - Sandbox mutex: one lock per userId (Map of Promise queues), concurrent across users
 - Job mutex: one lock per job ID (in-memory Set)
 
@@ -35,10 +36,11 @@ src/
   prompts.js          # System prompts (admin, sandbox, job) + default CLAUDE.md
   logger.js           # Logging to stdout/stderr (journald)
   discord.js          # Discord client, sendDM, splitMessage, typing indicator
-  claude.js           # Spawn Claude CLI on host, DM mutex, job locks
+  claude.js           # Host Claude CLI execution + host mutex
   container.js        # Docker: ensureImage, ensureContainer, executeInContainer, credentials
+  executor.js         # Route host/container Claude execution from userId
   sessions.js         # In-memory map + persistence to sessions.json (sessions + adminMode)
-  scheduler.js        # node-cron, auto-reload, executeJob, remaining counter
+  scheduler.js        # node-cron, auto-reload, executeJob, job locks, remaining counter
   commands.js         # /clear, /admin, /sandbox, /login, /status, /upgrade
 claude/
   wait-background.sh  # PostToolUse hook: blocks until background tasks complete
@@ -137,7 +139,8 @@ Existing containers must be removed first (they use the old image). They are rec
 - `--allowedTools` depends on context (admin on host, sandbox in container)
 - `--disallowedTools` blocks tools that shouldn't be available (CronCreate, Monitor, etc.)
 - `--dangerously-skip-permissions` in sandbox (the container IS the sandbox)
-- `--model opus`
+- DMs: `--model opus --effort max`
+- Scheduled jobs: `--model sonnet --effort high`
 - stdin closed immediately (`child.stdin.end()`)
 - Host cwd: `/root` (auto-loads `/root/CLAUDE.md`)
 - Sandbox cwd: `/home/claude` (loads the volume's CLAUDE.md)

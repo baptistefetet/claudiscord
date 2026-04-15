@@ -1,9 +1,9 @@
-const { AUTHORIZED_USER_ID, ALLOWED_TOOLS } = require('./src/config');
+const { AUTHORIZED_USER_ID, ALLOWED_TOOLS, DM_MODEL, DM_EFFORT } = require('./src/config');
 const { getSystemPrompt, getSandboxSystemPrompt } = require('./src/prompts');
 const log = require('./src/logger');
 const sessions = require('./src/sessions');
-const { executeDM } = require('./src/claude');
-const { executeInContainerQueued, ensureImage } = require('./src/container');
+const { ensureImage } = require('./src/container');
+const { executeForUser } = require('./src/executor');
 const { createClient, login, splitMessage, startTypingIndicator } = require('./src/discord');
 const { handleCommand } = require('./src/commands');
 const scheduler = require('./src/scheduler');
@@ -39,26 +39,19 @@ client.on(Events.MessageCreate, async message => {
 		const sessionId = sessions.getSessionId(userId);
 		const botName = client.user.displayName;
 		const userName = message.author.displayName;
-
-		let result;
-
-		if (userId === AUTHORIZED_USER_ID && sessions.isAdminMode()) {
-			// Admin mode: spawn on host (original behavior)
-			result = await executeDM(content, {
-				sessionId,
-				systemPrompt: getSystemPrompt({ botName, userName }),
-				allowedTools: ALLOWED_TOOLS,
-				outputFormat: 'stream-json',
-			});
-		} else {
-			// Sandbox mode: execute in container
-			result = await executeInContainerQueued(userId, content, {
-				sessionId,
-				systemPrompt: getSandboxSystemPrompt({ botName, userName }),
-				allowedTools: ALLOWED_TOOLS,
-				outputFormat: 'stream-json',
-			});
-		}
+		const isAdminDm = userId === AUTHORIZED_USER_ID && sessions.isAdminMode();
+		const dmOptions = {
+			sessionId,
+			systemPrompt: isAdminDm
+				? getSystemPrompt({ botName, userName })
+				: getSandboxSystemPrompt({ botName, userName }),
+			allowedTools: ALLOWED_TOOLS,
+			model: DM_MODEL,
+			effort: DM_EFFORT,
+			outputFormat: 'stream-json',
+		};
+		const targetUserId = isAdminDm ? null : userId;
+		const result = await executeForUser(targetUserId, content, dmOptions);
 
 		stopTyping();
 		stopTyping = null;

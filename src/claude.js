@@ -5,11 +5,8 @@ const { CLAUDE_BIN, CLAUDE_TIMEOUT_MS, ALLOWED_TOOLS, DISALLOWED_TOOLS } = requi
 const { getSystemPrompt } = require('./prompts');
 const log = require('./logger');
 
-// Mutex for DM requests (one Claude at a time)
-let dmQueue = Promise.resolve();
-
-// Lock set for scheduled jobs (per job ID)
-const jobLocks = new Set();
+// Mutex for host Claude requests (one Claude at a time)
+let hostQueue = Promise.resolve();
 
 /**
  * Build Claude CLI arguments from options.
@@ -21,7 +18,8 @@ function buildClaudeArgs(prompt, options = {}) {
 		systemPrompt = null,
 		allowedTools = ALLOWED_TOOLS,
 		disallowedTools = DISALLOWED_TOOLS,
-		model = 'opus',
+		model = null,
+		effort = null,
 		outputFormat = 'json',
 		extraArgs = [],
 	} = options;
@@ -39,7 +37,8 @@ function buildClaudeArgs(prompt, options = {}) {
 	if (outputFormat === 'stream-json') args.push('--verbose');
 	args.push('--allowedTools', allowedTools);
 	args.push('--disallowedTools', disallowedTools);
-	args.push('--model', model);
+	if (model) args.push('--model', model);
+	if (effort) args.push('--effort', effort);
 	args.push('--', prompt);
 
 	return args;
@@ -233,11 +232,13 @@ async function executeClaudeCommand(prompt, options = {}) {
 		systemPrompt = getSystemPrompt(),
 		allowedTools = ALLOWED_TOOLS,
 		disallowedTools = DISALLOWED_TOOLS,
+		model = null,
+		effort = null,
 		outputFormat = 'json',
 		timeoutMs = CLAUDE_TIMEOUT_MS,
 	} = options;
 
-	const spawnOpts = { systemPrompt, allowedTools, disallowedTools, outputFormat };
+	const spawnOpts = { systemPrompt, allowedTools, disallowedTools, model, effort, outputFormat };
 	const isStreamJson = outputFormat === 'stream-json';
 
 	log.info(`Spawning claude: ${sessionId ? `resume ${sessionId}` : 'new session'}, prompt length: ${prompt.length}, format: ${outputFormat}`);
@@ -268,26 +269,13 @@ async function executeClaudeCommand(prompt, options = {}) {
 }
 
 /**
- * Execute a DM command with mutex (one at a time)
+ * Execute a host Claude command with mutex (used by admin DMs and host jobs).
  */
-function executeDM(prompt, options = {}) {
-	const p = dmQueue.then(() => executeClaudeCommand(prompt, options));
+function executeClaudeCommandQueued(prompt, options = {}) {
+	const p = hostQueue.then(() => executeClaudeCommand(prompt, options));
 	// Update queue regardless of success/failure
-	dmQueue = p.catch(() => {});
+	hostQueue = p.catch(() => {});
 	return p;
 }
 
-/**
- * Try to acquire a job lock. Returns true if acquired.
- */
-function acquireJobLock(jobId) {
-	if (jobLocks.has(jobId)) return false;
-	jobLocks.add(jobId);
-	return true;
-}
-
-function releaseJobLock(jobId) {
-	jobLocks.delete(jobId);
-}
-
-module.exports = { buildClaudeArgs, spawnWithTimeout, parseClaudeOutput, executeClaudeCommand, executeDM, acquireJobLock, releaseJobLock };
+module.exports = { buildClaudeArgs, spawnWithTimeout, parseClaudeOutput, executeClaudeCommandQueued };

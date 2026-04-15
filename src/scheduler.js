@@ -1,10 +1,9 @@
 const fs = require('fs');
 const path = require('path');
 const cron = require('node-cron');
-const { JOBS_FILE, DATA_DIR, SANDBOX_JOBS_PATH, ALLOWED_TOOLS, CLAUDE_TIMEOUT_MS, AUTHORIZED_USER_ID } = require('./config');
+const { JOBS_FILE, DATA_DIR, SANDBOX_JOBS_PATH, ALLOWED_TOOLS, CLAUDE_TIMEOUT_MS, AUTHORIZED_USER_ID, JOB_MODEL, JOB_EFFORT } = require('./config');
 const { getJobSystemPrompt } = require('./prompts');
-const { executeClaudeCommand, acquireJobLock, releaseJobLock } = require('./claude');
-const { executeInContainerQueued } = require('./container');
+const { executeForUser } = require('./executor');
 const { sendDM } = require('./discord');
 const log = require('./logger');
 
@@ -17,8 +16,21 @@ const tasks = new Map();
 /** @type {Map<string, string>} jobId -> lastRun minute string */
 const lastRunMinutes = new Map();
 
+/** Lock set for scheduled jobs (per job ID) */
+const jobLocks = new Set();
+
 let fileWatcher = null;
 let debounceTimer = null;
+
+function acquireJobLock(jobId) {
+	if (jobLocks.has(jobId)) return false;
+	jobLocks.add(jobId);
+	return true;
+}
+
+function releaseJobLock(jobId) {
+	jobLocks.delete(jobId);
+}
 
 // --- Job file I/O ---
 
@@ -225,31 +237,17 @@ async function executeJob(job) {
 	const targetUser = userId || AUTHORIZED_USER_ID;
 
 	try {
-		let output;
-
 		const jobSystemPrompt = getJobSystemPrompt(id);
-
-		if (userId) {
-			// Sandbox job: execute in user's container
-			const { result } = await executeInContainerQueued(userId, fullPrompt, {
-				sessionId: null,
-				systemPrompt: jobSystemPrompt,
-				allowedTools: ALLOWED_TOOLS,
-				outputFormat: 'text',
-				timeoutMs: CLAUDE_TIMEOUT_MS,
-			});
-			output = result;
-		} else {
-			// Host job: execute on host with admin tools
-			const { result } = await executeClaudeCommand(fullPrompt, {
-				sessionId: null,
-				systemPrompt: jobSystemPrompt,
-				allowedTools: ALLOWED_TOOLS,
-				outputFormat: 'text',
-				timeoutMs: CLAUDE_TIMEOUT_MS,
-			});
-			output = result;
-		}
+		const jobOptions = {
+			sessionId: null,
+			systemPrompt: jobSystemPrompt,
+			allowedTools: ALLOWED_TOOLS,
+			model: JOB_MODEL,
+			effort: JOB_EFFORT,
+			outputFormat: 'text',
+			timeoutMs: CLAUDE_TIMEOUT_MS,
+		};
+		const { result: output } = await executeForUser(userId, fullPrompt, jobOptions);
 
 		log.info(`Job '${key}' completed (output: ${output.length} chars)`);
 
