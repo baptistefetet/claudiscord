@@ -176,7 +176,11 @@ function mergeUserJobs(userId) {
 			const mergedJob = { ...userJob, userId };
 			const idx = centralIndex.get(userJob.id);
 			if (idx !== undefined) {
+				// Preserve scheduler-managed fields from central (authoritative source)
 				mergedJob.lastRun = filteredJobs[idx].lastRun;
+				if (typeof filteredJobs[idx].remaining === 'number') {
+					mergedJob.remaining = filteredJobs[idx].remaining;
+				}
 				filteredJobs[idx] = mergedJob;
 				log.info(`Updated job '${userId}:${userJob.id}'`);
 			} else {

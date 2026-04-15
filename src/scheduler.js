@@ -70,13 +70,6 @@ async function executeJob(job) {
 			timeoutMs: CLAUDE_TIMEOUT_MS,
 		};
 		const { result: output } = await executeForUser(userId, fullPrompt, jobOptions);
-		if (userId != null) {
-			try {
-				mergeUserJobs(userId);
-			} catch (syncErr) {
-				log.warn(`Failed to merge jobs for user ${userId}:`, syncErr.message);
-			}
-		}
 
 		log.info(`Job '${key}' completed (output: ${output.length} chars)`);
 
@@ -112,6 +105,14 @@ async function executeJob(job) {
 			recordJobRun(key);
 		} catch (err) {
 			log.error(`Failed to update lastRun for job '${key}':`, err.message);
+		}
+
+		if (userId != null) {
+			try {
+				mergeUserJobs(userId);
+			} catch (syncErr) {
+				log.warn(`Failed to merge jobs for user ${userId}:`, syncErr.message);
+			}
 		}
 
 		releaseJobLock(key);
