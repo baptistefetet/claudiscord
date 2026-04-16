@@ -140,7 +140,7 @@ Existing containers must be removed first (they use the old image). They are rec
 - `--allowedTools` depends on context (admin on host, sandbox in container)
 - `--disallowedTools` blocks tools that shouldn't be available (CronCreate, Monitor, etc.)
 - `--dangerously-skip-permissions` in sandbox (the container IS the sandbox)
-- DMs: `--model opus --effort max`
+- DMs: `--model opus --effort xhigh`
 - Scheduled jobs: `--model sonnet --effort high`
 - stdin closed immediately (`child.stdin.end()`)
 - Host cwd: `/root` (auto-loads `/root/CLAUDE.md`)
