@@ -7,7 +7,12 @@ let client = null;
 function createClient() {
 	client = new Client({
 		partials: [Partials.Channel, Partials.Message],
-		intents: [GatewayIntentBits.DirectMessages],
+		intents: [
+			GatewayIntentBits.Guilds,
+			GatewayIntentBits.GuildMessages,
+			GatewayIntentBits.DirectMessages,
+			GatewayIntentBits.MessageContent,
+		],
 	});
 
 	client.on(Events.Error, err => log.error('Discord error:', err));
@@ -46,12 +51,15 @@ function splitMessage(text, maxLength = DISCORD_MAX_MSG_LENGTH) {
 	return chunks;
 }
 
-async function sendDM(userId, message) {
-	const user = await client.users.fetch(userId);
-	const dm = await user.createDM();
+/**
+ * Send a message to a Discord channel (DM or guild).
+ * Fetches the channel by id and sends chunked content.
+ */
+async function sendToChannel(channelId, message) {
+	const channel = await client.channels.fetch(channelId);
 	const chunks = splitMessage(message, 1900);
 	for (const chunk of chunks) {
-		await dm.send(chunk);
+		await channel.send(chunk);
 	}
 }
 
@@ -62,4 +70,4 @@ function startTypingIndicator(channel) {
 	return () => clearInterval(interval);
 }
 
-module.exports = { createClient, getClient, login, splitMessage, sendDM, startTypingIndicator };
+module.exports = { createClient, getClient, login, splitMessage, sendToChannel, startTypingIndicator };

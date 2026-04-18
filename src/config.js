@@ -1,28 +1,35 @@
+const fs = require('fs');
 const path = require('path');
-require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
+const ENV_PATH = path.resolve(__dirname, '..', '.env');
+require('dotenv').config({ path: ENV_PATH });
 
-const REQUIRED_ENV = ['AUTHORIZED_USER_ID', 'DISCORD_TOKEN', 'CLAUDE_BIN', 'SANDBOX_HOMES_DIR'];
+const REQUIRED_ENV = ['DISCORD_TOKEN', 'CLAUDE_BIN', 'SANDBOX_HOME_DIR'];
 for (const key of REQUIRED_ENV) {
 	if (!process.env[key]) {
 		throw new Error(`Missing required environment variable: ${key}`);
 	}
 }
 
-const AUTHORIZED_USER_ID = process.env.AUTHORIZED_USER_ID;
+// AUTHORIZED_USER_ID is optional: empty means bootstrap-on-first-DM
+let _authorizedUserId = process.env.AUTHORIZED_USER_ID || null;
+function getAuthorizedUserId() { return _authorizedUserId; }
+function isAuthorized(userId) { return !!_authorizedUserId && userId === _authorizedUserId; }
+
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CLAUDE_BIN = process.env.CLAUDE_BIN;
-const SANDBOX_HOMES_DIR = process.env.SANDBOX_HOMES_DIR;
+const SANDBOX_HOME_DIR = process.env.SANDBOX_HOME_DIR;
 
 // --- Paths ---
-// Single source of truth: the jobs file basename and its path relative to a home.
 const CONTAINER_HOME = '/home/claude';
 const JOBS_FILENAME = 'scheduled-jobs.json';
 const JOBS_RELATIVE = path.join('.claudiscord', JOBS_FILENAME);
 
-const CENTRAL_JOBS_FILE = path.resolve(__dirname, '..', JOBS_FILENAME);
+const ADMIN_JOBS_FILE = path.resolve(__dirname, '..', JOBS_FILENAME);
+const SANDBOX_JOBS_FILE = path.join(SANDBOX_HOME_DIR, JOBS_RELATIVE);
 const SESSIONS_FILE = path.resolve(__dirname, '..', 'sessions.json');
 const CONTAINER_JOBS_FILE = path.posix.join(CONTAINER_HOME, JOBS_RELATIVE);
 
+const CONTAINER_NAME = 'claudiscord-sandbox';
 const DOCKER_IMAGE = 'claudiscord-sandbox';
 const CONTAINER_MEMORY = '512m';
 const CONTAINER_CPUS = 1;
@@ -42,14 +49,44 @@ const DM_EFFORT = 'xhigh';
 const JOB_MODEL = 'sonnet';
 const JOB_EFFORT = 'high';
 
+/**
+ * Atomic .env write (tmp + rename). Replaces or appends `KEY=value`.
+ * Also updates process.env and the in-memory AUTHORIZED_USER_ID cache.
+ */
+function writeEnvValue(key, value) {
+	let content = '';
+	try {
+		content = fs.readFileSync(ENV_PATH, 'utf8');
+	} catch (err) {
+		if (err.code !== 'ENOENT') throw err;
+	}
+	const line = `${key}=${value}`;
+	const pattern = new RegExp(`^${key}=.*$`, 'm');
+	if (pattern.test(content)) {
+		content = content.replace(pattern, line);
+	} else {
+		if (content && !content.endsWith('\n')) content += '\n';
+		content += line + '\n';
+	}
+	const tmp = ENV_PATH + '.tmp';
+	fs.writeFileSync(tmp, content, 'utf8');
+	fs.renameSync(tmp, ENV_PATH);
+	process.env[key] = value;
+	if (key === 'AUTHORIZED_USER_ID') _authorizedUserId = value || null;
+}
+
 module.exports = {
-	AUTHORIZED_USER_ID,
+	getAuthorizedUserId,
+	isAuthorized,
+	writeEnvValue,
 	DISCORD_TOKEN,
 	CLAUDE_BIN,
-	SANDBOX_HOMES_DIR,
+	SANDBOX_HOME_DIR,
 	CONTAINER_HOME,
+	CONTAINER_NAME,
 	JOBS_RELATIVE,
-	CENTRAL_JOBS_FILE,
+	ADMIN_JOBS_FILE,
+	SANDBOX_JOBS_FILE,
 	SESSIONS_FILE,
 	CONTAINER_JOBS_FILE,
 	CLAUDE_TIMEOUT_MS,
