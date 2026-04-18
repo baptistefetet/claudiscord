@@ -87,6 +87,7 @@ client.on(Events.MessageCreate, async message => {
 			botName,
 			userName,
 			mode,
+			channelId,
 			channelName,
 			channelTopic,
 			isDM,

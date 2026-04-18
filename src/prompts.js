@@ -51,16 +51,19 @@ const SANDBOX_INTRO = (botName, userName, today) => `Your name is ${botName}. Yo
  * The channel topic is treated as a mini CLAUDE.md that defines the context
  * of the channel (a project, a discussion, ...).
  */
-const CHANNEL_CONTEXT_PROMPT = ({ isDM, channelName, channelTopic }) => {
+const CHANNEL_CONTEXT_PROMPT = ({ isDM, channelId, channelName, channelTopic }) => {
+	const idLine = channelId
+		? `\nChannel ID: ${channelId} (use this value as-is for the \`channelId\` field when you create a scheduled job for this conversation).`
+		: '';
 	if (isDM) {
 		return `--- Context ---
-You are talking to the user in a Discord direct message (DM).`;
+You are talking to the user in a Discord direct message (DM).${idLine}`;
 	}
 	const topicLine = channelTopic
 		? `\nChannel description (treat as context / mini CLAUDE.md for this conversation):\n${channelTopic}`
 		: '';
 	return `--- Context ---
-You are in the Discord channel "${channelName || '<unnamed>'}".${topicLine}`;
+You are in the Discord channel "${channelName || '<unnamed>'}".${idLine}${topicLine}`;
 };
 
 const DEFAULT_CLAUDE_MD = `# Sandbox Claude
@@ -77,6 +80,7 @@ function getSystemPrompt(options = {}) {
 		botName = null,
 		userName = null,
 		mode = 'admin',
+		channelId = null,
 		channelName = null,
 		channelTopic = null,
 		isDM = false,
@@ -91,7 +95,7 @@ function getSystemPrompt(options = {}) {
 	if (!botName) throw new Error('getSystemPrompt requires botName when jobId is not set');
 	if (!userName) throw new Error('getSystemPrompt requires userName when jobId is not set');
 
-	const contextBlock = CHANNEL_CONTEXT_PROMPT({ isDM, channelName, channelTopic });
+	const contextBlock = CHANNEL_CONTEXT_PROMPT({ isDM, channelId, channelName, channelTopic });
 
 	if (mode === 'sandbox') {
 		return [
