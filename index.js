@@ -1,5 +1,5 @@
 const { AUTHORIZED_USER_ID, ALLOWED_TOOLS, DM_MODEL, DM_EFFORT } = require('./src/config');
-const { getSystemPrompt, getSandboxSystemPrompt } = require('./src/prompts');
+const { getSystemPrompt } = require('./src/prompts');
 const log = require('./src/logger');
 const sessions = require('./src/sessions');
 const { ensureImage } = require('./src/container');
@@ -38,14 +38,12 @@ client.on(Events.MessageCreate, async message => {
 
 		const userId = message.author.id;
 		const sessionId = sessions.getSessionId(userId);
-		const botName = client.user.displayName;
-		const userName = message.author.displayName;
+		const botName = client.user.displayName || client.user.username;
+		const userName = message.author.displayName || message.author.username;
 		const isAdminDm = userId === AUTHORIZED_USER_ID && sessions.isAdminMode();
 		const dmOptions = {
 			sessionId,
-			systemPrompt: isAdminDm
-				? getSystemPrompt({ botName, userName })
-				: getSandboxSystemPrompt({ botName, userName }),
+			systemPrompt: getSystemPrompt({ botName, userName, isSandbox: !isAdminDm }),
 			allowedTools: ALLOWED_TOOLS,
 			model: DM_MODEL,
 			effort: DM_EFFORT,

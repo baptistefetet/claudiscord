@@ -42,10 +42,10 @@ You are not root on this machine. Avoid software installations or system changes
 
 const JOB_INTRO = (jobId, today) => `This is a scheduled task for a Discord bot. Job: "${jobId}". Today's date: ${today}.`;
 
-const ADMIN_INTRO = (identity, interlocutor, today) => `${identity}You are the system administrator assistant. ${interlocutor}The user is talking to you via Discord DM. Today's date is: ${today}.
+const ADMIN_DM_INTRO = (botName, userName, today) => `Your name is ${botName}. You are the system administrator assistant. You are talking to ${userName}. The user is talking to you via Discord DM. Today's date is: ${today}.
 You have access to system tools to administer the server.`;
 
-const SANDBOX_INTRO = (identity, interlocutor, today) => `${identity}You are a Claude assistant in an isolated Docker sandbox environment. ${interlocutor}The user is talking to you via Discord DM. Today's date is: ${today}.`;
+const SANDBOX_DM_INTRO = (botName, userName, today) => `Your name is ${botName}. You are a Claude assistant in an isolated Docker sandbox environment. You are talking to ${userName}. The user is talking to you via Discord DM. Today's date is: ${today}.`;
 
 const DEFAULT_CLAUDE_MD = `# Sandbox Claude
 You are in an isolated Docker sandbox environment.
@@ -56,34 +56,42 @@ Customize this file to adapt Claude's behavior to your needs.
 // Builder methods
 // ---------------------------------------------------------------------------
 
-function getJobSystemPrompt(jobId) {
+function getSystemPrompt(options = {}) {
+	const {
+		botName = null,
+		userName = null,
+		isSandbox = false,
+		jobId = null,
+	} = options;
 	const today = new Date().toISOString().slice(0, 10);
-	return [JOB_INTRO(jobId, today), DISCORD_FORMATTING_PROMPT].join('\n\n');
-}
 
-function getSystemPrompt({ botName, userName } = {}) {
-	const today = new Date().toISOString().slice(0, 10);
-	const identity = botName ? `Your name is ${botName}. ` : '';
-	const interlocutor = userName ? `You are talking to ${userName}. ` : '';
+	if (jobId) {
+		return [JOB_INTRO(jobId, today), DISCORD_FORMATTING_PROMPT].join('\n\n');
+	}
+
+	if (!botName) {
+		throw new Error('getSystemPrompt requires botName when jobId is not set');
+	}
+	if (!userName) {
+		throw new Error('getSystemPrompt requires userName when jobId is not set');
+	}
+
+	if (isSandbox) {
+		return [
+			SANDBOX_DM_INTRO(botName, userName, today),
+			SANDBOX_ENV_PROMPT,
+			CLAUDE_CODE_CLI_PROMPT,
+			SCHEDULING_PROMPT(SANDBOX_JOBS_PATH),
+			DISABLED_SKILLS_PROMPT,
+			DISCORD_FORMATTING_PROMPT,
+		].join('\n\n');
+	}
+
 	return [
-		ADMIN_INTRO(identity, interlocutor, today),
+		ADMIN_DM_INTRO(botName, userName, today),
 		NO_RESTART_PROMPT,
 		CLAUDE_CODE_CLI_PROMPT,
 		SCHEDULING_PROMPT(JOBS_FILE),
-		DISABLED_SKILLS_PROMPT,
-		DISCORD_FORMATTING_PROMPT,
-	].join('\n\n');
-}
-
-function getSandboxSystemPrompt({ botName, userName } = {}) {
-	const today = new Date().toISOString().slice(0, 10);
-	const identity = botName ? `Your name is ${botName}. ` : '';
-	const interlocutor = userName ? `You are talking to ${userName}. ` : '';
-	return [
-		SANDBOX_INTRO(identity, interlocutor, today),
-		SANDBOX_ENV_PROMPT,
-		CLAUDE_CODE_CLI_PROMPT,
-		SCHEDULING_PROMPT(SANDBOX_JOBS_PATH),
 		DISABLED_SKILLS_PROMPT,
 		DISCORD_FORMATTING_PROMPT,
 	].join('\n\n');
@@ -93,4 +101,4 @@ function getDefaultClaudeMd() {
 	return DEFAULT_CLAUDE_MD;
 }
 
-module.exports = { getSystemPrompt, getSandboxSystemPrompt, getJobSystemPrompt, getDefaultClaudeMd };
+module.exports = { getSystemPrompt, getDefaultClaudeMd };

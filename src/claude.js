@@ -2,7 +2,6 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { CLAUDE_BIN, CLAUDE_TIMEOUT_MS, ALLOWED_TOOLS, DISALLOWED_TOOLS } = require('./config');
-const { getSystemPrompt } = require('./prompts');
 const log = require('./logger');
 
 // Mutex for host Claude requests (one Claude at a time)
@@ -229,7 +228,7 @@ function parseClaudeOutput(stdout, outputFormat, label = 'Claude', claudeHome = 
 async function executeClaudeCommand(prompt, options = {}) {
 	const {
 		sessionId = null,
-		systemPrompt = getSystemPrompt(),
+		systemPrompt = null,
 		allowedTools = ALLOWED_TOOLS,
 		disallowedTools = DISALLOWED_TOOLS,
 		model = null,
@@ -237,6 +236,10 @@ async function executeClaudeCommand(prompt, options = {}) {
 		outputFormat = 'json',
 		timeoutMs = CLAUDE_TIMEOUT_MS,
 	} = options;
+
+	if (!systemPrompt) {
+		throw new Error('executeClaudeCommand requires systemPrompt');
+	}
 
 	const spawnOpts = { systemPrompt, allowedTools, disallowedTools, model, effort, outputFormat };
 	const isStreamJson = outputFormat === 'stream-json';

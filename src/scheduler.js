@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const cron = require('node-cron');
 const { JOBS_FILE, ALLOWED_TOOLS, CLAUDE_TIMEOUT_MS, AUTHORIZED_USER_ID, JOB_MODEL, JOB_EFFORT } = require('./config');
-const { getJobSystemPrompt } = require('./prompts');
+const { getSystemPrompt } = require('./prompts');
 const { executeForUser } = require('./executor');
 const { loadJobs, jobKey, mergeUserJobs, recordJobRun } = require('./jobs-store');
 const { sendDM } = require('./discord');
@@ -59,7 +59,7 @@ async function executeJob(job) {
 	const targetUser = userId || AUTHORIZED_USER_ID;
 
 	try {
-		const jobSystemPrompt = getJobSystemPrompt(id);
+		const jobSystemPrompt = getSystemPrompt({ jobId: id });
 		const jobOptions = {
 			sessionId: null,
 			systemPrompt: jobSystemPrompt,
