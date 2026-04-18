@@ -1,165 +1,171 @@
 # Claudiscord
 
-Discord DM relay to Claude Code CLI + scheduled job runner. Single Node.js process.
+Single-user Discord relay to Claude Code CLI + scheduled job runner. Single Node.js process.
 
-See `README.md` for installation, setup, configuration, and Discord commands reference.
+See `README.md` for installation, setup and Discord commands reference.
 
 ## Architecture
 
 ```
-DM (sandbox mode, default)
-  -> executeForUser(userId, prompt) -> user's container -> claude -p -> Discord
-
-DM (admin mode, via /admin and /sandbox)
-  -> executeForUser(null, prompt) -> host -> claude -p -> Discord
+Discord message (DM or guild text channel)
+  -> authorization filter (authorized user only)
+  -> command dispatcher (/admin, /sandbox, /clear, /login, …)
+  -> session lookup by channelId
+  -> executeForMode(mode, prompt)       [global queue — one Claude at a time]
+       mode === 'admin'   -> host Claude  -> Discord channel
+       mode === 'sandbox' -> single container -> Discord channel
 
 Scheduled jobs
-  -> executeForUser(userId, prompt)
-     -> userId: null  -> host
-     -> userId: <id>  -> user's container
+  -> node-cron
+  -> executeJob(job)
+  -> executeForMode(job.mode, …)        [same global queue]
+  -> notification sent back to job.channelId
 ```
 
-- DM: prompt goes to Claude CLI, response sent back to Discord
-- Jobs: `node-cron` triggers `executeJob()`, output sent via DM if `notify: true`
-- Sessions: `sessions.json` stores session IDs only (no message history) + admin mode flag
-- Host mutex: single Claude at a time for host executions (DMs and host jobs)
-- Sandbox mutex: one lock per userId (Map of Promise queues), concurrent across users
-- Job mutex: one lock per job ID (in-memory Set)
+- Each Discord channel has its own mode (`admin` / `sandbox`) and its own Claude session. A DM channel is treated exactly like any other channel.
+- The authorized user is stored in `.env` (`AUTHORIZED_USER_ID`). If empty, the first DM the bot receives registers its author.
+- Global queue (`src/queue.js`): every prompt (interactive or scheduled) goes through a single FIFO. `isBusy()` is used to show a one-time "⏳ waiting" hint per channel.
+- Jobs live in two separate files — never merged, never watched:
+  - `scheduled-jobs.json` (project root) for admin jobs
+  - `SANDBOX_HOME_DIR/.claudiscord/scheduled-jobs.json` for sandbox jobs
+- Scheduler reloads both files after each prompt (no `fs.watch`).
 
 ## Files
 
 ```
-index.js              # Entry point, Discord handler, mode routing, shutdown
+index.js              # Entry point: Discord handler, bootstrap, queue wait UX
 Dockerfile            # Sandbox image (node:22-slim + Claude CLI + user claude)
 src/
-  config.js           # .env + constants + Docker config
-  prompts.js          # System prompts (admin, sandbox, job) + default CLAUDE.md
-  logger.js           # Logging to stdout/stderr (journald)
-  discord.js          # Discord client, sendDM, splitMessage, typing indicator
-  claude.js           # Host Claude CLI execution + host mutex
-  container.js        # Docker: ensureImage, ensureContainer, executeInContainer, credentials
-  executor.js         # Route host/container Claude execution from userId
-  jobs-store.js       # Central jobs file + sandbox merge/sync helpers
-  sessions.js         # In-memory map + persistence to sessions.json (sessions + adminMode)
-  scheduler.js        # node-cron, auto-reload, executeJob, job locks
-  commands.js         # /clear, /admin, /sandbox, /login, /status, /upgrade
+  config.js           # .env + writeEnvValue + paths + constants
+  prompts.js          # System prompt builder (per-channel context injection)
+  logger.js           # stdout/stderr logging (journald-friendly)
+  discord.js          # Client, sendToChannel, splitMessage, typing indicator
+  queue.js            # Single global FIFO (runQueued, isBusy)
+  claude.js           # Host Claude CLI execution (no queue — queue is in executor)
+  container.js        # Docker: DOCKER_AVAILABLE, ensureImage/Container, creds
+  executor.js         # executeForMode(mode, prompt, opts) — wraps queue
+  jobs-store.js       # loadAllJobs (admin+sandbox), recordJobRun, jobKey
+  sessions.js         # { channels: { channelId -> { mode, sessionId, lastName } } }
+  scheduler.js        # node-cron, reloadJobs, executeJob, per-key lock
+  commands.js         # /help /clear /status /admin /sandbox /login /upgrade /restart !shell
 claude/
-  wait-background.sh  # PostToolUse hook: blocks until background tasks complete
+  wait-background.sh  # PostToolUse hook: blocks until run_in_background completes
   settings.json       # Claude Code settings template (hooks config)
 scripts/
   rebuild-sandbox.sh  # Rebuild Docker sandbox image
-sessions.json         # { adminMode, sessions: { userId: sessionId } } (gitignored)
-scheduled-jobs.json   # Scheduled jobs array (gitignored)
-.env                  # AUTHORIZED_USER_ID, CLAUDE_BIN, DISCORD_TOKEN, SANDBOX_HOMES_DIR
+sessions.json         # { channels: { channelId -> {…} } } (gitignored)
+scheduled-jobs.json   # Admin scheduled jobs (gitignored)
+.env                  # AUTHORIZED_USER_ID, DISCORD_TOKEN, CLAUDE_BIN, SANDBOX_HOME_DIR
 ```
 
 ## Service
 
 - **Service**: `claudiscord` (`systemctl status claudiscord`)
 - **Logs**: `journalctl -u claudiscord -f`
-- **Dependency**: `docker.service` (Requires + After)
 - **ExecStopPost**: `pkill -f "claude.*-p"` (safety net)
+- **User**: root — required so the bootstrap can rewrite `.env`
 
-## Modes
+## Authorization
 
-- **sandbox** (default): DMs executed in an isolated Docker container
-- **admin**: DMs executed directly on the host (full system access)
-- `/admin` switches to admin mode, `/sandbox` switches to sandbox mode (admin only)
-- Persisted in `sessions.json` (`adminMode` field)
-- Switching mode automatically clears the session (incompatible contexts)
+- `AUTHORIZED_USER_ID` in `.env` identifies the single user allowed to talk to the bot.
+- If empty at startup, the first DM the bot receives writes the author's user ID into `.env`. Guild messages never trigger the bootstrap.
+- Every non-authorized message is silently dropped — no reply, minimal logging.
+- Writing `.env` is atomic (tmp + rename); an in-memory `bootstrapPending` flag prevents a race between concurrent first-DMs.
 
-## Docker Sandbox
+## Modes (per channel)
 
-- **Image**: `claudiscord-sandbox` (local arm64 build, `node:22-slim` + Claude Code)
-- **Container**: `claudiscord-{userId}`, one per user, persistent (`--restart unless-stopped`)
+- `admin` (default) — prompts executed directly on the host with access to system tools
+- `sandbox` — prompts executed inside the Docker container with `--dangerously-skip-permissions`
+- `/admin` and `/sandbox` switch the current channel's mode and clear its session
+- `/sandbox` reports an error and does not switch if Docker is not installed
+- The mode is persisted in `sessions.json`
+
+## Channel context injection
+
+`src/prompts.js` builds the system prompt from `{ mode, channelName, channelTopic, isDM, botName, userName, today }`. The prompt always tells Claude whether it is in a DM or a named guild channel; if the channel has a `topic`, the topic is presented as a mini CLAUDE.md that scopes the conversation.
+
+## Global queue
+
+All executions — interactive prompts and scheduled jobs, admin and sandbox — go through `src/queue.js::runQueued`. Only one Claude process runs at a time. If a new message arrives while something is running, `index.js` sends a one-shot "⏳ En attente du prompt précédent..." notice to the concerned channel. This sequentiality simplifies invariants around concurrent file writes (jobs files, sessions file).
+
+## Docker sandbox (optional)
+
+- **Image**: `claudiscord-sandbox` (local build, `node:22-slim` + Claude CLI)
+- **Container**: `claudiscord-sandbox` (single container, `--restart unless-stopped`)
 - **Limits**: 512 MB RAM, 1 CPU
-- **Volume**: `SANDBOX_HOMES_DIR/{userId}/home` -> `/home/claude`
-- **Network**: bridge (internet access for Claude API)
-- **User**: `claude` (non-root, required for `--dangerously-skip-permissions`)
-- **CMD**: `sleep infinity` (container kept alive, commands via `docker exec`)
-- Containers survive reboots and service restarts
-- User data (credentials, files, CLAUDE.md) persists in volumes
+- **Volume**: `SANDBOX_HOME_DIR -> /home/claude`
+- **Network**: bridge
+- **User in container**: `claude` (non-root)
+- **CMD**: `sleep infinity`; commands run via `docker exec`
+- Docker availability is detected at startup; if `docker --version` fails, `DOCKER_AVAILABLE` becomes `false` and sandbox operations report a friendly error
 
-### Sandbox storage
+### Sandbox storage layout
 
 ```
-SANDBOX_HOMES_DIR/
-  {userId}/
-    home/                    # Mounted as /home/claude in the container
-      CLAUDE.md              # Customizable by the user
-      .claude/               # Auth state (from claude auth login)
-      .claudiscord/          # Internal claudiscord data
-        scheduled-jobs.json  # User's scheduled jobs
+SANDBOX_HOME_DIR/         # = /home/claude in the container
+  CLAUDE.md               # customisable
+  .claude/
+    .credentials.json     # written by /login
+    settings.json         # hooks config (seeded)
+    hooks/wait-background.sh
+  .claudiscord/
+    scheduled-jobs.json   # sandbox jobs
+  skills/                 # symlink workaround (see below)
 ```
 
 ### Background task hook workaround
 
 Claude Code's harness blocks `sleep` commands over 2 seconds in foreground Bash and returns an error suggesting `run_in_background: true`. The model follows this suggestion, gets back a background task ID, and immediately does `end_turn` — at which point claudiscord kills the process and the background task never completes.
 
-**Workaround**: a PostToolUse hook (`wait-background.sh`) intercepts Bash tool results containing a `backgroundTaskId`, reconstructs the output file path (`/tmp/claude-{UID}/{cwd-encoded}/{session_id}/tasks/{taskId}.output`), and blocks (polling every 2s) until the file has content. Claude Code waits for the hook to finish before returning control to the model, so the background task completes and the model receives the actual output.
+**Workaround**: a PostToolUse hook (`wait-background.sh`) intercepts Bash tool results containing a `backgroundTaskId`, reconstructs the output file path (`/tmp/claude-{UID}/{cwd-encoded}/{session_id}/tasks/{taskId}.output`), and blocks (polling every 2s) until the file has content.
 
 Files:
-- `claude/wait-background.sh` — hook template (seeded by `ensureUserStorage`)
+- `claude/wait-background.sh` — hook template (seeded by `ensureStorage()`)
 - `claude/settings.json` — settings template registering the hook (660s timeout)
-- User volume: `~/.claude/hooks/wait-background.sh` + `~/.claude/settings.json`
-
-**Note**: the output path encoding replaces every `/` with `-` including the leading one (`/home/claude` → `-home-claude`).
-
-**TODO**: Remove if Claude Code adds a way to disable the `run_in_background` suggestion or to keep the process alive until background tasks complete.
+- Sandbox volume: `~/.claude/hooks/wait-background.sh` + `~/.claude/settings.json`
 
 ### Skills symlink workaround
 
-Claude Code has a hardcoded protection that blocks all tool writes (Write, Edit, Bash) to `~/.claude/` even with `--dangerously-skip-permissions` ([#37157](https://github.com/anthropics/claude-code/issues/37157)). The exemption list only includes `.claude/commands` and `.claude/agents`, not `.claude/skills` (bug). This prevents sandbox users from creating or editing skills.
+Claude Code has a hardcoded protection that blocks all tool writes (Write, Edit, Bash) to `~/.claude/` even with `--dangerously-skip-permissions` ([#37157](https://github.com/anthropics/claude-code/issues/37157)). The exemption list only includes `.claude/commands` and `.claude/agents`, not `.claude/skills` (bug).
 
-**Workaround**: move `skills/` outside `.claude/` and symlink it back. The path check is string-based and doesn't resolve symlinks, so writes to `/home/claude/skills/` are allowed while Claude Code still reads skills from `~/.claude/skills/` via the symlink.
+**Workaround**: move `skills/` outside `.claude/` and symlink it back. The path check is string-based and doesn't resolve symlinks.
 
-Setup (run from host, per user volume):
+Setup:
 ```bash
-VOLUME=SANDBOX_HOMES_DIR/{userId}/home
+VOLUME=$SANDBOX_HOME_DIR
 mv "$VOLUME/.claude/skills" "$VOLUME/skills"
 ln -s ../skills "$VOLUME/.claude/skills"
 chown -R 1001:1001 "$VOLUME/skills" "$VOLUME/.claude/skills"
 ```
 
-Each user's `CLAUDE.md` instructs the sandbox to write skills to `/home/claude/skills/` instead of `~/.claude/skills/`.
-
-**TODO**: Remove this workaround when the upstream bug is fixed (`.claude/skills` added to the exemption list).
-
 ### Image rebuild
 
 ```bash
 docker build --no-cache -t claudiscord-sandbox .
+docker rm -f claudiscord-sandbox  # next use recreates it (volume preserved)
 ```
 
-Existing containers must be removed first (they use the old image). They are recreated automatically on next use (volumes preserved).
+## Claude CLI usage
 
-## Claude CLI
-
-- `claude -p` with `--output-format json` (DMs) or `text` (jobs)
-- `--resume <sessionId>` for DMs, falls back to new session on failure
-- `--allowedTools` depends on context (admin on host, sandbox in container)
-- `--disallowedTools` blocks tools that shouldn't be available (CronCreate, Monitor, etc.)
+- `claude -p` with `--output-format stream-json` for interactive messages, `text` for jobs
+- `--resume <sessionId>` when the channel has one, fallback to new session on failure
 - `--dangerously-skip-permissions` in sandbox (the container IS the sandbox)
-- DMs: `--model opus --effort xhigh`
-- Scheduled jobs: `--model sonnet --effort high`
-- stdin closed immediately (`child.stdin.end()`)
+- Interactive: `--model opus --effort xhigh`
+- Jobs: `--model sonnet --effort high`
 - Host cwd: `/root` (auto-loads `/root/CLAUDE.md`)
-- Sandbox cwd: `/home/claude` (loads the volume's CLAUDE.md)
-- Timeout: 300s (SIGTERM then SIGKILL after 5s)
+- Sandbox cwd: `/home/claude`
+- Timeout: 1200s (SIGTERM then SIGKILL after 5s)
 
 ## Scheduled jobs
 
-All users (admin and sandbox) can create scheduled jobs.
-
 ### Format
-
-The central file is `scheduled-jobs.json` (admin). Sandbox users write to `/home/claude/.claudiscord/scheduled-jobs.json` in their container; their jobs are automatically merged into the central file after each execution.
 
 ```json
 {
   "id": "check-system",
-  "userId": null,
-  "prompt": "...",
+  "channelId": "1234567890",
+  "channelName": "ops-admin",
+  "prompt": "…",
   "cron": "0 7 * * *",
   "enabled": true,
   "notify": true,
@@ -171,31 +177,34 @@ The central file is `scheduled-jobs.json` (admin). Sandbox users write to `/home
 }
 ```
 
-- `userId`: `null` = admin job (host), Discord user ID = sandbox job (container)
-- `remaining`: execution counter. `0` = infinite (runs forever). `> 0` = decremented after each execution; job is automatically removed when it reaches `0`. Set to `1` for a one-shot job.
-- Unique key: `userId` + `id` (two users can have the same `id`)
+- `channelId` is **required** — it's where the notification is sent. DM channels have an ID too, so a DM-bound job works identically.
+- `channelName` is a display-only snapshot of the channel name at job creation time. The scheduler refreshes it on every run.
+- `remaining`: `0` = infinite, `>0` = decremented each run, job removed when it hits `0`.
+- Unique key: `mode:id` (the mode is implicit from the file the job lives in).
 
-### Sandbox merge
+### Storage
 
-After each successful sandbox Claude execution, `mergeUserJobs(userId)`:
-1. Reads `SANDBOX_HOMES_DIR/{userId}/home/.claudiscord/scheduled-jobs.json`
-2. Validates each job (required fields, valid cron). Cleans the file if invalid.
-3. Compares with the user's jobs in the central file:
-   - New jobs -> added (with `userId` stamped)
-   - Modified jobs -> updated (preserves `lastRun`)
-   - Jobs deleted by the user -> removed from central
-4. Saves the central file. `fs.watch` triggers scheduler reload.
+- **Admin jobs**: `scheduled-jobs.json` at the project root (readable/writable by the host Claude only).
+- **Sandbox jobs**: `SANDBOX_HOME_DIR/.claudiscord/scheduled-jobs.json` (readable/writable by the container; the same path is readable from the host as well since the volume is a bind-mount).
+- **No merge**: an admin prompt only sees admin jobs, a sandbox prompt only sees sandbox jobs. The scheduler loads both files and runs everything.
 
-### Execution
+### Execution & reload
 
-- `userId: null` -> host, all admin tools (`Bash(*) Read Write Edit Glob Grep WebSearch WebFetch Task`)
-- `userId: <id>` -> user's container, all sandbox tools (`--dangerously-skip-permissions`)
+- `src/scheduler.js::reloadJobs()` rebuilds the `node-cron` tasks from both files.
+- Called at startup, after every interactive prompt, and at the end of every scheduled job — so any change to the jobs files is picked up within one prompt.
+- No `fs.watch` — only claudiscord writes to these files (directly via Claude Code), so polling after each prompt is enough.
+- In-memory lock per job key prevents duplicate runs (including the "same wall-clock minute" edge case).
 
-### Behavior
+### Notifications
 
-- `node-cron` for scheduling
-- In-memory lock per job key (`userId:id` or `id` alone for admin)
-- Duplicate protection within the same minute
-- `fs.watch()` on `scheduled-jobs.json` with 2s debounce for auto-reload
-- Ephemeral jobs (no persistent session)
-- If `notify: true`, output sent via DM to the job's `userId` (or admin if `null`). Filtered by `notifyPattern` if present (interpreted as regex, dotall flag `s` enabled).
+- When `notify: true` and the output matches `notifyPattern` (regex, dotall flag `s`, fallback `includes()` on invalid regex), the output is sent to `channelId`.
+- Timeouts and errors are also announced on the channel when `notify: true`.
+
+## Sessions
+
+- `sessions.json` shape:
+  ```json
+  { "channels": { "<channelId>": { "mode": "admin"|"sandbox", "sessionId": "...", "lastName": "..." } } }
+  ```
+- `lastName` is a display snapshot to make `sessions.json` readable during debugging.
+- A full reset is harmless — it only drops Claude session IDs (the next prompt starts a fresh conversation per channel).
