@@ -1,51 +1,58 @@
-const fs = require('fs');
-const path = require('path');
 const cron = require('node-cron');
-const { CENTRAL_JOBS_FILE, ALLOWED_TOOLS, CLAUDE_TIMEOUT_MS, AUTHORIZED_USER_ID, JOB_MODEL, JOB_EFFORT } = require('./config');
+const { ALLOWED_TOOLS, CLAUDE_TIMEOUT_MS, JOB_MODEL, JOB_EFFORT } = require('./config');
 const { getSystemPrompt } = require('./prompts');
-const { executeForUser } = require('./executor');
-const { loadJobs, jobKey, mergeUserJobs, recordJobRun } = require('./jobs-store');
-const { sendDM } = require('./discord');
+const { executeForMode } = require('./executor');
+const { loadAllJobs, jobKey, recordJobRun } = require('./jobs-store');
+const { sendToChannel, getClient } = require('./discord');
 const log = require('./logger');
-
-const JOBS_DIR = path.dirname(CENTRAL_JOBS_FILE);
-const JOBS_BASENAME = path.basename(CENTRAL_JOBS_FILE);
 
 /** @type {Map<string, import('node-cron').ScheduledTask>} */
 const tasks = new Map();
 
-/** @type {Map<string, string>} jobId -> lastRun minute string */
+/** @type {Map<string, string>} jobKey -> lastRun minute string */
 const lastRunMinutes = new Map();
 
-/** Lock set for scheduled jobs (per job ID) */
+/** Lock set for scheduled jobs (per job key) */
 const jobLocks = new Set();
 
-let fileWatcher = null;
-let debounceTimer = null;
-
-function acquireJobLock(jobId) {
-	if (jobLocks.has(jobId)) return false;
-	jobLocks.add(jobId);
+function acquireJobLock(key) {
+	if (jobLocks.has(key)) return false;
+	jobLocks.add(key);
 	return true;
 }
 
-function releaseJobLock(jobId) {
-	jobLocks.delete(jobId);
+function releaseJobLock(key) {
+	jobLocks.delete(key);
 }
 
-// --- Job execution ---
+/**
+ * Fetch the current Discord name of a channel (DM recipient name or guild channel name).
+ * Returns null if the channel can't be resolved.
+ */
+async function fetchChannelName(channelId) {
+	try {
+		const channel = await getClient().channels.fetch(channelId);
+		if (!channel) return null;
+		if (channel.isDMBased?.()) {
+			return channel.recipient?.username || channel.recipient?.globalName || '<dm>';
+		}
+		return channel.name || null;
+	} catch (err) {
+		log.warn(`fetchChannelName(${channelId}) failed: ${err.message}`);
+		return null;
+	}
+}
 
 async function executeJob(job) {
-	const { id, userId, prompt, notify, notifyPattern } = job;
+	const { id, prompt, channelId, notify, notifyPattern } = job;
 	const key = jobKey(job);
 
-	// Check lock
 	if (!acquireJobLock(key)) {
 		log.warn(`Job '${key}' skipped (already running)`);
 		return;
 	}
 
-	// Check duplicate run in same minute
+	// Avoid double-run inside the same wall-clock minute (cron edge case)
 	const nowMinute = new Date().toISOString().slice(0, 16);
 	if (lastRunMinutes.get(key) === nowMinute) {
 		releaseJobLock(key);
@@ -56,9 +63,10 @@ async function executeJob(job) {
 
 	const today = new Date().toISOString().slice(0, 10);
 	const fullPrompt = `Today's date: ${today}\n\n${prompt}`;
-	const targetUser = userId || AUTHORIZED_USER_ID;
+	let channelName = null;
 
 	try {
+		channelName = await fetchChannelName(channelId);
 		const jobSystemPrompt = getSystemPrompt({ jobId: id });
 		const jobOptions = {
 			sessionId: null,
@@ -69,7 +77,7 @@ async function executeJob(job) {
 			outputFormat: 'text',
 			timeoutMs: CLAUDE_TIMEOUT_MS,
 		};
-		const { result: output } = await executeForUser(userId, fullPrompt, jobOptions);
+		const { result: output } = await executeForMode(job.mode, fullPrompt, jobOptions);
 
 		log.info(`Job '${key}' completed (output: ${output.length} chars)`);
 
@@ -83,109 +91,62 @@ async function executeJob(job) {
 				patternMatches = output.includes(notifyPattern);
 			}
 		}
-		const shouldNotify = notify && output && patternMatches;
-		if (shouldNotify) {
-			await sendDM(targetUser, `\u{1F4CB} **Job '${id}'**\n${output}`);
+		if (notify && output && patternMatches) {
+			await sendToChannel(channelId, `\u{1F4CB} **Job '${id}'**\n${output}`);
 		}
 	} catch (err) {
 		if (err.code === 124) {
 			log.error(`Job '${key}': TIMEOUT`);
 			if (notify) {
-				await sendDM(targetUser, `\u{1F6A8} **Job '${id}' \u2014 TIMEOUT**\nNo response after ${CLAUDE_TIMEOUT_MS / 1000}s.`).catch(e => log.error('Notify failed:', e.message));
+				await sendToChannel(channelId, `\u{1F6A8} **Job '${id}' \u2014 TIMEOUT**\nNo response after ${CLAUDE_TIMEOUT_MS / 1000}s.`).catch(e => log.error('Notify failed:', e.message));
 			}
 		} else {
 			log.error(`Job '${key}': ERROR (code ${err.code || 'unknown'})`, err.message);
 			if (notify) {
-				await sendDM(targetUser, `\u{1F6A8} **Job '${id}' \u2014 ERROR**\nClaude failed with code ${err.code || 'unknown'}.`).catch(e => log.error('Notify failed:', e.message));
+				await sendToChannel(channelId, `\u{1F6A8} **Job '${id}' \u2014 ERROR**\nClaude failed with code ${err.code || 'unknown'}.`).catch(e => log.error('Notify failed:', e.message));
 			}
 		}
 	} finally {
 		lastRunMinutes.set(key, nowMinute);
 		try {
-			recordJobRun(key);
+			recordJobRun(job, { channelName });
 		} catch (err) {
-			log.error(`Failed to update lastRun for job '${key}':`, err.message);
+			log.error(`Failed to update job '${key}':`, err.message);
 		}
-
-		if (userId != null) {
-			try {
-				mergeUserJobs(userId);
-			} catch (syncErr) {
-				log.warn(`Failed to merge jobs for user ${userId}:`, syncErr.message);
-			}
-		}
-
+		// Reload tasks in case remaining reached 0 (job removed from file)
+		reloadJobs();
 		releaseJobLock(key);
 	}
 }
 
-// --- Scheduling ---
-
-function scheduleTasks() {
-	// Stop existing tasks
-	for (const [id, task] of tasks) {
-		task.stop();
-	}
+function reloadJobs() {
+	for (const task of tasks.values()) task.stop();
 	tasks.clear();
 
-	const jobs = loadJobs();
+	const jobs = loadAllJobs();
 	for (const job of jobs) {
 		if (!job.enabled) continue;
-
 		const key = jobKey(job);
-
 		if (!cron.validate(job.cron)) {
 			log.error(`Job '${key}': invalid cron expression '${job.cron}'`);
 			continue;
 		}
-
 		const task = cron.schedule(job.cron, () => {
 			executeJob(job).catch(err => log.error(`Job '${key}' unhandled error:`, err));
 		});
-
 		tasks.set(key, task);
-		log.info(`Scheduled job '${key}' (cron: ${job.cron}${job.userId ? `, user: ${job.userId}` : ''})`);
 	}
+	log.info(`Scheduler reloaded: ${tasks.size} active job(s)`);
 }
 
 function start() {
-	scheduleTasks();
-
-	// Watch the directory instead of the file directly.
-	// fs.watch() on a file tracks an inode; rename() (used by atomic writes
-	// from saveJobs, jq, or Claude) replaces the inode and breaks the watcher.
-	// Watching the directory catches rename events reliably.
-	try {
-		fileWatcher = fs.watch(JOBS_DIR, (eventType, filename) => {
-			if (filename !== JOBS_BASENAME) return;
-			if (debounceTimer) clearTimeout(debounceTimer);
-			debounceTimer = setTimeout(() => {
-				log.info('scheduled-jobs.json changed, reloading...');
-				scheduleTasks();
-			}, 2000);
-		});
-		fileWatcher.on('error', () => {});
-	} catch (err) {
-		log.warn('Could not watch for scheduled-jobs.json changes:', err.message);
-	}
-
-	log.info(`Scheduler started with ${tasks.size} job(s)`);
+	reloadJobs();
 }
 
 function stop() {
-	if (fileWatcher) {
-		fileWatcher.close();
-		fileWatcher = null;
-	}
-	if (debounceTimer) {
-		clearTimeout(debounceTimer);
-		debounceTimer = null;
-	}
-	for (const [id, task] of tasks) {
-		task.stop();
-	}
+	for (const task of tasks.values()) task.stop();
 	tasks.clear();
 	log.info('Scheduler stopped');
 }
 
-module.exports = { start, stop };
+module.exports = { start, stop, reloadJobs };
