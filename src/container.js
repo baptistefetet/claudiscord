@@ -1,23 +1,45 @@
 const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { SANDBOX_HOMES_DIR, CONTAINER_HOME, DOCKER_IMAGE, CONTAINER_MEMORY, CONTAINER_CPUS, CLAUDE_TIMEOUT_MS, DOCKER_CMD_TIMEOUT, ALLOWED_TOOLS, DISALLOWED_TOOLS } = require('./config');
+const {
+	SANDBOX_HOME_DIR,
+	CONTAINER_HOME,
+	CONTAINER_NAME,
+	DOCKER_IMAGE,
+	CONTAINER_MEMORY,
+	CONTAINER_CPUS,
+	CLAUDE_TIMEOUT_MS,
+	DOCKER_CMD_TIMEOUT,
+	ALLOWED_TOOLS,
+	DISALLOWED_TOOLS,
+	JOBS_RELATIVE,
+} = require('./config');
 const { getDefaultClaudeMd } = require('./prompts');
 const { buildClaudeArgs, spawnWithTimeout, parseClaudeOutput } = require('./claude');
 const log = require('./logger');
 
 const DOCKERFILE_DIR = path.resolve(__dirname, '..');
 
-const sandboxHome = (userId) => path.join(SANDBOX_HOMES_DIR, userId, 'home');
+// UID/GID of the 'claude' user inside the container
+const CONTAINER_UID = 1001;
+const CONTAINER_GID = 1001;
 
-/** Per-userId promise queues */
-const containerQueues = new Map();
+// Detect docker availability at module load — lets commands gracefully
+// disable sandbox mode when Docker isn't installed.
+let DOCKER_AVAILABLE = true;
+try {
+	execFileSync('docker', ['--version'], { stdio: 'ignore', timeout: 5000 });
+} catch {
+	DOCKER_AVAILABLE = false;
+	log.warn('Docker not detected — sandbox mode disabled');
+}
 
 function docker(...args) {
 	return execFileSync('docker', args, { encoding: 'utf8', timeout: DOCKER_CMD_TIMEOUT }).trim();
 }
 
 function ensureImage() {
+	if (!DOCKER_AVAILABLE) return;
 	try {
 		docker('image', 'inspect', DOCKER_IMAGE);
 		log.info(`Docker image '${DOCKER_IMAGE}' found`);
@@ -32,25 +54,21 @@ function ensureImage() {
 	}
 }
 
-// UID/GID of the 'claude' user inside the container
-const CONTAINER_UID = 1001;
-const CONTAINER_GID = 1001;
+function ensureStorage() {
+	const home = SANDBOX_HOME_DIR;
+	const isNew = !fs.existsSync(home);
+	fs.mkdirSync(home, { recursive: true });
 
-function ensureUserStorage(userId) {
-	const userHome = sandboxHome(userId);
-	const isNew = !fs.existsSync(userHome);
-	fs.mkdirSync(userHome, { recursive: true });
-
-	// Seed a default CLAUDE.md for new sandbox users (customizable)
-	const claudeMd = path.join(userHome, 'CLAUDE.md');
+	// Seed a default CLAUDE.md (customizable)
+	const claudeMd = path.join(home, 'CLAUDE.md');
 	if (!fs.existsSync(claudeMd)) {
 		fs.writeFileSync(claudeMd, getDefaultClaudeMd());
 		execFileSync('chown', [`${CONTAINER_UID}:${CONTAINER_GID}`, claudeMd], { timeout: 5000 });
-		log.info(`Created CLAUDE.md for user ${userId}`);
+		log.info(`Created CLAUDE.md in ${home}`);
 	}
 
 	// Ensure .claude dir exists for auth persistence
-	const claudeDir = path.join(userHome, '.claude');
+	const claudeDir = path.join(home, '.claude');
 	fs.mkdirSync(claudeDir, { recursive: true });
 
 	// Seed hooks: wait-background.sh blocks until run_in_background tasks complete
@@ -60,43 +78,42 @@ function ensureUserStorage(userId) {
 		fs.mkdirSync(hooksDir, { recursive: true });
 		fs.copyFileSync(path.join(__dirname, '..', 'claude', 'wait-background.sh'), hookScript);
 		fs.chmodSync(hookScript, 0o755);
-		log.info(`Created wait-background.sh hook for user ${userId}`);
+		log.info('Created wait-background.sh hook');
 	}
 
 	// Seed settings.json with hook config
 	const settingsFile = path.join(claudeDir, 'settings.json');
 	if (!fs.existsSync(settingsFile)) {
 		fs.copyFileSync(path.join(__dirname, '..', 'claude', 'settings.json'), settingsFile);
-		log.info(`Created settings.json for user ${userId}`);
+		log.info('Created settings.json');
 	}
 
-	// Ensure .claudiscord dir exists for scheduled jobs
-	const claudiscordDir = path.join(userHome, '.claudiscord');
+	// Ensure .claudiscord dir + empty jobs file exist
+	const claudiscordDir = path.join(home, '.claudiscord');
 	fs.mkdirSync(claudiscordDir, { recursive: true });
+	const jobsFile = path.join(home, JOBS_RELATIVE);
+	if (!fs.existsSync(jobsFile)) {
+		fs.writeFileSync(jobsFile, '[]', 'utf8');
+		execFileSync('chown', [`${CONTAINER_UID}:${CONTAINER_GID}`, jobsFile], { timeout: 5000 });
+	}
 
 	// Only chown -R on first creation; afterwards the home may contain
 	// thousands of files and recursive chown would timeout on the Pi
 	if (isNew) {
-		execFileSync('chown', ['-R', `${CONTAINER_UID}:${CONTAINER_GID}`, userHome], { timeout: 10000 });
+		execFileSync('chown', ['-R', `${CONTAINER_UID}:${CONTAINER_GID}`, home], { timeout: 10000 });
 	}
 }
 
-function containerName(userId) {
-	return `claudiscord-${userId}`;
-}
-
-function ensureContainer(userId) {
-	ensureUserStorage(userId);
-	const name = containerName(userId);
-	const userHome = sandboxHome(userId);
+function ensureContainer() {
+	if (!DOCKER_AVAILABLE) throw new Error('Docker is not installed on this host');
+	ensureStorage();
 
 	// Check if container exists
 	try {
-		const state = docker('inspect', '-f', '{{.State.Status}}', name);
+		const state = docker('inspect', '-f', '{{.State.Status}}', CONTAINER_NAME);
 		if (state === 'running') return;
-		// Exists but not running, start it
-		docker('start', name);
-		log.info(`Started existing container '${name}'`);
+		docker('start', CONTAINER_NAME);
+		log.info(`Started existing container '${CONTAINER_NAME}'`);
 		return;
 	} catch {
 		// Container doesn't exist, create it
@@ -104,27 +121,27 @@ function ensureContainer(userId) {
 
 	docker(
 		'create',
-		'--name', name,
+		'--name', CONTAINER_NAME,
 		'--init',
 		'--memory', CONTAINER_MEMORY,
 		'--cpus', String(CONTAINER_CPUS),
 		'--restart', 'unless-stopped',
 		'-e', 'TZ=Europe/Paris',
-		'-v', `${userHome}:${CONTAINER_HOME}`,
+		'-v', `${SANDBOX_HOME_DIR}:${CONTAINER_HOME}`,
 		DOCKER_IMAGE,
 	);
-	docker('start', name);
-	log.info(`Created and started container '${name}'`);
+	docker('start', CONTAINER_NAME);
+	log.info(`Created and started container '${CONTAINER_NAME}'`);
 }
 
 /**
- * Kill all non-essential processes inside a container (cleanup after timeout/early result).
+ * Kill all non-essential processes inside the container (cleanup after timeout/early result).
  * Killing docker exec only kills the host-side pipe, not the container process.
  * With --init, PID 1 is tini; we also spare the 'sleep' process that keeps the container alive.
  */
-function killClaudeInContainer(name, label) {
+function killClaudeInContainer(label) {
 	try {
-		execFileSync('docker', ['exec', name, 'sh', '-c',
+		execFileSync('docker', ['exec', CONTAINER_NAME, 'sh', '-c',
 			'for proc in /proc/[0-9]*; do pid=${proc#/proc/}; [ "$pid" = 1 ] && continue; [ "$pid" = "$$" ] && continue; comm=$(cat "$proc/comm" 2>/dev/null || true); [ "$comm" = "sleep" ] && continue; kill -9 "$pid" 2>/dev/null || true; done; true',
 		], { timeout: 5000 });
 		log.info(`${label}: killed orphaned processes`);
@@ -133,32 +150,32 @@ function killClaudeInContainer(name, label) {
 	}
 }
 
-async function executeClaudeInContainer(name, prompt, claudeOptions, {
+async function executeClaudeInContainer(prompt, claudeOptions, {
 		timeoutMs = CLAUDE_TIMEOUT_MS,
-		label = `Container [${name}]`,
+		label = `Container [${CONTAINER_NAME}]`,
 		streamJson = false,
 	} = {}) {
 	const claudeArgs = buildClaudeArgs(prompt, claudeOptions);
 	try {
 		return await spawnWithTimeout(
-			'docker', ['exec', '-i', name, 'claude', ...claudeArgs],
+			'docker', ['exec', '-i', CONTAINER_NAME, 'claude', ...claudeArgs],
 			{
 				timeoutMs,
 				label,
 				streamJson,
-				onEarlyKill: () => killClaudeInContainer(name, label),
+				onEarlyKill: () => killClaudeInContainer(label),
 			},
 		);
 	} catch (err) {
 		if (err.code === 124) {
 			// Timeout: docker exec was killed but claude may still run inside the container
-			killClaudeInContainer(name, label);
+			killClaudeInContainer(label);
 		}
 		throw err;
 	}
 }
 
-async function executeInContainer(userId, prompt, {
+async function executeInContainer(prompt, {
 		sessionId = null,
 		systemPrompt = null,
 		allowedTools = ALLOWED_TOOLS,
@@ -168,8 +185,7 @@ async function executeInContainer(userId, prompt, {
 		outputFormat = 'json',
 		timeoutMs = CLAUDE_TIMEOUT_MS,
 	} = {}) {
-	ensureContainer(userId);
-	const name = containerName(userId);
+	ensureContainer();
 	const claudeOptions = {
 		sessionId,
 		systemPrompt,
@@ -181,12 +197,12 @@ async function executeInContainer(userId, prompt, {
 		extraArgs: ['--dangerously-skip-permissions'],
 	};
 
-	const label = `Container [${name}]`;
+	const label = `Container [${CONTAINER_NAME}]`;
 	const isStreamJson = outputFormat === 'stream-json';
 	log.info(`${label}: ${sessionId ? `resume ${sessionId}` : 'new session'}, prompt length: ${prompt.length}`);
 
 	// First attempt
-	let result = await executeClaudeInContainer(name, prompt, claudeOptions, {
+	let result = await executeClaudeInContainer(prompt, claudeOptions, {
 		timeoutMs,
 		label,
 		streamJson: isStreamJson,
@@ -195,7 +211,7 @@ async function executeInContainer(userId, prompt, {
 	// Fallback: if resume failed, retry with new session
 	if (result.code !== 0 && sessionId) {
 		log.warn(`${label} resume failed (exit ${result.code}), retrying with new session...`);
-		result = await executeClaudeInContainer(name, prompt, { ...claudeOptions, sessionId: null }, {
+		result = await executeClaudeInContainer(prompt, { ...claudeOptions, sessionId: null }, {
 			timeoutMs,
 			label,
 			streamJson: isStreamJson,
@@ -211,52 +227,34 @@ async function executeInContainer(userId, prompt, {
 		throw Object.assign(new Error(errMsg), { code: result.code });
 	}
 
-	return parseClaudeOutput(result.stdout, outputFormat, label, sandboxHome(userId));
+	return parseClaudeOutput(result.stdout, outputFormat, label, SANDBOX_HOME_DIR);
 }
 
 /**
- * Queued execution: mutex per userId, concurrent between users
- */
-function executeInContainerQueued(userId, prompt, options = {}) {
-	if (!containerQueues.has(userId)) containerQueues.set(userId, Promise.resolve());
-	const p = containerQueues.get(userId).then(() => executeInContainer(userId, prompt, options));
-	containerQueues.set(userId, p.catch(() => {}));
-	return p;
-}
-
-/**
- * Write credentials JSON to the user's container volume.
+ * Write Claude Code credentials into the sandbox volume.
  * The user obtains these by running `claude auth login` on their own machine
  * and copying ~/.claude/.credentials.json.
  */
-function writeCredentials(userId, credentialsJson) {
-	ensureUserStorage(userId);
-	const credPath = path.join(sandboxHome(userId), '.claude', '.credentials.json');
+function writeCredentials(credentialsJson) {
+	ensureStorage();
+	const credPath = path.join(SANDBOX_HOME_DIR, '.claude', '.credentials.json');
 	const tmp = credPath + '.tmp';
 	fs.writeFileSync(tmp, credentialsJson, { mode: 0o600 });
 	fs.renameSync(tmp, credPath);
-	// Ensure ownership
 	execFileSync('chown', [`${CONTAINER_UID}:${CONTAINER_GID}`, credPath], { timeout: 5000 });
-	log.info(`Wrote credentials for user ${userId}`);
+	log.info('Wrote sandbox credentials');
 }
 
-/**
- * Check if a user has credentials in their container volume.
- */
-function hasCredentials(userId) {
-	const credPath = path.join(sandboxHome(userId), '.claude', '.credentials.json');
+function hasCredentials() {
+	const credPath = path.join(SANDBOX_HOME_DIR, '.claude', '.credentials.json');
 	return fs.existsSync(credPath);
 }
 
-function destroyContainer(userId) {
-	const name = containerName(userId);
-	try {
-		docker('stop', name);
-	} catch {}
-	try {
-		docker('rm', name);
-		log.info(`Destroyed container '${name}'`);
-	} catch {}
-}
-
-module.exports = { ensureImage, ensureContainer, containerName, executeInContainerQueued, writeCredentials, hasCredentials, destroyContainer };
+module.exports = {
+	DOCKER_AVAILABLE,
+	ensureImage,
+	ensureContainer,
+	executeInContainer,
+	writeCredentials,
+	hasCredentials,
+};

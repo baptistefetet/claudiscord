@@ -4,9 +4,6 @@ const path = require('path');
 const { CLAUDE_BIN, CLAUDE_TIMEOUT_MS, ALLOWED_TOOLS, DISALLOWED_TOOLS } = require('./config');
 const log = require('./logger');
 
-// Mutex for host Claude requests (one Claude at a time)
-let hostQueue = Promise.resolve();
-
 /**
  * Build Claude CLI arguments from options.
  * Extra args (e.g. --dangerously-skip-permissions) can be prepended via extraArgs.
@@ -271,14 +268,4 @@ async function executeClaudeCommand(prompt, options = {}) {
 	return parseClaudeOutput(result.stdout, outputFormat, 'Claude', '/root');
 }
 
-/**
- * Execute a host Claude command with mutex (used by admin DMs and host jobs).
- */
-function executeClaudeCommandQueued(prompt, options = {}) {
-	const p = hostQueue.then(() => executeClaudeCommand(prompt, options));
-	// Update queue regardless of success/failure
-	hostQueue = p.catch(() => {});
-	return p;
-}
-
-module.exports = { buildClaudeArgs, spawnWithTimeout, parseClaudeOutput, executeClaudeCommandQueued };
+module.exports = { buildClaudeArgs, spawnWithTimeout, parseClaudeOutput, executeClaudeCommand };
