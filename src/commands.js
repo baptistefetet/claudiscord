@@ -1,5 +1,6 @@
 const { spawn, execFileSync, execFile } = require('child_process');
 const { promisify } = require('util');
+const { ChannelType } = require('discord.js');
 const execFileAsync = promisify(execFile);
 const { UPGRADE_TIMEOUT_MS, SHELL_TIMEOUT_MS, DISCORD_MAX_MSG_LENGTH, CONTAINER_NAME } = require('./config');
 const sessions = require('./sessions');
@@ -260,7 +261,15 @@ async function handleCommand(message) {
 			return true;
 		}
 
-		// Always try to delete the message carrying credentials, success or not
+		// Credentials must only ever be sent in a DM: in a guild channel the bot
+		// might not be able to delete the message, leaving the OAuth JSON visible
+		// to anyone with read access.
+		if (channel.type !== ChannelType.DM) {
+			await message.delete().catch(() => {});
+			await channel.send('Send `/login <json>` only in DM — pasting credentials in a guild channel is unsafe.');
+			return true;
+		}
+
 		const tryDelete = () => message.delete().catch(() => {});
 
 		try {

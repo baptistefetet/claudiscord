@@ -55,7 +55,10 @@ const JOB_EFFORT = 'high';
  */
 function writeEnvValue(key, value) {
 	let content = '';
+	let mode = 0o600;
 	try {
+		const stat = fs.statSync(ENV_PATH);
+		mode = stat.mode & 0o777;
 		content = fs.readFileSync(ENV_PATH, 'utf8');
 	} catch (err) {
 		if (err.code !== 'ENOENT') throw err;
@@ -69,7 +72,7 @@ function writeEnvValue(key, value) {
 		content += line + '\n';
 	}
 	const tmp = ENV_PATH + '.tmp';
-	fs.writeFileSync(tmp, content, 'utf8');
+	fs.writeFileSync(tmp, content, { encoding: 'utf8', mode });
 	fs.renameSync(tmp, ENV_PATH);
 	process.env[key] = value;
 	if (key === 'AUTHORIZED_USER_ID') _authorizedUserId = value || null;

@@ -54,53 +54,62 @@ function ensureImage() {
 	}
 }
 
+function chownContainerUser(target) {
+	try {
+		execFileSync('chown', [`${CONTAINER_UID}:${CONTAINER_GID}`, target], { timeout: 5000 });
+	} catch (err) {
+		log.warn(`chown ${target} failed: ${err.message}`);
+	}
+}
+
 function ensureStorage() {
 	const home = SANDBOX_HOME_DIR;
 	const isNew = !fs.existsSync(home);
 	fs.mkdirSync(home, { recursive: true });
+	if (isNew) chownContainerUser(home);
 
 	// Seed a default CLAUDE.md (customizable)
 	const claudeMd = path.join(home, 'CLAUDE.md');
 	if (!fs.existsSync(claudeMd)) {
 		fs.writeFileSync(claudeMd, getDefaultClaudeMd());
-		execFileSync('chown', [`${CONTAINER_UID}:${CONTAINER_GID}`, claudeMd], { timeout: 5000 });
+		chownContainerUser(claudeMd);
 		log.info(`Created CLAUDE.md in ${home}`);
 	}
 
-	// Ensure .claude dir exists for auth persistence
+	// .claude: created root-owned when home is pre-populated externally,
+	// so chown it whenever we create/seed files inside it.
 	const claudeDir = path.join(home, '.claude');
+	const claudeDirIsNew = !fs.existsSync(claudeDir);
 	fs.mkdirSync(claudeDir, { recursive: true });
+	if (claudeDirIsNew) chownContainerUser(claudeDir);
 
-	// Seed hooks: wait-background.sh blocks until run_in_background tasks complete
 	const hooksDir = path.join(claudeDir, 'hooks');
 	const hookScript = path.join(hooksDir, 'wait-background.sh');
 	if (!fs.existsSync(hookScript)) {
+		const hooksDirIsNew = !fs.existsSync(hooksDir);
 		fs.mkdirSync(hooksDir, { recursive: true });
+		if (hooksDirIsNew) chownContainerUser(hooksDir);
 		fs.copyFileSync(path.join(__dirname, '..', 'claude', 'wait-background.sh'), hookScript);
 		fs.chmodSync(hookScript, 0o755);
+		chownContainerUser(hookScript);
 		log.info('Created wait-background.sh hook');
 	}
 
-	// Seed settings.json with hook config
 	const settingsFile = path.join(claudeDir, 'settings.json');
 	if (!fs.existsSync(settingsFile)) {
 		fs.copyFileSync(path.join(__dirname, '..', 'claude', 'settings.json'), settingsFile);
+		chownContainerUser(settingsFile);
 		log.info('Created settings.json');
 	}
 
-	// Ensure .claudiscord dir + empty jobs file exist
 	const claudiscordDir = path.join(home, '.claudiscord');
+	const claudiscordDirIsNew = !fs.existsSync(claudiscordDir);
 	fs.mkdirSync(claudiscordDir, { recursive: true });
+	if (claudiscordDirIsNew) chownContainerUser(claudiscordDir);
 	const jobsFile = path.join(home, JOBS_RELATIVE);
 	if (!fs.existsSync(jobsFile)) {
 		fs.writeFileSync(jobsFile, '[]', 'utf8');
-		execFileSync('chown', [`${CONTAINER_UID}:${CONTAINER_GID}`, jobsFile], { timeout: 5000 });
-	}
-
-	// Only chown -R on first creation; afterwards the home may contain
-	// thousands of files and recursive chown would timeout on the Pi
-	if (isNew) {
-		execFileSync('chown', ['-R', `${CONTAINER_UID}:${CONTAINER_GID}`, home], { timeout: 10000 });
+		chownContainerUser(jobsFile);
 	}
 }
 

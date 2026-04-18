@@ -110,13 +110,10 @@ client.on(Events.MessageCreate, async message => {
 
 		stopTyping();
 		stopTyping = null;
-		waitingNotice.delete(channelId);
 
 		if (result.sessionId) {
 			sessions.setSessionId(channelId, result.sessionId);
 		}
-
-		scheduler.reloadJobs();
 
 		const responseText = result.result || 'Empty response from Claude Code.';
 		const chunks = splitMessage(responseText);
@@ -125,7 +122,6 @@ client.on(Events.MessageCreate, async message => {
 		}
 	} catch (err) {
 		if (stopTyping) stopTyping();
-		waitingNotice.delete(channelId);
 
 		log.error('Message handling error:', err.message || err);
 
@@ -140,6 +136,11 @@ client.on(Events.MessageCreate, async message => {
 			errMsg = `Claude Code error: ${err.message?.slice(0, 300) || 'unknown'}`;
 		}
 		await channel.send(errMsg).catch(e => log.error('Failed to send error message:', e));
+	} finally {
+		waitingNotice.delete(channelId);
+		// Claude may have edited a jobs file even if the prompt errored — reload
+		// so the scheduler picks it up immediately rather than on the next prompt.
+		scheduler.reloadJobs();
 	}
 });
 
