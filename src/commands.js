@@ -1,9 +1,9 @@
 const { spawn, execFileSync, execFile } = require('child_process');
 const { promisify } = require('util');
 const execFileAsync = promisify(execFile);
-const { AUTHORIZED_USER_ID, UPGRADE_TIMEOUT_MS, SHELL_TIMEOUT_MS, DISCORD_MAX_MSG_LENGTH } = require('./config');
+const { UPGRADE_TIMEOUT_MS, SHELL_TIMEOUT_MS, DISCORD_MAX_MSG_LENGTH, CONTAINER_NAME } = require('./config');
 const sessions = require('./sessions');
-const { writeCredentials, hasCredentials, ensureContainer, containerName } = require('./container');
+const { writeCredentials, hasCredentials, ensureContainer, DOCKER_AVAILABLE } = require('./container');
 const log = require('./logger');
 
 const KILL_GRACE_MS = 5000;
@@ -33,10 +33,10 @@ The message will be automatically deleted after registration.`;
  * WebSocket heartbeat on long-running commands). Implements SIGTERM→SIGKILL
  * with process group kill (host) or container cleanup (sandbox).
  */
-function executeShell(command, { inContainer, containerNameStr } = {}) {
+function executeShell(command, { inContainer } = {}) {
 	return new Promise((resolve) => {
 		const spawnArgs = inContainer
-			? { cmd: 'docker', args: ['exec', containerNameStr, 'bash', '-c', command], opts: { stdio: ['pipe', 'pipe', 'pipe'] } }
+			? { cmd: 'docker', args: ['exec', CONTAINER_NAME, 'bash', '-c', command], opts: { stdio: ['pipe', 'pipe', 'pipe'] } }
 			: { cmd: 'bash', args: ['-c', command], opts: { cwd: '/root', stdio: ['pipe', 'pipe', 'pipe'], detached: true } };
 
 		const child = spawn(spawnArgs.cmd, spawnArgs.args, spawnArgs.opts);
@@ -60,9 +60,8 @@ function executeShell(command, { inContainer, containerNameStr } = {}) {
 			setTimeout(() => {
 				if (inContainer) {
 					try { child.kill('SIGKILL'); } catch (_) {}
-					// Kill orphaned processes in container
 					try {
-						execFileSync('docker', ['exec', containerNameStr, 'pkill', '-9', '-f', command.slice(0, 80)], { timeout: 5000 });
+						execFileSync('docker', ['exec', CONTAINER_NAME, 'pkill', '-9', '-f', command.slice(0, 80)], { timeout: 5000 });
 					} catch (_) {}
 				} else {
 					try { process.kill(-child.pid, 'SIGKILL'); } catch (_) {}
@@ -93,29 +92,31 @@ function executeShell(command, { inContainer, containerNameStr } = {}) {
 
 /**
  * Handle special commands. Returns true if the message was a command.
+ * The caller has already confirmed the message comes from the authorized user.
  */
 async function handleCommand(message) {
 	const content = message.content.trim();
-	const userId = message.author.id;
+	const channel = message.channel;
+	const channelId = channel.id;
+	const mode = sessions.getMode(channelId);
 
-	// Shell command: !<command> (authorized user only)
-	if (content.startsWith('!') && userId === AUTHORIZED_USER_ID) {
+	// Shell: !<command> — runs in host (admin mode) or container (sandbox mode)
+	if (content.startsWith('!')) {
 		const command = content.slice(1).trim();
 		if (!command) return false;
 
-		const isAdmin = sessions.isAdminMode();
 		let output;
-
-		if (isAdmin) {
+		if (mode === 'admin') {
 			output = await executeShell(command);
 		} else {
-			// Sandbox mode: run in user's container
-			ensureContainer(userId);
-			const name = containerName(userId);
-			output = await executeShell(command, { inContainer: true, containerNameStr: name });
+			if (!DOCKER_AVAILABLE) {
+				await channel.send('Docker is not installed — shell requires either admin mode or a working sandbox.');
+				return true;
+			}
+			ensureContainer();
+			output = await executeShell(command, { inContainer: true });
 		}
 
-		// Truncate and wrap in code block
 		let truncated = false;
 		if (output.length > SHELL_MAX_OUTPUT) {
 			output = output.slice(0, SHELL_MAX_OUTPUT);
@@ -124,153 +125,163 @@ async function handleCommand(message) {
 
 		const response = '```\n' + output + (truncated ? '\n... (truncated)' : '') + '\n```';
 		try {
-			await message.channel.send(response);
+			await channel.send(response);
 		} catch (err) {
 			log.error('Shell send error:', err.message);
-			await message.channel.send('Output too large or failed to send.').catch(() => {});
+			await channel.send('Output too large or failed to send.').catch(() => {});
 		}
 		return true;
 	}
 
 	if (content === '/help') {
-		const isAdmin = userId === AUTHORIZED_USER_ID;
-		const inAdmin = sessions.isAdminMode();
-		let help = `**Available commands**
+		let help = `**Available commands** (current mode: **${mode}**)
 
 \`/help\` — Show this help
-\`/clear\` — Reset session (new conversation)`;
-		if (!inAdmin) {
+\`/clear\` — Reset session for this channel (new conversation)
+\`/status\` — Show current mode and authentication status
+\`/admin\` — Switch this channel to admin mode (host)
+\`/sandbox\` — Switch this channel to sandbox mode (container)
+\`!<command>\` — Execute a shell command (host if admin, container if sandbox)`;
+		if (mode === 'sandbox') {
 			help += `
 \`/upgrade\` — Update sandbox container (apt + Claude Code)
 \`/login\` — Sandbox authentication instructions
-\`/login <json>\` — Save your credentials`;
+\`/login <json>\` — Save your Claude Code credentials`;
 		}
-		if (isAdmin) {
+		if (mode === 'admin') {
 			help += `
-\`/admin\` — Switch to admin mode (host)
-\`/sandbox\` — Switch to sandbox mode (container)
-\`/status\` — Show current mode and authentication status
-\`!<command>\` — Execute a shell command (${inAdmin ? 'host' : 'container'})`;
-			if (inAdmin) {
-				help += `
 \`/restart\` — Restart the claudiscord service`;
-			}
 		}
-		await message.channel.send(help);
-		return true;
-	}
-
-	if (content === '/upgrade' && !sessions.isAdminMode()) {
-		try {
-			ensureContainer(userId);
-			const name = containerName(userId);
-			// APT upgrade (as root in container)
-			await message.channel.send('Updating container packages...');
-			await execFileAsync('docker', [
-				'exec', '-u', 'root', name, 'bash', '-c',
-				'DEBIAN_FRONTEND=noninteractive apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" 2>&1 | tail -10',
-			], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
-			// Claude Code upgrade — use async exec to avoid blocking the event loop
-			// (execFileSync blocks heartbeats; >41s block kills the Discord WebSocket)
-			await message.channel.send('Updating Claude Code...');
-			await execFileAsync('docker', [
-				'exec', name, 'bash', '-c',
-				'curl -fsSL https://claude.ai/install.sh -o /tmp/claude-install.sh',
-			], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
-			await execFileAsync('docker', [
-				'exec', name, 'bash', '-c',
-				'bash /tmp/claude-install.sh 2>&1 | tail -5 ; rm -f /tmp/claude-install.sh',
-			], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
-			// Copy upgraded binary to /usr/local/bin so it takes priority in PATH
-			await execFileAsync('docker', [
-				'exec', '-u', 'root', name, 'bash', '-c',
-				'cp /home/claude/.local/share/claude/versions/$(ls -t /home/claude/.local/share/claude/versions/ | head -1) /usr/local/bin/claude && chmod 755 /usr/local/bin/claude',
-			], { encoding: 'utf8', timeout: 10000 });
-			// Get new version
-			let version = '';
-			try {
-				version = (await execFileAsync('docker', ['exec', name, 'claude', '--version'], { encoding: 'utf8', timeout: 10000 })).stdout.trim();
-			} catch {}
-			await message.channel.send(`Container updated.${version ? `\nVersion: \`${version}\`` : ''}`);
-		} catch (err) {
-			log.error('Upgrade error:', err.message);
-			await message.channel.send(`Upgrade error: ${err.message.slice(0, 300)}`);
-		}
+		await channel.send(help);
 		return true;
 	}
 
 	if (content === '/clear') {
-		sessions.clearSession(userId);
-		await message.channel.send('Session reset.');
+		sessions.clearChannel(channelId);
+		await channel.send('Session reset for this channel.');
 		return true;
 	}
 
-	if (content === '/admin' && userId === AUTHORIZED_USER_ID) {
-		if (sessions.isAdminMode()) {
-			await message.channel.send('Already in **admin** mode.');
+	if (content === '/admin') {
+		if (mode === 'admin') {
+			await channel.send('This channel is already in **admin** mode.');
 			return true;
 		}
-		sessions.setAdminMode(true);
-		sessions.clearSession(userId);
-		await message.channel.send('Switched to **admin** mode. Session reset.');
+		sessions.setMode(channelId, 'admin');
+		sessions.clearChannel(channelId);
+		await channel.send('Channel switched to **admin** mode. Session reset.');
 		return true;
 	}
 
-	if (content === '/sandbox' && userId === AUTHORIZED_USER_ID) {
-		if (!sessions.isAdminMode()) {
-			await message.channel.send('Already in **sandbox** mode.');
+	if (content === '/sandbox') {
+		if (!DOCKER_AVAILABLE) {
+			await channel.send('Docker is not installed on this host — only admin mode is available.');
 			return true;
 		}
-		sessions.setAdminMode(false);
-		sessions.clearSession(userId);
-		await message.channel.send('Switched to **sandbox** mode. Session reset.');
+		if (mode === 'sandbox') {
+			await channel.send('This channel is already in **sandbox** mode.');
+			return true;
+		}
+		sessions.setMode(channelId, 'sandbox');
+		sessions.clearChannel(channelId);
+		await channel.send('Channel switched to **sandbox** mode. Session reset.');
 		return true;
 	}
 
-	if (content === '/restart' && userId === AUTHORIZED_USER_ID && sessions.isAdminMode()) {
-		await message.channel.send('Restarting claudiscord service...');
-		// Use execFile (async) so the message is sent before the process dies
+	if (content === '/status') {
+		const authed = DOCKER_AVAILABLE && hasCredentials() ? 'yes' : 'no';
+		const dockerNote = DOCKER_AVAILABLE ? '' : '\nDocker not installed — sandbox unavailable.';
+		await channel.send(`Channel mode: **${mode}**\nAuthenticated (sandbox): **${authed}**${dockerNote}`);
+		return true;
+	}
+
+	if (content === '/restart') {
+		if (mode !== 'admin') {
+			await channel.send('`/restart` is only available in admin mode.');
+			return true;
+		}
+		await channel.send('Restarting claudiscord service...');
 		execFile('systemctl', ['restart', 'claudiscord'], (err) => {
 			if (err) log.error('Restart error:', err.message);
 		});
 		return true;
 	}
 
-	if (content === '/status' && userId === AUTHORIZED_USER_ID) {
-		const current = sessions.isAdminMode() ? 'admin (host)' : 'sandbox (container)';
-		const authed = hasCredentials(userId) ? 'yes' : 'no';
-		await message.channel.send(`Current mode: **${current}**\nAuthenticated (sandbox): **${authed}**`);
+	if (content === '/upgrade') {
+		if (mode !== 'sandbox') {
+			await channel.send('`/upgrade` is only available in sandbox mode.');
+			return true;
+		}
+		if (!DOCKER_AVAILABLE) {
+			await channel.send('Docker is not installed — cannot upgrade.');
+			return true;
+		}
+		try {
+			ensureContainer();
+			await channel.send('Updating container packages...');
+			await execFileAsync('docker', [
+				'exec', '-u', 'root', CONTAINER_NAME, 'bash', '-c',
+				'DEBIAN_FRONTEND=noninteractive apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" 2>&1 | tail -10',
+			], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
+			await channel.send('Updating Claude Code...');
+			await execFileAsync('docker', [
+				'exec', CONTAINER_NAME, 'bash', '-c',
+				'curl -fsSL https://claude.ai/install.sh -o /tmp/claude-install.sh',
+			], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
+			await execFileAsync('docker', [
+				'exec', CONTAINER_NAME, 'bash', '-c',
+				'bash /tmp/claude-install.sh 2>&1 | tail -5 ; rm -f /tmp/claude-install.sh',
+			], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
+			await execFileAsync('docker', [
+				'exec', '-u', 'root', CONTAINER_NAME, 'bash', '-c',
+				'cp /home/claude/.local/share/claude/versions/$(ls -t /home/claude/.local/share/claude/versions/ | head -1) /usr/local/bin/claude && chmod 755 /usr/local/bin/claude',
+			], { encoding: 'utf8', timeout: 10000 });
+			let version = '';
+			try {
+				version = (await execFileAsync('docker', ['exec', CONTAINER_NAME, 'claude', '--version'], { encoding: 'utf8', timeout: 10000 })).stdout.trim();
+			} catch {}
+			await channel.send(`Container updated.${version ? `\nVersion: \`${version}\`` : ''}`);
+		} catch (err) {
+			log.error('Upgrade error:', err.message);
+			await channel.send(`Upgrade error: ${err.message.slice(0, 300)}`);
+		}
 		return true;
 	}
 
-	if (content.startsWith('/login') && !sessions.isAdminMode()) {
+	if (content.startsWith('/login')) {
+		if (mode !== 'sandbox') {
+			await channel.send('`/login` is only used in sandbox mode.');
+			return true;
+		}
 		const arg = content.slice('/login'.length).trim();
 
 		if (!arg) {
-			await message.channel.send(LOGIN_INSTRUCTIONS);
+			await channel.send(LOGIN_INSTRUCTIONS);
 			return true;
 		}
 
-		// Validate credentials JSON
+		// Always try to delete the message carrying credentials, success or not
+		const tryDelete = () => message.delete().catch(() => {});
+
 		try {
 			const parsed = JSON.parse(arg);
 			if (!parsed.claudeAiOauth || !parsed.claudeAiOauth.accessToken) {
-				await message.channel.send('Invalid format. JSON must contain `claudeAiOauth.accessToken`.');
+				await channel.send('Invalid format. JSON must contain `claudeAiOauth.accessToken`.');
+				tryDelete();
 				return true;
 			}
 
-			writeCredentials(userId, arg);
-			await message.channel.send('Credentials saved. You can now use the sandbox.');
-
-			// Delete the message containing credentials for security
-			try { await message.delete(); } catch {}
+			writeCredentials(arg);
+			await channel.send('Credentials saved. You can now use the sandbox.');
+			tryDelete();
 		} catch (err) {
 			if (err instanceof SyntaxError) {
-				await message.channel.send('Invalid JSON. Send the exact content of `~/.claude/.credentials.json`.');
+				await channel.send('Invalid JSON. Send the exact content of `~/.claude/.credentials.json`.');
 			} else {
 				log.error('Login error:', err.message);
-				await message.channel.send(`Error: ${err.message}`);
+				await channel.send(`Error: ${err.message}`);
 			}
+			tryDelete();
 		}
 		return true;
 	}

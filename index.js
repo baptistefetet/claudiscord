@@ -1,14 +1,15 @@
-const { AUTHORIZED_USER_ID, ALLOWED_TOOLS, DM_MODEL, DM_EFFORT } = require('./src/config');
+const config = require('./src/config');
+const { ALLOWED_TOOLS, DM_MODEL, DM_EFFORT } = config;
 const { getSystemPrompt } = require('./src/prompts');
 const log = require('./src/logger');
 const sessions = require('./src/sessions');
-const { ensureImage } = require('./src/container');
-const { executeForUser } = require('./src/executor');
-const { mergeUserJobs } = require('./src/jobs-store');
+const { ensureImage, DOCKER_AVAILABLE } = require('./src/container');
+const { executeForMode } = require('./src/executor');
+const { isBusy } = require('./src/queue');
 const { createClient, login, splitMessage, startTypingIndicator } = require('./src/discord');
 const { handleCommand } = require('./src/commands');
 const scheduler = require('./src/scheduler');
-const { Events } = require('discord.js');
+const { Events, ChannelType } = require('discord.js');
 
 process.on('unhandledRejection', err => {
 	log.error('Unhandled rejection:', err);
@@ -17,62 +18,114 @@ process.on('uncaughtException', err => {
 	log.error('Uncaught exception:', err);
 });
 
-// Create Discord client
 const client = createClient();
+
+// Protect the bootstrap (first DM -> AUTHORIZED_USER_ID) against a race
+// between two messages arriving while the first registration is in flight.
+let bootstrapPending = false;
+
+// Channels currently waiting for their turn in the global queue — used to
+// avoid flooding a channel with multiple "⏳ en attente…" notices.
+const waitingNotice = new Set();
+
+function resolveChannelName(channel) {
+	if (channel.type === ChannelType.DM) {
+		return channel.recipient?.username || channel.recipient?.globalName || '<dm>';
+	}
+	return channel.name || '<unnamed>';
+}
 
 client.on(Events.MessageCreate, async message => {
 	if (message.author.bot) return;
 
-	const isDM = message.channel.type === 1 || message.channel.type === 'DM';
-	if (!isDM) return;
+	const channel = message.channel;
+	const isDM = channel.type === ChannelType.DM;
+	const isGuildText = channel.type === ChannelType.GuildText;
+	if (!isDM && !isGuildText) return;
 
 	const content = message.content.trim();
 	if (!content) return;
 
-	// Check for commands
+	const userId = message.author.id;
+
+	// Bootstrap: the very first DM registers its author as the authorized user.
+	// Only DMs can bootstrap — unsolicited guild messages must never escalate.
+	if (!config.getAuthorizedUserId()) {
+		if (!isDM) return;
+		if (bootstrapPending) return;
+		bootstrapPending = true;
+		try {
+			config.writeEnvValue('AUTHORIZED_USER_ID', userId);
+			log.info(`Authorized user registered via first-DM bootstrap: ${userId}`);
+		} catch (err) {
+			bootstrapPending = false;
+			log.error('Bootstrap failed:', err.message);
+			return;
+		}
+		bootstrapPending = false;
+	}
+
+	// Strict authorization: silently ignore every other user.
+	if (!config.isAuthorized(userId)) return;
+
+	// Commands first (they manage their own responses).
 	if (await handleCommand(message)) return;
+
+	const channelId = channel.id;
+	const channelName = resolveChannelName(channel);
+	sessions.setLastName(channelId, channelName);
+
+	const mode = sessions.getMode(channelId);
+	const sessionId = sessions.getSessionId(channelId);
+	const botName = client.user.displayName || client.user.username;
+	const userName = message.author.displayName || message.author.username;
+	const channelTopic = !isDM ? (channel.topic || null) : null;
+
+	const promptOptions = {
+		sessionId,
+		systemPrompt: getSystemPrompt({
+			botName,
+			userName,
+			mode,
+			channelName,
+			channelTopic,
+			isDM,
+		}),
+		allowedTools: ALLOWED_TOOLS,
+		model: DM_MODEL,
+		effort: DM_EFFORT,
+		outputFormat: 'stream-json',
+	};
+
+	// Surface the wait once per channel if another prompt is already running.
+	if (isBusy() && !waitingNotice.has(channelId)) {
+		waitingNotice.add(channelId);
+		channel.send('\u23F3 En attente du prompt précédent...').catch(() => {});
+	}
 
 	let stopTyping = null;
 	try {
-		stopTyping = startTypingIndicator(message.channel);
-
-		const userId = message.author.id;
-		const sessionId = sessions.getSessionId(userId);
-		const botName = client.user.displayName || client.user.username;
-		const userName = message.author.displayName || message.author.username;
-		const isAdminDm = userId === AUTHORIZED_USER_ID && sessions.isAdminMode();
-		const dmOptions = {
-			sessionId,
-			systemPrompt: getSystemPrompt({ botName, userName, isSandbox: !isAdminDm }),
-			allowedTools: ALLOWED_TOOLS,
-			model: DM_MODEL,
-			effort: DM_EFFORT,
-			outputFormat: 'stream-json',
-		};
-		const targetUserId = isAdminDm ? null : userId;
-		const result = await executeForUser(targetUserId, content, dmOptions);
-		if (targetUserId != null) {
-			try {
-				mergeUserJobs(targetUserId);
-			} catch (err) {
-				log.warn(`Failed to merge jobs for user ${targetUserId}:`, err.message);
-			}
-		}
+		stopTyping = startTypingIndicator(channel);
+		const result = await executeForMode(mode, content, promptOptions);
 
 		stopTyping();
 		stopTyping = null;
+		waitingNotice.delete(channelId);
 
 		if (result.sessionId) {
-			sessions.setSessionId(userId, result.sessionId);
+			sessions.setSessionId(channelId, result.sessionId);
 		}
+
+		scheduler.reloadJobs();
 
 		const responseText = result.result || 'Empty response from Claude Code.';
 		const chunks = splitMessage(responseText);
 		for (const chunk of chunks) {
-			await message.channel.send(chunk);
+			await channel.send(chunk);
 		}
 	} catch (err) {
 		if (stopTyping) stopTyping();
+		waitingNotice.delete(channelId);
 
 		log.error('Message handling error:', err.message || err);
 
@@ -81,21 +134,20 @@ client.on(Events.MessageCreate, async message => {
 			errMsg = 'Claude Code took too long, timeout!';
 		} else if (err.message === 'NOT_AUTHENTICATED') {
 			errMsg = 'You are not authenticated in the sandbox. Send `/login` for instructions.';
+		} else if (err.message === 'Docker is not installed on this host') {
+			errMsg = 'Docker is not installed — switch this channel to admin mode with `/admin`.';
 		} else {
 			errMsg = `Claude Code error: ${err.message?.slice(0, 300) || 'unknown'}`;
 		}
-		await message.channel.send(errMsg).catch(e => log.error('Failed to send error message:', e));
+		await channel.send(errMsg).catch(e => log.error('Failed to send error message:', e));
 	}
 });
 
 client.on(Events.ClientReady, () => {
 	log.info(`Connected as ${client.user.tag}`);
-
-	// Start scheduler after Discord is ready (so sendDM works)
 	scheduler.start();
 });
 
-// Graceful shutdown
 function shutdown(signal) {
 	log.info(`Received ${signal}, shutting down...`);
 	scheduler.stop();
@@ -106,10 +158,13 @@ function shutdown(signal) {
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
-// Async startup
 async function start() {
 	sessions.load();
-	ensureImage();
+	if (DOCKER_AVAILABLE) {
+		try { ensureImage(); } catch (err) { log.warn('ensureImage failed:', err.message); }
+	} else {
+		log.warn('Starting without Docker — sandbox mode disabled');
+	}
 	await login();
 }
 

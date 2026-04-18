@@ -1,4 +1,4 @@
-const { CENTRAL_JOBS_FILE, CONTAINER_JOBS_FILE } = require('./config');
+const { ADMIN_JOBS_FILE, CONTAINER_JOBS_FILE } = require('./config');
 
 // ---------------------------------------------------------------------------
 // Prompt constants
@@ -9,16 +9,18 @@ MANDATORY RULE — Scheduling: scheduled tasks (recurring or one-shot) that exec
 
 The file ${jobsPath} contains a JSON array of objects. A scheduler (node-cron) runs continuously and automatically executes jobs at the defined times. You only need to write to this file — the system handles the rest. Do not use other methods (crontab, at, setTimeout, setInterval, /loop, sleep, direct node-cron, systemd timer) as they are not connected to the Discord bot and will not persist.
 
-Fields: id (unique string), prompt (the prompt that will be executed by Claude), cron (standard cron expression, timezone Europe/Paris), enabled (bool), notify (bool), notifyPattern (optional string), remaining (number of remaining executions), created (ISO date), lastRun (null or ISO date, do not modify), description.
+Fields: id (unique string), prompt (the prompt that will be executed by Claude), cron (standard cron expression, timezone Europe/Paris), enabled (bool), notify (bool), notifyPattern (optional string), remaining (number of remaining executions), channelId (Discord channel ID where the notification is sent), channelName (channel display name, snapshot, updated automatically), created (ISO date), lastRun (null or ISO date, do not modify), description.
 
 Remaining counter: controls the number of remaining executions. 0 = infinite (runs forever). >0 = decremented after each execution; job is automatically removed when it reaches 0. Set to 1 for a one-shot job. Set to 0 for a regular recurring job.
 
-Notifications: if notify=true, the job output is sent via Discord DM to the user. If notifyPattern is set, it is interpreted as a regular expression (regex) and the notification is only sent if the output matches this pattern. IMPORTANT: if you want a conditional notification (only send if a keyword appears, or only if a keyword is absent), you MUST specify notifyPattern — without it, notify=true ALWAYS sends the notification. Examples: "PROBLEM" (notify if the word appears), "^(?!.*OK).*$" (notify if OK is absent). The dotall flag (s) is enabled by default (. matches newlines).
+channelId is REQUIRED: set it to the Discord channel where the user is talking to you now (DM or guild channel). Notifications are sent there. channelName is a display snapshot you can leave empty — the scheduler updates it at each run.
 
-To view the list of scheduled jobs, simply read this file — it always contains the complete and up-to-date state of all jobs.
+Notifications: if notify=true, the job output is sent to the job's channel (DM or guild channel). If notifyPattern is set, it is interpreted as a regular expression (regex) and the notification is only sent if the output matches this pattern. IMPORTANT: if you want a conditional notification (only send if a keyword appears, or only if a keyword is absent), you MUST specify notifyPattern — without it, notify=true ALWAYS sends the notification. Examples: "PROBLEM" (notify if the word appears), "^(?!.*OK).*$" (notify if OK is absent). The dotall flag (s) is enabled by default (. matches newlines).
+
+To view the list of scheduled jobs, simply read this file — it always contains the complete and up-to-date state of all jobs from the current execution mode.
 
 Minimal example:
-[{"id":"weather","prompt":"Give me the weather in Lyon","cron":"0 8 * * *","enabled":true,"notify":true,"remaining":0,"created":"2026-01-01T00:00:00Z","lastRun":null,"description":"Daily weather"}]`;
+[{"id":"weather","prompt":"Give me the weather in Lyon","cron":"0 8 * * *","enabled":true,"notify":true,"remaining":0,"channelId":"1234567890","channelName":"meteo","created":"2026-01-01T00:00:00Z","lastRun":null,"description":"Daily weather"}]`;
 
 const CLAUDE_CODE_CLI_PROMPT = `--- CLAUDE_CODE_CLI ---
 Claude Code CLI is executed with \`claude -p\` in non-interactive mode.
@@ -42,10 +44,27 @@ You are not root on this machine. Avoid software installations or system changes
 
 const JOB_INTRO = (jobId, today) => `This is a scheduled task for a Discord bot. Job: "${jobId}". Today's date: ${today}.`;
 
-const ADMIN_DM_INTRO = (botName, userName, today) => `Your name is ${botName}. You are the system administrator assistant. You are talking to ${userName}. The user is talking to you via Discord DM, relayed by a systemd service named "claudiscord". Today's date is: ${today}.
+const ADMIN_INTRO = (botName, userName, today) => `Your name is ${botName}. You are the system administrator assistant. You are talking to ${userName}, relayed by a systemd service named "claudiscord". Today's date is: ${today}.
 You have access to system tools to administer the server.`;
 
-const SANDBOX_DM_INTRO = (botName, userName, today) => `Your name is ${botName}. You are a Claude assistant in an isolated Docker sandbox environment. You are talking to ${userName}. The user is talking to you via Discord DM, relayed by a systemd service named "claudiscord". Today's date is: ${today}.`;
+const SANDBOX_INTRO = (botName, userName, today) => `Your name is ${botName}. You are a Claude assistant in an isolated Docker sandbox environment. You are talking to ${userName}, relayed by a systemd service named "claudiscord". Today's date is: ${today}.`;
+
+/**
+ * Describe where the conversation is happening (DM vs guild channel).
+ * The channel topic is treated as a mini CLAUDE.md that defines the context
+ * of the channel (a project, a discussion, ...).
+ */
+const CHANNEL_CONTEXT_PROMPT = ({ isDM, channelName, channelTopic }) => {
+	if (isDM) {
+		return `--- Context ---
+You are talking to the user in a Discord direct message (DM).`;
+	}
+	const topicLine = channelTopic
+		? `\nChannel description (treat as context / mini CLAUDE.md for this conversation):\n${channelTopic}`
+		: '';
+	return `--- Context ---
+You are in the Discord channel "${channelName || '<unnamed>'}".${topicLine}`;
+};
 
 const DEFAULT_CLAUDE_MD = `# Sandbox Claude
 You are in an isolated Docker sandbox environment.
@@ -53,14 +72,17 @@ Customize this file to adapt Claude's behavior to your needs.
 `;
 
 // ---------------------------------------------------------------------------
-// Builder methods
+// Builder
 // ---------------------------------------------------------------------------
 
 function getSystemPrompt(options = {}) {
 	const {
 		botName = null,
 		userName = null,
-		isSandbox = false,
+		mode = 'admin',
+		channelName = null,
+		channelTopic = null,
+		isDM = false,
 		jobId = null,
 	} = options;
 	const today = new Date().toISOString().slice(0, 10);
@@ -69,16 +91,15 @@ function getSystemPrompt(options = {}) {
 		return [JOB_INTRO(jobId, today), DISCORD_FORMATTING_PROMPT].join('\n\n');
 	}
 
-	if (!botName) {
-		throw new Error('getSystemPrompt requires botName when jobId is not set');
-	}
-	if (!userName) {
-		throw new Error('getSystemPrompt requires userName when jobId is not set');
-	}
+	if (!botName) throw new Error('getSystemPrompt requires botName when jobId is not set');
+	if (!userName) throw new Error('getSystemPrompt requires userName when jobId is not set');
 
-	if (isSandbox) {
+	const contextBlock = CHANNEL_CONTEXT_PROMPT({ isDM, channelName, channelTopic });
+
+	if (mode === 'sandbox') {
 		return [
-			SANDBOX_DM_INTRO(botName, userName, today),
+			SANDBOX_INTRO(botName, userName, today),
+			contextBlock,
 			SANDBOX_ENV_PROMPT,
 			CLAUDE_CODE_CLI_PROMPT,
 			SCHEDULING_PROMPT(CONTAINER_JOBS_FILE),
@@ -88,10 +109,11 @@ function getSystemPrompt(options = {}) {
 	}
 
 	return [
-		ADMIN_DM_INTRO(botName, userName, today),
+		ADMIN_INTRO(botName, userName, today),
+		contextBlock,
 		NO_RESTART_PROMPT,
 		CLAUDE_CODE_CLI_PROMPT,
-		SCHEDULING_PROMPT(CENTRAL_JOBS_FILE),
+		SCHEDULING_PROMPT(ADMIN_JOBS_FILE),
 		DISABLED_SKILLS_PROMPT,
 		DISCORD_FORMATTING_PROMPT,
 	].join('\n\n');
