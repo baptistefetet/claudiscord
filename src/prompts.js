@@ -20,9 +20,6 @@ To view the list of scheduled jobs, simply read this file — it always contains
 Minimal example:
 [{"id":"weather","prompt":"Give me the weather in Lyon","cron":"0 8 * * *","enabled":true,"notify":true,"remaining":0,"created":"2026-01-01T00:00:00Z","lastRun":null,"description":"Daily weather"}]`;
 
-const CLAUDISCORD_SERVICE_PROMPT = `--- Claudiscord service ---
-This Discord bot is run by a systemd service named "claudiscord" — a Node.js process that relays DMs to the Claude Code CLI and runs scheduled jobs via node-cron. Internal paths and files follow this naming (e.g. sandbox scheduled jobs live in \`.claudiscord/scheduled-jobs.json\` inside the user's home).`;
-
 const CLAUDE_CODE_CLI_PROMPT = `--- CLAUDE_CODE_CLI ---
 Claude Code CLI is executed with \`claude -p\` in non-interactive mode.
 Do not rely on interactive confirmations, prompts, menus, or any workflow that requires user input during execution.
@@ -45,10 +42,10 @@ You are not root on this machine. Avoid software installations or system changes
 
 const JOB_INTRO = (jobId, today) => `This is a scheduled task for a Discord bot. Job: "${jobId}". Today's date: ${today}.`;
 
-const ADMIN_DM_INTRO = (botName, userName, today) => `Your name is ${botName}. You are the system administrator assistant. You are talking to ${userName}. The user is talking to you via Discord DM. Today's date is: ${today}.
+const ADMIN_DM_INTRO = (botName, userName, today) => `Your name is ${botName}. You are the system administrator assistant. You are talking to ${userName}. The user is talking to you via Discord DM, relayed by a systemd service named "claudiscord". Today's date is: ${today}.
 You have access to system tools to administer the server.`;
 
-const SANDBOX_DM_INTRO = (botName, userName, today) => `Your name is ${botName}. You are a Claude assistant in an isolated Docker sandbox environment. You are talking to ${userName}. The user is talking to you via Discord DM. Today's date is: ${today}.`;
+const SANDBOX_DM_INTRO = (botName, userName, today) => `Your name is ${botName}. You are a Claude assistant in an isolated Docker sandbox environment. You are talking to ${userName}. The user is talking to you via Discord DM, relayed by a systemd service named "claudiscord". Today's date is: ${today}.`;
 
 const DEFAULT_CLAUDE_MD = `# Sandbox Claude
 You are in an isolated Docker sandbox environment.
@@ -69,7 +66,7 @@ function getSystemPrompt(options = {}) {
 	const today = new Date().toISOString().slice(0, 10);
 
 	if (jobId) {
-		return [JOB_INTRO(jobId, today), CLAUDISCORD_SERVICE_PROMPT, DISCORD_FORMATTING_PROMPT].join('\n\n');
+		return [JOB_INTRO(jobId, today), DISCORD_FORMATTING_PROMPT].join('\n\n');
 	}
 
 	if (!botName) {
@@ -82,7 +79,6 @@ function getSystemPrompt(options = {}) {
 	if (isSandbox) {
 		return [
 			SANDBOX_DM_INTRO(botName, userName, today),
-			CLAUDISCORD_SERVICE_PROMPT,
 			SANDBOX_ENV_PROMPT,
 			CLAUDE_CODE_CLI_PROMPT,
 			SCHEDULING_PROMPT(CONTAINER_JOBS_FILE),
@@ -93,7 +89,6 @@ function getSystemPrompt(options = {}) {
 
 	return [
 		ADMIN_DM_INTRO(botName, userName, today),
-		CLAUDISCORD_SERVICE_PROMPT,
 		NO_RESTART_PROMPT,
 		CLAUDE_CODE_CLI_PROMPT,
 		SCHEDULING_PROMPT(CENTRAL_JOBS_FILE),
