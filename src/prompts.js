@@ -1,4 +1,4 @@
-const { JOBS_FILE, SANDBOX_JOBS_PATH } = require('./config');
+const { CENTRAL_JOBS_FILE, CONTAINER_JOBS_FILE } = require('./config');
 
 // ---------------------------------------------------------------------------
 // Prompt constants
@@ -19,6 +19,9 @@ To view the list of scheduled jobs, simply read this file — it always contains
 
 Minimal example:
 [{"id":"weather","prompt":"Give me the weather in Lyon","cron":"0 8 * * *","enabled":true,"notify":true,"remaining":0,"created":"2026-01-01T00:00:00Z","lastRun":null,"description":"Daily weather"}]`;
+
+const CLAUDISCORD_SERVICE_PROMPT = `--- Claudiscord service ---
+This Discord bot is run by a systemd service named "claudiscord" — a Node.js process that relays DMs to the Claude Code CLI and runs scheduled jobs via node-cron. Internal paths and files follow this naming (e.g. sandbox scheduled jobs live in \`.claudiscord/scheduled-jobs.json\` inside the user's home).`;
 
 const CLAUDE_CODE_CLI_PROMPT = `--- CLAUDE_CODE_CLI ---
 Claude Code CLI is executed with \`claude -p\` in non-interactive mode.
@@ -66,7 +69,7 @@ function getSystemPrompt(options = {}) {
 	const today = new Date().toISOString().slice(0, 10);
 
 	if (jobId) {
-		return [JOB_INTRO(jobId, today), DISCORD_FORMATTING_PROMPT].join('\n\n');
+		return [JOB_INTRO(jobId, today), CLAUDISCORD_SERVICE_PROMPT, DISCORD_FORMATTING_PROMPT].join('\n\n');
 	}
 
 	if (!botName) {
@@ -79,9 +82,10 @@ function getSystemPrompt(options = {}) {
 	if (isSandbox) {
 		return [
 			SANDBOX_DM_INTRO(botName, userName, today),
+			CLAUDISCORD_SERVICE_PROMPT,
 			SANDBOX_ENV_PROMPT,
 			CLAUDE_CODE_CLI_PROMPT,
-			SCHEDULING_PROMPT(SANDBOX_JOBS_PATH),
+			SCHEDULING_PROMPT(CONTAINER_JOBS_FILE),
 			DISABLED_SKILLS_PROMPT,
 			DISCORD_FORMATTING_PROMPT,
 		].join('\n\n');
@@ -89,9 +93,10 @@ function getSystemPrompt(options = {}) {
 
 	return [
 		ADMIN_DM_INTRO(botName, userName, today),
+		CLAUDISCORD_SERVICE_PROMPT,
 		NO_RESTART_PROMPT,
 		CLAUDE_CODE_CLI_PROMPT,
-		SCHEDULING_PROMPT(JOBS_FILE),
+		SCHEDULING_PROMPT(CENTRAL_JOBS_FILE),
 		DISABLED_SKILLS_PROMPT,
 		DISCORD_FORMATTING_PROMPT,
 	].join('\n\n');

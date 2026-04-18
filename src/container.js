@@ -1,12 +1,14 @@
 const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { DATA_DIR, DOCKER_IMAGE, CONTAINER_MEMORY, CONTAINER_CPUS, CLAUDE_TIMEOUT_MS, DOCKER_CMD_TIMEOUT, ALLOWED_TOOLS, DISALLOWED_TOOLS } = require('./config');
+const { SANDBOX_HOMES_DIR, CONTAINER_HOME, DOCKER_IMAGE, CONTAINER_MEMORY, CONTAINER_CPUS, CLAUDE_TIMEOUT_MS, DOCKER_CMD_TIMEOUT, ALLOWED_TOOLS, DISALLOWED_TOOLS } = require('./config');
 const { getDefaultClaudeMd } = require('./prompts');
 const { buildClaudeArgs, spawnWithTimeout, parseClaudeOutput } = require('./claude');
 const log = require('./logger');
 
 const DOCKERFILE_DIR = path.resolve(__dirname, '..');
+
+const sandboxHome = (userId) => path.join(SANDBOX_HOMES_DIR, userId, 'home');
 
 /** Per-userId promise queues */
 const containerQueues = new Map();
@@ -35,7 +37,7 @@ const CONTAINER_UID = 1001;
 const CONTAINER_GID = 1001;
 
 function ensureUserStorage(userId) {
-	const userHome = path.join(DATA_DIR, userId, 'home');
+	const userHome = sandboxHome(userId);
 	const isNew = !fs.existsSync(userHome);
 	fs.mkdirSync(userHome, { recursive: true });
 
@@ -86,7 +88,7 @@ function containerName(userId) {
 function ensureContainer(userId) {
 	ensureUserStorage(userId);
 	const name = containerName(userId);
-	const userHome = path.join(DATA_DIR, userId, 'home');
+	const userHome = sandboxHome(userId);
 
 	// Check if container exists
 	try {
@@ -108,7 +110,7 @@ function ensureContainer(userId) {
 		'--cpus', String(CONTAINER_CPUS),
 		'--restart', 'unless-stopped',
 		'-e', 'TZ=Europe/Paris',
-		'-v', `${userHome}:/home/claude`,
+		'-v', `${userHome}:${CONTAINER_HOME}`,
 		DOCKER_IMAGE,
 	);
 	docker('start', name);
@@ -209,8 +211,7 @@ async function executeInContainer(userId, prompt, {
 		throw Object.assign(new Error(errMsg), { code: result.code });
 	}
 
-	const claudeHome = path.join(DATA_DIR, userId, 'home');
-	return parseClaudeOutput(result.stdout, outputFormat, label, claudeHome);
+	return parseClaudeOutput(result.stdout, outputFormat, label, sandboxHome(userId));
 }
 
 /**
@@ -230,7 +231,7 @@ function executeInContainerQueued(userId, prompt, options = {}) {
  */
 function writeCredentials(userId, credentialsJson) {
 	ensureUserStorage(userId);
-	const credPath = path.join(DATA_DIR, userId, 'home', '.claude', '.credentials.json');
+	const credPath = path.join(sandboxHome(userId), '.claude', '.credentials.json');
 	const tmp = credPath + '.tmp';
 	fs.writeFileSync(tmp, credentialsJson, { mode: 0o600 });
 	fs.renameSync(tmp, credPath);
@@ -243,7 +244,7 @@ function writeCredentials(userId, credentialsJson) {
  * Check if a user has credentials in their container volume.
  */
 function hasCredentials(userId) {
-	const credPath = path.join(DATA_DIR, userId, 'home', '.claude', '.credentials.json');
+	const credPath = path.join(sandboxHome(userId), '.claude', '.credentials.json');
 	return fs.existsSync(credPath);
 }
 

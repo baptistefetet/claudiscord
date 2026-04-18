@@ -31,7 +31,7 @@ npm install
 
 # Configure
 cp .env.example .env
-# Edit .env: set AUTHORIZED_USER_ID, CLAUDE_BIN, DISCORD_TOKEN, DATA_DIR
+# Edit .env: set AUTHORIZED_USER_ID, CLAUDE_BIN, DISCORD_TOKEN, SANDBOX_HOMES_DIR
 
 # Build the sandbox Docker image
 docker build -t claudiscord-sandbox .
@@ -40,7 +40,7 @@ docker build -t claudiscord-sandbox .
 cp scheduled-jobs.example.json scheduled-jobs.json
 
 # Create the data directory for sandbox volumes
-mkdir -p /path/to/data  # set DATA_DIR in .env to this path
+mkdir -p /path/to/data  # set SANDBOX_HOMES_DIR in .env to this path
 ```
 
 ## Systemd service
@@ -104,7 +104,7 @@ Credentials are stored in the user's persistent volume and the message is delete
 | `AUTHORIZED_USER_ID` | Discord user ID of the admin | required |
 | `DISCORD_TOKEN` | Discord bot token | required |
 | `CLAUDE_BIN` | Path to Claude Code binary | required |
-| `DATA_DIR` | Directory for sandbox user volumes | required |
+| `SANDBOX_HOMES_DIR` | Directory for sandbox user volumes | required |
 
 ## License
 

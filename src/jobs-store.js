@@ -1,14 +1,14 @@
 const fs = require('fs');
 const path = require('path');
 const cron = require('node-cron');
-const { JOBS_FILE, DATA_DIR, SANDBOX_JOBS_PATH } = require('./config');
+const { CENTRAL_JOBS_FILE, SANDBOX_HOMES_DIR, JOBS_RELATIVE } = require('./config');
 const log = require('./logger');
 
 const REQUIRED_FIELDS = ['id', 'prompt', 'cron', 'enabled'];
 
 function loadJobs() {
 	try {
-		const raw = fs.readFileSync(JOBS_FILE, 'utf8');
+		const raw = fs.readFileSync(CENTRAL_JOBS_FILE, 'utf8');
 		return JSON.parse(raw);
 	} catch (err) {
 		if (err.code !== 'ENOENT') log.error('Failed to load jobs:', err.message);
@@ -17,9 +17,9 @@ function loadJobs() {
 }
 
 function saveJobs(jobs) {
-	const tmp = JOBS_FILE + '.tmp';
+	const tmp = CENTRAL_JOBS_FILE + '.tmp';
 	fs.writeFileSync(tmp, JSON.stringify(jobs, null, 2), 'utf8');
-	fs.renameSync(tmp, JOBS_FILE);
+	fs.renameSync(tmp, CENTRAL_JOBS_FILE);
 }
 
 /**
@@ -53,7 +53,7 @@ function validateJob(job) {
 function syncRemovedSandboxJob(removed) {
 	if (!removed?.userId) return;
 	try {
-		const userJobsFile = path.join(DATA_DIR, removed.userId, 'home', SANDBOX_JOBS_PATH.replace('/home/claude/', ''));
+		const userJobsFile = path.join(SANDBOX_HOMES_DIR, removed.userId, 'home', JOBS_RELATIVE);
 		const raw = fs.readFileSync(userJobsFile, 'utf8');
 		const userJobs = JSON.parse(raw);
 		if (!Array.isArray(userJobs)) return;
@@ -102,7 +102,7 @@ function recordJobRun(key) {
  * - Invalid files are cleaned up (emptied)
  */
 function mergeUserJobs(userId) {
-	const userJobsFile = path.join(DATA_DIR, userId, 'home', SANDBOX_JOBS_PATH.replace('/home/claude/', ''));
+	const userJobsFile = path.join(SANDBOX_HOMES_DIR, userId, 'home', JOBS_RELATIVE);
 
 	let userJobs;
 	try {

@@ -50,7 +50,7 @@ scripts/
   rebuild-sandbox.sh  # Rebuild Docker sandbox image
 sessions.json         # { adminMode, sessions: { userId: sessionId } } (gitignored)
 scheduled-jobs.json   # Scheduled jobs array (gitignored)
-.env                  # AUTHORIZED_USER_ID, CLAUDE_BIN, DISCORD_TOKEN, DATA_DIR
+.env                  # AUTHORIZED_USER_ID, CLAUDE_BIN, DISCORD_TOKEN, SANDBOX_HOMES_DIR
 ```
 
 ## Service
@@ -73,7 +73,7 @@ scheduled-jobs.json   # Scheduled jobs array (gitignored)
 - **Image**: `claudiscord-sandbox` (local arm64 build, `node:22-slim` + Claude Code)
 - **Container**: `claudiscord-{userId}`, one per user, persistent (`--restart unless-stopped`)
 - **Limits**: 512 MB RAM, 1 CPU
-- **Volume**: `DATA_DIR/{userId}/home` -> `/home/claude`
+- **Volume**: `SANDBOX_HOMES_DIR/{userId}/home` -> `/home/claude`
 - **Network**: bridge (internet access for Claude API)
 - **User**: `claude` (non-root, required for `--dangerously-skip-permissions`)
 - **CMD**: `sleep infinity` (container kept alive, commands via `docker exec`)
@@ -83,7 +83,7 @@ scheduled-jobs.json   # Scheduled jobs array (gitignored)
 ### Sandbox storage
 
 ```
-DATA_DIR/
+SANDBOX_HOMES_DIR/
   {userId}/
     home/                    # Mounted as /home/claude in the container
       CLAUDE.md              # Customizable by the user
@@ -115,7 +115,7 @@ Claude Code has a hardcoded protection that blocks all tool writes (Write, Edit,
 
 Setup (run from host, per user volume):
 ```bash
-VOLUME=DATA_DIR/{userId}/home
+VOLUME=SANDBOX_HOMES_DIR/{userId}/home
 mv "$VOLUME/.claude/skills" "$VOLUME/skills"
 ln -s ../skills "$VOLUME/.claude/skills"
 chown -R 1001:1001 "$VOLUME/skills" "$VOLUME/.claude/skills"
@@ -178,7 +178,7 @@ The central file is `scheduled-jobs.json` (admin). Sandbox users write to `/home
 ### Sandbox merge
 
 After each successful sandbox Claude execution, `mergeUserJobs(userId)`:
-1. Reads `DATA_DIR/{userId}/home/.claudiscord/scheduled-jobs.json`
+1. Reads `SANDBOX_HOMES_DIR/{userId}/home/.claudiscord/scheduled-jobs.json`
 2. Validates each job (required fields, valid cron). Cleans the file if invalid.
 3. Compares with the user's jobs in the central file:
    - New jobs -> added (with `userId` stamped)

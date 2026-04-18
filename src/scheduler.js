@@ -1,15 +1,15 @@
 const fs = require('fs');
 const path = require('path');
 const cron = require('node-cron');
-const { JOBS_FILE, ALLOWED_TOOLS, CLAUDE_TIMEOUT_MS, AUTHORIZED_USER_ID, JOB_MODEL, JOB_EFFORT } = require('./config');
+const { CENTRAL_JOBS_FILE, ALLOWED_TOOLS, CLAUDE_TIMEOUT_MS, AUTHORIZED_USER_ID, JOB_MODEL, JOB_EFFORT } = require('./config');
 const { getSystemPrompt } = require('./prompts');
 const { executeForUser } = require('./executor');
 const { loadJobs, jobKey, mergeUserJobs, recordJobRun } = require('./jobs-store');
 const { sendDM } = require('./discord');
 const log = require('./logger');
 
-const JOBS_DIR = path.dirname(JOBS_FILE);
-const JOBS_BASENAME = path.basename(JOBS_FILE);
+const JOBS_DIR = path.dirname(CENTRAL_JOBS_FILE);
+const JOBS_BASENAME = path.basename(CENTRAL_JOBS_FILE);
 
 /** @type {Map<string, import('node-cron').ScheduledTask>} */
 const tasks = new Map();

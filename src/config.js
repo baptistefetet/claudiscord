@@ -1,7 +1,7 @@
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '..', '.env') });
 
-const REQUIRED_ENV = ['AUTHORIZED_USER_ID', 'DISCORD_TOKEN', 'CLAUDE_BIN', 'DATA_DIR'];
+const REQUIRED_ENV = ['AUTHORIZED_USER_ID', 'DISCORD_TOKEN', 'CLAUDE_BIN', 'SANDBOX_HOMES_DIR'];
 for (const key of REQUIRED_ENV) {
 	if (!process.env[key]) {
 		throw new Error(`Missing required environment variable: ${key}`);
@@ -11,10 +11,17 @@ for (const key of REQUIRED_ENV) {
 const AUTHORIZED_USER_ID = process.env.AUTHORIZED_USER_ID;
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CLAUDE_BIN = process.env.CLAUDE_BIN;
-const DATA_DIR = process.env.DATA_DIR;
+const SANDBOX_HOMES_DIR = process.env.SANDBOX_HOMES_DIR;
 
-const JOBS_FILE = path.resolve(__dirname, '..', 'scheduled-jobs.json');
+// --- Paths ---
+// Single source of truth: the jobs file basename and its path relative to a home.
+const CONTAINER_HOME = '/home/claude';
+const JOBS_FILENAME = 'scheduled-jobs.json';
+const JOBS_RELATIVE = path.join('.claudiscord', JOBS_FILENAME);
+
+const CENTRAL_JOBS_FILE = path.resolve(__dirname, '..', JOBS_FILENAME);
 const SESSIONS_FILE = path.resolve(__dirname, '..', 'sessions.json');
+const CONTAINER_JOBS_FILE = path.posix.join(CONTAINER_HOME, JOBS_RELATIVE);
 
 const DOCKER_IMAGE = 'claudiscord-sandbox';
 const CONTAINER_MEMORY = '512m';
@@ -35,16 +42,16 @@ const DM_EFFORT = 'xhigh';
 const JOB_MODEL = 'sonnet';
 const JOB_EFFORT = 'high';
 
-const SANDBOX_JOBS_PATH = '/home/claude/.claudiscord/scheduled-jobs.json';
-
 module.exports = {
 	AUTHORIZED_USER_ID,
 	DISCORD_TOKEN,
 	CLAUDE_BIN,
-	DATA_DIR,
-	JOBS_FILE,
+	SANDBOX_HOMES_DIR,
+	CONTAINER_HOME,
+	JOBS_RELATIVE,
+	CENTRAL_JOBS_FILE,
 	SESSIONS_FILE,
-	SANDBOX_JOBS_PATH,
+	CONTAINER_JOBS_FILE,
 	CLAUDE_TIMEOUT_MS,
 	SHELL_TIMEOUT_MS,
 	DISCORD_MAX_MSG_LENGTH,
