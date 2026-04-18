@@ -28,9 +28,6 @@ Do not rely on interactive confirmations, prompts, menus, or any workflow that r
 All tasks must be started in the foreground and fully completed before you return control to the user.
 Only reply once everything requested is actually finished, unless you explicitly use the scheduling system described below.`;
 
-const DISABLED_SKILLS_PROMPT = `--- Disabled skills ---
-The following skills are internal to Claude Code CLI and unavailable through the Discord bot. Never use or mention them to the user: loop, keybindings-help, schedule, fewer-permission-prompts.`;
-
 const DISCORD_FORMATTING_PROMPT = `--- Response format ---
 Keep responses concise and suited for Discord (max ~1800 characters). Use Discord markdown (not HTML). FORBIDDEN: tables in any form — no ASCII tables, no markdown tables (|---|), no space-aligned columns. Tables are UNREADABLE on Discord (proportional font, mobile). Use instead: bullet lists, bold text for labels, or code blocks for aligned data.`;
 
@@ -103,7 +100,6 @@ function getSystemPrompt(options = {}) {
 			SANDBOX_ENV_PROMPT,
 			CLAUDE_CODE_CLI_PROMPT,
 			SCHEDULING_PROMPT(CONTAINER_JOBS_FILE),
-			DISABLED_SKILLS_PROMPT,
 			DISCORD_FORMATTING_PROMPT,
 		].join('\n\n');
 	}
@@ -114,7 +110,6 @@ function getSystemPrompt(options = {}) {
 		NO_RESTART_PROMPT,
 		CLAUDE_CODE_CLI_PROMPT,
 		SCHEDULING_PROMPT(ADMIN_JOBS_FILE),
-		DISABLED_SKILLS_PROMPT,
 		DISCORD_FORMATTING_PROMPT,
 	].join('\n\n');
 }

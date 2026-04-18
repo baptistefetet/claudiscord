@@ -5,6 +5,7 @@ const execFileAsync = promisify(execFile);
 const { UPGRADE_TIMEOUT_MS, SHELL_TIMEOUT_MS, DISCORD_MAX_MSG_LENGTH, CONTAINER_NAME } = require('./config');
 const sessions = require('./sessions');
 const { writeCredentials, hasCredentials, ensureContainer, DOCKER_AVAILABLE } = require('./container');
+const { runQueued, isBusy } = require('./queue');
 const log = require('./logger');
 
 const KILL_GRACE_MS = 5000;
@@ -217,35 +218,43 @@ async function handleCommand(message) {
 			await channel.send('Docker is not installed — cannot upgrade.');
 			return true;
 		}
-		try {
-			ensureContainer();
-			await channel.send('Updating container packages...');
-			await execFileAsync('docker', [
-				'exec', '-u', 'root', CONTAINER_NAME, 'bash', '-c',
-				'DEBIAN_FRONTEND=noninteractive apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" 2>&1 | tail -10',
-			], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
-			await channel.send('Updating Claude Code...');
-			await execFileAsync('docker', [
-				'exec', CONTAINER_NAME, 'bash', '-c',
-				'curl -fsSL https://claude.ai/install.sh -o /tmp/claude-install.sh',
-			], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
-			await execFileAsync('docker', [
-				'exec', CONTAINER_NAME, 'bash', '-c',
-				'bash /tmp/claude-install.sh 2>&1 | tail -5 ; rm -f /tmp/claude-install.sh',
-			], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
-			await execFileAsync('docker', [
-				'exec', '-u', 'root', CONTAINER_NAME, 'bash', '-c',
-				'cp /home/claude/.local/share/claude/versions/$(ls -t /home/claude/.local/share/claude/versions/ | head -1) /usr/local/bin/claude && chmod 755 /usr/local/bin/claude',
-			], { encoding: 'utf8', timeout: 10000 });
-			let version = '';
-			try {
-				version = (await execFileAsync('docker', ['exec', CONTAINER_NAME, 'claude', '--version'], { encoding: 'utf8', timeout: 10000 })).stdout.trim();
-			} catch {}
-			await channel.send(`Container updated.${version ? `\nVersion: \`${version}\`` : ''}`);
-		} catch (err) {
-			log.error('Upgrade error:', err.message);
-			await channel.send(`Upgrade error: ${err.message.slice(0, 300)}`);
+		// Overwriting /usr/local/bin/claude while another prompt is running
+		// inside the container would crash that prompt. Go through the global
+		// queue so we wait for any in-flight prompt (and warn the user).
+		if (isBusy()) {
+			await channel.send('\u23F3 Un prompt est en cours, l\'upgrade démarrera après.');
 		}
+		await runQueued(async () => {
+			try {
+				ensureContainer();
+				await channel.send('Updating container packages...');
+				await execFileAsync('docker', [
+					'exec', '-u', 'root', CONTAINER_NAME, 'bash', '-c',
+					'DEBIAN_FRONTEND=noninteractive apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" 2>&1 | tail -10',
+				], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
+				await channel.send('Updating Claude Code...');
+				await execFileAsync('docker', [
+					'exec', CONTAINER_NAME, 'bash', '-c',
+					'curl -fsSL https://claude.ai/install.sh -o /tmp/claude-install.sh',
+				], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
+				await execFileAsync('docker', [
+					'exec', CONTAINER_NAME, 'bash', '-c',
+					'bash /tmp/claude-install.sh 2>&1 | tail -5 ; rm -f /tmp/claude-install.sh',
+				], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
+				await execFileAsync('docker', [
+					'exec', '-u', 'root', CONTAINER_NAME, 'bash', '-c',
+					'cp /home/claude/.local/share/claude/versions/$(ls -t /home/claude/.local/share/claude/versions/ | head -1) /usr/local/bin/claude && chmod 755 /usr/local/bin/claude',
+				], { encoding: 'utf8', timeout: 10000 });
+				let version = '';
+				try {
+					version = (await execFileAsync('docker', ['exec', CONTAINER_NAME, 'claude', '--version'], { encoding: 'utf8', timeout: 10000 })).stdout.trim();
+				} catch {}
+				await channel.send(`Container updated.${version ? `\nVersion: \`${version}\`` : ''}`);
+			} catch (err) {
+				log.error('Upgrade error:', err.message);
+				await channel.send(`Upgrade error: ${err.message.slice(0, 300)}`);
+			}
+		}).catch(err => log.error('Queued upgrade error:', err.message));
 		return true;
 	}
 

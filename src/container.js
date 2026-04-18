@@ -38,10 +38,21 @@ function docker(...args) {
 	return execFileSync('docker', args, { encoding: 'utf8', timeout: DOCKER_CMD_TIMEOUT }).trim();
 }
 
+// docker inspect on a non-existent object prints a Go template error to
+// stderr that we otherwise don't care about (we already treat the throw as
+// "doesn't exist"). Silencing stderr here keeps journald clean.
+function dockerQuiet(...args) {
+	return execFileSync('docker', args, {
+		encoding: 'utf8',
+		timeout: DOCKER_CMD_TIMEOUT,
+		stdio: ['ignore', 'pipe', 'ignore'],
+	}).trim();
+}
+
 function ensureImage() {
 	if (!DOCKER_AVAILABLE) return;
 	try {
-		docker('image', 'inspect', DOCKER_IMAGE);
+		dockerQuiet('image', 'inspect', DOCKER_IMAGE);
 		log.info(`Docker image '${DOCKER_IMAGE}' found`);
 	} catch {
 		log.info(`Docker image '${DOCKER_IMAGE}' not found, building...`);
@@ -117,9 +128,10 @@ function ensureContainer() {
 	if (!DOCKER_AVAILABLE) throw new Error('Docker is not installed on this host');
 	ensureStorage();
 
-	// Check if container exists
+	// Check if container exists (silencing stderr: a missing container makes
+	// `docker inspect` write a Go template error that otherwise reaches journald)
 	try {
-		const state = docker('inspect', '-f', '{{.State.Status}}', CONTAINER_NAME);
+		const state = dockerQuiet('inspect', '-f', '{{.State.Status}}', CONTAINER_NAME);
 		if (state === 'running') return;
 		docker('start', CONTAINER_NAME);
 		log.info(`Started existing container '${CONTAINER_NAME}'`);
