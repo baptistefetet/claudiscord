@@ -99,6 +99,27 @@ All executions — interactive prompts and scheduled jobs, admin and sandbox —
 - **CMD**: `sleep infinity`; commands run via `docker exec`
 - Docker availability is detected at startup; if `docker --version` fails, `DOCKER_AVAILABLE` becomes `false` and sandbox operations report a friendly error
 
+### Host user/group setup
+
+The container user `claude` is baked into the image with fixed numeric IDs (`UID=1001`, `GID=1002`, see `Dockerfile`). For a bind-mount to work cleanly, the host side of `SANDBOX_HOME_DIR` must be owned by a user/group with the **same numeric IDs**. File ownership crosses the container boundary by UID/GID, not by name, so the names on each side don't have to match — only the numbers.
+
+Recommended host setup (names are a suggestion):
+
+```bash
+# 1. Create a group at GID 1002 (pick a different GID if 1002 is taken on your host; then
+#    update the Dockerfile to match and rebuild)
+groupadd -g 1002 sandbox
+
+# 2. Create a user at UID 1001 in that group, with its home pointing at SANDBOX_HOME_DIR
+useradd -u 1001 -g sandbox -d /path/to/SANDBOX_HOME_DIR -s /usr/sbin/nologin sandbox
+
+# 3. Own the mounted directory
+mkdir -p /path/to/SANDBOX_HOME_DIR
+chown -R sandbox:sandbox /path/to/SANDBOX_HOME_DIR
+```
+
+If the target UID or GID is already taken on your host, either pick different numbers **and** edit `Dockerfile` (`groupadd -g <new-GID>` / `useradd -u <new-UID> -g <new-GID>`) before building, or reassign the colliding user/group first (`groupmod -g …`, `chown -R …` on affected files). Don't leave the Dockerfile and host out of sync — every file created inside the container lands on the host with the container's numeric IDs.
+
 ### Sandbox storage layout
 
 ```

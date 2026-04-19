@@ -9,7 +9,7 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
     && cp /root/.local/bin/uv /usr/local/bin/uv \
     && cp /root/.local/bin/uvx /usr/local/bin/uvx \
     && rm -rf /root/.local
-RUN useradd -m -s /bin/bash claude
+RUN groupadd -g 1002 claude && useradd -u 1001 -g 1002 -m -s /bin/bash claude
 USER claude
 WORKDIR /home/claude
 CMD ["sleep", "infinity"]
