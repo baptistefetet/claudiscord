@@ -138,18 +138,18 @@ function spawnWithTimeout(cmd, args, options = {}) {
 }
 
 /**
- * Extract the last assistant text from a session JSONL file.
- * Used as fallback when the CLI result field is empty (happens when the
- * last assistant turn ends on a tool_use instead of end_turn).
+ * Extract assistant text blocks from the most recent turn of a session JSONL.
+ * "Most recent turn" = every assistant entry after the last real user prompt
+ * (tool_result entries are also typed `user` and must be skipped). Used as
+ * fallback when the CLI result field is empty (happens when the last
+ * assistant turn ends on a tool_use instead of end_turn).
  */
 function extractLastTextFromSessionLog(sessionId, claudeHome) {
 	if (!sessionId || !claudeHome) return '';
 	try {
-		// Session logs live under ~/.claude/projects/{cwd-encoded}/
 		const projectsDir = path.join(claudeHome, '.claude', 'projects');
 		if (!fs.existsSync(projectsDir)) return '';
 
-		// Find the JSONL file matching this session across all project dirs
 		let jsonlPath = null;
 		for (const dir of fs.readdirSync(projectsDir)) {
 			const candidate = path.join(projectsDir, dir, `${sessionId}.jsonl`);
@@ -158,24 +158,62 @@ function extractLastTextFromSessionLog(sessionId, claudeHome) {
 		if (!jsonlPath) return '';
 
 		const lines = fs.readFileSync(jsonlPath, 'utf8').split('\n');
-		let lastText = '';
+		const entries = [];
 		for (const line of lines) {
 			if (!line.trim()) continue;
-			try {
-				const obj = JSON.parse(line);
-				if (obj.type !== 'assistant') continue;
-				const content = obj.message?.content;
-				if (!Array.isArray(content)) continue;
-				for (const block of content) {
-					if (block.type === 'text' && block.text) lastText = block.text;
-				}
-			} catch {}
+			try { entries.push(JSON.parse(line)); } catch {}
 		}
-		return lastText;
+
+		// Walk backwards to the last real user prompt, then collect every text
+		// block from every assistant entry that follows.
+		let startIdx = 0;
+		for (let i = entries.length - 1; i >= 0; i--) {
+			const e = entries[i];
+			if (e.type !== 'user') continue;
+			const content = e.message?.content;
+			const isToolResult = Array.isArray(content)
+				&& content.some(b => b && b.type === 'tool_result');
+			if (!isToolResult) { startIdx = i + 1; break; }
+		}
+
+		const texts = [];
+		for (let i = startIdx; i < entries.length; i++) {
+			const e = entries[i];
+			if (e.type !== 'assistant') continue;
+			const content = e.message?.content;
+			if (!Array.isArray(content)) continue;
+			for (const block of content) {
+				if (block.type === 'text' && block.text) texts.push(block.text);
+			}
+		}
+		return texts.join('\n\n');
 	} catch (err) {
 		log.warn(`Failed to read session log for ${sessionId}:`, err.message);
 		return '';
 	}
+}
+
+/**
+ * Collect every text block from every `assistant` event in a stream-json stdout.
+ * The `result` event only carries the final text block, so messages that
+ * interleave text with tool_use across multiple assistant turns lose every
+ * text block but the last one if we read `result` alone.
+ */
+function collectStreamJsonText(stdout) {
+	const texts = [];
+	for (const line of stdout.split('\n')) {
+		const trimmed = line.trim();
+		if (!trimmed) continue;
+		let event;
+		try { event = JSON.parse(trimmed); } catch { continue; }
+		if (event.type !== 'assistant') continue;
+		const content = event.message?.content;
+		if (!Array.isArray(content)) continue;
+		for (const block of content) {
+			if (block.type === 'text' && block.text) texts.push(block.text);
+		}
+	}
+	return texts.join('\n\n');
 }
 
 /**
@@ -184,20 +222,28 @@ function extractLastTextFromSessionLog(sessionId, claudeHome) {
  */
 function parseClaudeOutput(stdout, outputFormat, label = 'Claude', claudeHome = null) {
 	if (outputFormat === 'stream-json') {
-		// Stream JSON: multiple JSON lines, find the result event (scan from end)
+		// Find the result event (scan from end) for sessionId + fallback text.
+		let resultEvent = null;
 		const lines = stdout.split('\n');
 		for (let i = lines.length - 1; i >= 0; i--) {
 			const trimmed = lines[i].trim();
 			if (!trimmed) continue;
 			try {
 				const event = JSON.parse(trimmed);
-				if (event.type === 'result') {
-					return { result: event.result || '', sessionId: event.session_id || null };
-				}
+				if (event.type === 'result') { resultEvent = event; break; }
 			} catch (_) {}
 		}
-		log.warn(`${label}: no result event in stream-json output`);
-		return { result: stdout.slice(-500), sessionId: null };
+		if (!resultEvent) {
+			log.warn(`${label}: no result event in stream-json output`);
+			return { result: stdout.slice(-500), sessionId: null };
+		}
+		// Concatenate every text block from every assistant event — the
+		// `result` field only carries the final block.
+		const allText = collectStreamJsonText(stdout);
+		return {
+			result: allText || resultEvent.result || '',
+			sessionId: resultEvent.session_id || null,
+		};
 	}
 
 	if (outputFormat === 'json') {
