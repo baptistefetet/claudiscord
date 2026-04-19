@@ -1,5 +1,5 @@
 const cron = require('node-cron');
-const { ALLOWED_TOOLS, CLAUDE_TIMEOUT_MS, JOB_MODEL, JOB_EFFORT } = require('./config');
+const { ALLOWED_TOOLS, CLAUDE_TIMEOUT_MS, JOB_MODEL, JOB_EFFORT, getAuthorizedUserId } = require('./config');
 const { getSystemPrompt } = require('./prompts');
 const { executeForMode } = require('./executor');
 const { loadAllJobs, jobKey, recordJobRun } = require('./jobs-store');
@@ -26,20 +26,50 @@ function releaseJobLock(key) {
 }
 
 /**
- * Fetch the current Discord name of a channel (DM recipient name or guild channel name).
- * Returns null if the channel can't be resolved.
+ * Job context always needs bot/user identity.
+ * Channel-specific data is added only if the channelId resolves on Discord.
  */
-async function fetchChannelName(channelId) {
+async function fetchJobPromptContext(channelId) {
+	const context = {
+		botName: getClient().user?.displayName || getClient().user?.username || 'claudiscord',
+		userName: null,
+		channelId: null,
+		isDM: false,
+		channelName: null,
+		channelTopic: null,
+	};
+
+	const userId = getAuthorizedUserId();
+	if (userId) {
+		try {
+			const user = await getClient().users.fetch(userId);
+			context.userName = user?.globalName || user?.username || null;
+		} catch (err) {
+			log.warn(`fetchJobPromptContext(user ${userId}) failed: ${err.message}`);
+		}
+	}
+
+	if (!channelId) return context;
+
 	try {
 		const channel = await getClient().channels.fetch(channelId);
-		if (!channel) return null;
+		if (!channel) return context;
+
+		context.channelId = channelId;
 		if (channel.isDMBased?.()) {
-			return channel.recipient?.username || channel.recipient?.globalName || '<dm>';
+			context.isDM = true;
+			context.channelName = channel.recipient?.globalName
+				|| channel.recipient?.username
+				|| '<dm>';
+			return context;
 		}
-		return channel.name || null;
+
+		context.channelName = channel.name || null;
+		context.channelTopic = typeof channel.topic === 'string' ? channel.topic : null;
+		return context;
 	} catch (err) {
-		log.warn(`fetchChannelName(${channelId}) failed: ${err.message}`);
-		return null;
+		log.warn(`fetchJobPromptContext(channel ${channelId}) failed: ${err.message}`);
+		return context;
 	}
 }
 
@@ -63,11 +93,25 @@ async function executeJob(job) {
 
 	const today = new Date().toISOString().slice(0, 10);
 	const fullPrompt = `Today's date: ${today}\n\n${prompt}`;
-	let channelName = null;
+	let resolvedChannelName = null;
+	let promptContext = null;
 
 	try {
-		channelName = await fetchChannelName(channelId);
-		const jobSystemPrompt = getSystemPrompt({ jobId: id });
+		promptContext = await fetchJobPromptContext(channelId);
+		if (!promptContext.userName) {
+			throw new Error(`Could not resolve authorized user name for job '${key}'`);
+		}
+		resolvedChannelName = promptContext?.channelName || job.channelName || null;
+		const jobSystemPrompt = getSystemPrompt({
+			botName: promptContext.botName,
+			userName: promptContext.userName,
+			mode: job.mode,
+			channelId: promptContext.channelId,
+			channelName: resolvedChannelName,
+			channelTopic: promptContext?.channelTopic,
+			isDM: Boolean(promptContext?.isDM),
+			jobId: id,
+		});
 		const jobOptions = {
 			sessionId: null,
 			systemPrompt: jobSystemPrompt,
@@ -91,25 +135,31 @@ async function executeJob(job) {
 				patternMatches = output.includes(notifyPattern);
 			}
 		}
-		if (notify && output && patternMatches) {
+		if (notify && !promptContext.channelId) {
+			log.warn(`Job '${key}': notification skipped (unresolved channelId '${channelId}')`);
+		} else if (notify && output && patternMatches) {
 			await sendToChannel(channelId, `\u{1F4CB} **Job '${id}'**\n${output}`);
 		}
 	} catch (err) {
 		if (err.code === 124) {
 			log.error(`Job '${key}': TIMEOUT`);
-			if (notify) {
+			if (notify && promptContext?.channelId) {
 				await sendToChannel(channelId, `\u{1F6A8} **Job '${id}' \u2014 TIMEOUT**\nNo response after ${CLAUDE_TIMEOUT_MS / 1000}s.`).catch(e => log.error('Notify failed:', e.message));
+			} else if (notify) {
+				log.warn(`Job '${key}': timeout notification skipped (unresolved channelId '${channelId}')`);
 			}
 		} else {
 			log.error(`Job '${key}': ERROR (code ${err.code || 'unknown'})`, err.message);
-			if (notify) {
+			if (notify && promptContext?.channelId) {
 				await sendToChannel(channelId, `\u{1F6A8} **Job '${id}' \u2014 ERROR**\nClaude failed with code ${err.code || 'unknown'}.`).catch(e => log.error('Notify failed:', e.message));
+			} else if (notify) {
+				log.warn(`Job '${key}': error notification skipped (unresolved channelId '${channelId}')`);
 			}
 		}
 	} finally {
 		lastRunMinutes.set(key, nowMinute);
 		try {
-			recordJobRun(job, { channelName });
+			recordJobRun(job, { channelName: resolvedChannelName });
 		} catch (err) {
 			log.error(`Failed to update job '${key}':`, err.message);
 		}
