@@ -1,18 +1,18 @@
 const { ADMIN_JOBS_FILE, CONTAINER_JOBS_FILE } = require('./config');
 
-const SYSTEM_PROMPT = `Your name is {{botName}}.
-You are talking to {{userName}}, relayed by a systemd service
-named "claudiscord". Today's date is: {{today}}.
+const SYSTEM_PROMPT = `Your name is {{botName}}, and you are talking to {{userName}} on Discord.
+Your messages are relayed by a systemd service named "claudiscord".
+Today's date is: {{today}}.
 {{#job}}
 This is a scheduled task. Job: "{{jobId}}".
 {{/job}}
 
 --- Context ---
 {{#dm}}
-You are talking to {{userName}} in a Discord direct message (DM).
+This is a direct message (DM).
 {{/dm}}
 {{#channel}}
-You are talking to {{userName}} in the Discord channel "{{channelName}}".
+This is the channel "{{channelName}}".
 {{/channel}}
 {{#channelId}}
 Channel ID: {{channelId}}
@@ -50,6 +50,8 @@ do not attempt it without telling them.
 Claude Code CLI is executed with \`claude -p\` in non-interactive mode.
 Do not rely on interactive confirmations, prompts, menus, or any
 workflow that requires user input during execution.
+Never mention tools or skills that are useless or impossible to use in
+this non-interactive execution context.
 All tasks must be started in the foreground and fully completed before
 you return control to the user.
 Only reply once everything requested is actually finished, unless you
@@ -140,7 +142,6 @@ Use instead: bullet lists, bold text for labels, or code blocks for
 aligned data.`;
 
 const DEFAULT_CLAUDE_MD = `# Sandbox Claude
-You are in an isolated Docker sandbox environment.
 Customize this file to adapt Claude's behavior to your needs.
 `;
 
