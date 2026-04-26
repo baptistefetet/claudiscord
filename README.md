@@ -25,7 +25,7 @@ Works in both DMs and private guild channels. Each channel is an independent con
 - A Discord bot token ([Discord Developer Portal](https://discord.com/developers/applications))
 - On the portal **Bot** page: enable the **Message Content Intent**
 - On the portal **Installation / Bot** page: in addition to `Direct Messages` grant the **Guilds** and **Guild Messages** privileges so the bot can read the channels you invite it to
-- Claude Code CLI installed on the host (`curl -fsSL https://claude.ai/install.sh | bash`); after install, `which claude` typically returns `~/.local/bin/claude` — that's the path to put in `CLAUDE_BIN`
+- Claude Code CLI installed on the host (`curl -fsSL https://claude.ai/install.sh | bash`) — claudiscord defaults to `~/.local/bin/claude` (the install script's default location); set `CLAUDE_BIN` in `.env` only if it's elsewhere
 - **Optional**: Docker (only required for sandbox mode)
 
 ## Installation
@@ -36,9 +36,9 @@ cd claudiscord
 npm install
 
 cp .env.example .env
-# Fill DISCORD_TOKEN and CLAUDE_BIN. Set SANDBOX_HOME_DIR only if you
-# plan to use sandbox mode (leave empty otherwise).
-# Leave AUTHORIZED_USER_ID empty to bootstrap on first DM.
+# Fill DISCORD_TOKEN. Set CLAUDE_BIN only if claude isn't at
+# ~/.local/bin/claude. Set SANDBOX_HOME_DIR only if you plan to use
+# sandbox mode. Leave AUTHORIZED_USER_ID empty to bootstrap on first DM.
 
 # Only if you want sandbox mode:
 bash scripts/rebuild-sandbox.sh
@@ -144,10 +144,11 @@ Run `claude auth login` on your own machine, then send the credentials to the bo
 
 Credentials are written to `SANDBOX_HOME_DIR/.claude/.credentials.json` and the message carrying them is deleted automatically.
 
-**Where to find credentials** (on the machine where you ran `claude auth login`):
-- **Linux**: `cat ~/.claude/.credentials.json`
-- **Mac**: `security find-generic-password -s "claude-credentials" -w`
-- **Windows**: `type %USERPROFILE%\.claude\.credentials.json`
+**Where to find credentials** (on the Linux box where you ran `claude auth login`):
+
+```
+cat ~/.claude/.credentials.json
+```
 
 ## Configuration
 
@@ -155,7 +156,7 @@ Credentials are written to `SANDBOX_HOME_DIR/.claude/.credentials.json` and the 
 |----------|-------------|----------|
 | `AUTHORIZED_USER_ID` | Discord user ID of the authorized user | Optional (bootstrapped on first DM if empty) |
 | `DISCORD_TOKEN` | Discord bot token | Yes |
-| `CLAUDE_BIN` | Path to Claude Code binary on the host | Yes |
+| `CLAUDE_BIN` | Path to Claude Code binary on the host | Optional (defaults to `~/.local/bin/claude`) |
 | `SANDBOX_HOME_DIR` | Directory bind-mounted into the container as `/home/claude` | Optional (required only for sandbox mode) |
 
 ## License

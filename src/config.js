@@ -4,7 +4,7 @@ const path = require('path');
 const ENV_PATH = path.resolve(__dirname, '..', '.env');
 require('dotenv').config({ path: ENV_PATH });
 
-const REQUIRED_ENV = ['DISCORD_TOKEN', 'CLAUDE_BIN'];
+const REQUIRED_ENV = ['DISCORD_TOKEN'];
 for (const key of REQUIRED_ENV) {
 	if (!process.env[key]) {
 		throw new Error(`Missing required environment variable: ${key}`);
@@ -17,7 +17,10 @@ function getAuthorizedUserId() { return _authorizedUserId; }
 function isAuthorized(userId) { return !!_authorizedUserId && userId === _authorizedUserId; }
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
-const CLAUDE_BIN = process.env.CLAUDE_BIN;
+// Default to ~/.local/bin/claude — where claude.ai/install.sh drops the
+// binary for the user running the service. Override via .env if you have
+// it elsewhere.
+const CLAUDE_BIN = process.env.CLAUDE_BIN || path.join(os.homedir(), '.local/bin/claude');
 // Optional: only required when sandbox mode is used. If unset, sandbox
 // is reported as unavailable just like when Docker is missing.
 const SANDBOX_HOME_DIR = process.env.SANDBOX_HOME_DIR || null;
