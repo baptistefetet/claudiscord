@@ -4,6 +4,15 @@ const path = require('path');
 const { CLAUDE_BIN, CLAUDE_TIMEOUT_MS, ALLOWED_TOOLS, DISALLOWED_TOOLS, ADMIN_HOME } = require('./config');
 const log = require('./logger');
 
+// systemd's inherited PATH usually omits ~/.local/bin, where `claude` itself
+// lives. Without this, Bash tool calls like `claude --version` fail with
+// "command not found" inside the agent.
+const CLAUDE_BIN_DIR = path.dirname(CLAUDE_BIN);
+const ADMIN_ENV = {
+	...process.env,
+	PATH: `${CLAUDE_BIN_DIR}:${process.env.PATH || ''}`,
+};
+
 /**
  * Build Claude CLI arguments from options.
  * Extra args (e.g. --dangerously-skip-permissions) can be prepended via extraArgs.
@@ -55,6 +64,7 @@ function spawnWithTimeout(cmd, args, options = {}) {
 	const {
 		timeoutMs = CLAUDE_TIMEOUT_MS,
 		cwd,
+		env,
 		label = 'process',
 		streamJson = false,
 		onEarlyKill = null,
@@ -63,6 +73,7 @@ function spawnWithTimeout(cmd, args, options = {}) {
 	return new Promise((resolve, reject) => {
 		const child = spawn(cmd, args, {
 			cwd,
+			env,
 			stdio: ['pipe', 'pipe', 'pipe'],
 		});
 
@@ -293,7 +304,7 @@ async function executeClaudeCommand(prompt, options = {}) {
 	let result = await spawnWithTimeout(
 		CLAUDE_BIN,
 		buildClaudeArgs(prompt, { ...spawnOpts, sessionId }),
-		{ timeoutMs, cwd: ADMIN_HOME, label: 'Claude', streamJson: isStreamJson },
+		{ timeoutMs, cwd: ADMIN_HOME, env: ADMIN_ENV, label: 'Claude', streamJson: isStreamJson },
 	);
 
 	// Fallback: if resume failed, retry with new session
@@ -302,7 +313,7 @@ async function executeClaudeCommand(prompt, options = {}) {
 		result = await spawnWithTimeout(
 			CLAUDE_BIN,
 			buildClaudeArgs(prompt, { ...spawnOpts, sessionId: null }),
-			{ timeoutMs, cwd: ADMIN_HOME, label: 'Claude', streamJson: isStreamJson },
+			{ timeoutMs, cwd: ADMIN_HOME, env: ADMIN_ENV, label: 'Claude', streamJson: isStreamJson },
 		);
 	}
 
