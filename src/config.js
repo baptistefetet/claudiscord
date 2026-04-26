@@ -4,7 +4,7 @@ const path = require('path');
 const ENV_PATH = path.resolve(__dirname, '..', '.env');
 require('dotenv').config({ path: ENV_PATH });
 
-const REQUIRED_ENV = ['DISCORD_TOKEN', 'CLAUDE_BIN', 'SANDBOX_HOME_DIR'];
+const REQUIRED_ENV = ['DISCORD_TOKEN', 'CLAUDE_BIN'];
 for (const key of REQUIRED_ENV) {
 	if (!process.env[key]) {
 		throw new Error(`Missing required environment variable: ${key}`);
@@ -18,7 +18,9 @@ function isAuthorized(userId) { return !!_authorizedUserId && userId === _author
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CLAUDE_BIN = process.env.CLAUDE_BIN;
-const SANDBOX_HOME_DIR = process.env.SANDBOX_HOME_DIR;
+// Optional: only required when sandbox mode is used. If unset, sandbox
+// is reported as unavailable just like when Docker is missing.
+const SANDBOX_HOME_DIR = process.env.SANDBOX_HOME_DIR || null;
 
 // --- Paths ---
 const ADMIN_HOME = os.homedir();
@@ -27,7 +29,7 @@ const JOBS_FILENAME = 'scheduled-jobs.json';
 const JOBS_RELATIVE = path.join('.claudiscord', JOBS_FILENAME);
 
 const ADMIN_JOBS_FILE = path.resolve(__dirname, '..', JOBS_FILENAME);
-const SANDBOX_JOBS_FILE = path.join(SANDBOX_HOME_DIR, JOBS_RELATIVE);
+const SANDBOX_JOBS_FILE = SANDBOX_HOME_DIR ? path.join(SANDBOX_HOME_DIR, JOBS_RELATIVE) : null;
 const SESSIONS_FILE = path.resolve(__dirname, '..', 'sessions.json');
 const CONTAINER_JOBS_FILE = path.posix.join(CONTAINER_HOME, JOBS_RELATIVE);
 

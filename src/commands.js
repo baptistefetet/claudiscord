@@ -112,7 +112,7 @@ async function handleCommand(message) {
 			output = await executeShell(command);
 		} else {
 			if (!DOCKER_AVAILABLE) {
-				await channel.send('Docker is not installed — shell requires either admin mode or a working sandbox.');
+				await channel.send('Sandbox is not available — shell requires either admin mode or a working sandbox.');
 				return true;
 			}
 			ensureContainer();
@@ -177,7 +177,7 @@ async function handleCommand(message) {
 
 	if (content === '/sandbox') {
 		if (!DOCKER_AVAILABLE) {
-			await channel.send('Docker is not installed on this host — only admin mode is available.');
+			await channel.send('Sandbox is not available on this host — only admin mode is available.');
 			return true;
 		}
 		if (mode === 'sandbox') {
@@ -192,7 +192,7 @@ async function handleCommand(message) {
 
 	if (content === '/status') {
 		const authed = DOCKER_AVAILABLE && hasCredentials() ? 'yes' : 'no';
-		const dockerNote = DOCKER_AVAILABLE ? '' : '\nDocker not installed — sandbox unavailable.';
+		const dockerNote = DOCKER_AVAILABLE ? '' : '\nSandbox unavailable on this host.';
 		await channel.send(`Channel mode: **${mode}**\nAuthenticated (sandbox): **${authed}**${dockerNote}`);
 		return true;
 	}

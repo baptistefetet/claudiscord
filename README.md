@@ -25,7 +25,7 @@ Works in both DMs and private guild channels. Each channel is an independent con
 - A Discord bot token ([Discord Developer Portal](https://discord.com/developers/applications))
 - On the portal **Bot** page: enable the **Message Content Intent**
 - On the portal **Installation / Bot** page: in addition to `Direct Messages` grant the **Guilds** and **Guild Messages** privileges so the bot can read the channels you invite it to
-- Claude Code CLI installed on the host (`curl -fsSL https://claude.ai/install.sh | bash`)
+- Claude Code CLI installed on the host (`curl -fsSL https://claude.ai/install.sh | bash`); after install, `which claude` typically returns `~/.local/bin/claude` — that's the path to put in `CLAUDE_BIN`
 - **Optional**: Docker (only required for sandbox mode)
 
 ## Installation
@@ -36,7 +36,8 @@ cd claudiscord
 npm install
 
 cp .env.example .env
-# Fill DISCORD_TOKEN, CLAUDE_BIN, SANDBOX_HOME_DIR.
+# Fill DISCORD_TOKEN and CLAUDE_BIN. Set SANDBOX_HOME_DIR only if you
+# plan to use sandbox mode (leave empty otherwise).
 # Leave AUTHORIZED_USER_ID empty to bootstrap on first DM.
 
 # Only if you want sandbox mode:
@@ -50,10 +51,15 @@ manual chown setup.
 
 ## Systemd service
 
+Save the unit below as `/etc/systemd/system/claudiscord.service`, replacing
+`/path/to/claudiscord` with your clone directory. Drop the
+`Requires=docker.service` line if you don't plan to use sandbox mode.
+
 ```ini
 [Unit]
 Description=Claudiscord - Claude Code Discord relay and scheduler
 After=network.target docker.service
+Requires=docker.service
 
 [Service]
 Type=simple
@@ -69,7 +75,35 @@ ExecStopPost=/bin/bash -c 'pkill -f "claude.*-p" || true'
 WantedBy=multi-user.target
 ```
 
-The service needs to run as root (or any user with write access to `.env`) so that the first-DM bootstrap can persist `AUTHORIZED_USER_ID`.
+Then enable and start:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now claudiscord
+```
+
+The service needs to run as a user with write access to `.env` (typically
+root) so that the first-DM bootstrap can persist `AUTHORIZED_USER_ID`.
+
+## Verify the install
+
+```bash
+journalctl -u claudiscord -f
+```
+
+You should see something like:
+
+```
+[claudiscord] Loaded N channel session(s)
+[claudiscord] Discord client connected as YourBot#1234
+[claudiscord] Connected as YourBot#1234
+[claudiscord] Scheduler reloaded: 0 active job(s)
+```
+
+If sandbox mode is configured you'll also see `Docker image
+'claudiscord-sandbox' found`. If `SANDBOX_HOME_DIR` is empty or Docker
+isn't installed, expect a `sandbox mode disabled` warning instead — admin
+mode still works.
 
 ## First run / bootstrap
 
@@ -122,7 +156,7 @@ Credentials are written to `SANDBOX_HOME_DIR/.claude/.credentials.json` and the 
 | `AUTHORIZED_USER_ID` | Discord user ID of the authorized user | Optional (bootstrapped on first DM if empty) |
 | `DISCORD_TOKEN` | Discord bot token | Yes |
 | `CLAUDE_BIN` | Path to Claude Code binary on the host | Yes |
-| `SANDBOX_HOME_DIR` | Directory bind-mounted into the container as `/home/claude` | Yes |
+| `SANDBOX_HOME_DIR` | Directory bind-mounted into the container as `/home/claude` | Optional (required only for sandbox mode) |
 
 ## License
 

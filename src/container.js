@@ -34,14 +34,20 @@ function readSandboxIds() {
 }
 const { uid: CONTAINER_UID, gid: CONTAINER_GID } = readSandboxIds();
 
-// Detect docker availability at module load — lets commands gracefully
-// disable sandbox mode when Docker isn't installed.
+// Sandbox availability: requires both Docker installed AND SANDBOX_HOME_DIR
+// configured. Either missing piece disables sandbox mode gracefully.
+// The flag is exported as DOCKER_AVAILABLE for backward compat with callers,
+// but it now reflects the combined precondition.
 let DOCKER_AVAILABLE = true;
 try {
 	execFileSync('docker', ['--version'], { stdio: 'ignore', timeout: 5000 });
 } catch {
 	DOCKER_AVAILABLE = false;
 	log.warn('Docker not detected — sandbox mode disabled');
+}
+if (DOCKER_AVAILABLE && !SANDBOX_HOME_DIR) {
+	DOCKER_AVAILABLE = false;
+	log.warn('SANDBOX_HOME_DIR unset — sandbox mode disabled');
 }
 
 function docker(...args) {
