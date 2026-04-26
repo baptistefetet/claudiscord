@@ -173,7 +173,7 @@ docker rm -f claudiscord-sandbox  # next use recreates it (volume preserved)
 - `--dangerously-skip-permissions` in sandbox (the container IS the sandbox)
 - Interactive: `--model opus --effort xhigh`
 - Jobs: `--model sonnet --effort high`
-- Host cwd: `/root` (auto-loads `/root/CLAUDE.md`)
+- Host cwd: `os.homedir()` of the user running the service (auto-loads `$HOME/CLAUDE.md`) — typically `/root` on Linux when the service runs as root, `/var/root` on macOS
 - Sandbox cwd: `/home/claude`
 - Timeout: 1200s (SIGTERM then SIGKILL after 5s)
 

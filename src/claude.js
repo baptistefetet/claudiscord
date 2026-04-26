@@ -1,7 +1,7 @@
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { CLAUDE_BIN, CLAUDE_TIMEOUT_MS, ALLOWED_TOOLS, DISALLOWED_TOOLS } = require('./config');
+const { CLAUDE_BIN, CLAUDE_TIMEOUT_MS, ALLOWED_TOOLS, DISALLOWED_TOOLS, ADMIN_HOME } = require('./config');
 const log = require('./logger');
 
 /**
@@ -293,7 +293,7 @@ async function executeClaudeCommand(prompt, options = {}) {
 	let result = await spawnWithTimeout(
 		CLAUDE_BIN,
 		buildClaudeArgs(prompt, { ...spawnOpts, sessionId }),
-		{ timeoutMs, cwd: '/root', label: 'Claude', streamJson: isStreamJson },
+		{ timeoutMs, cwd: ADMIN_HOME, label: 'Claude', streamJson: isStreamJson },
 	);
 
 	// Fallback: if resume failed, retry with new session
@@ -302,7 +302,7 @@ async function executeClaudeCommand(prompt, options = {}) {
 		result = await spawnWithTimeout(
 			CLAUDE_BIN,
 			buildClaudeArgs(prompt, { ...spawnOpts, sessionId: null }),
-			{ timeoutMs, cwd: '/root', label: 'Claude', streamJson: isStreamJson },
+			{ timeoutMs, cwd: ADMIN_HOME, label: 'Claude', streamJson: isStreamJson },
 		);
 	}
 
@@ -311,7 +311,7 @@ async function executeClaudeCommand(prompt, options = {}) {
 		throw Object.assign(new Error(errMsg), { code: result.code });
 	}
 
-	return parseClaudeOutput(result.stdout, outputFormat, 'Claude', '/root');
+	return parseClaudeOutput(result.stdout, outputFormat, 'Claude', ADMIN_HOME);
 }
 
 module.exports = { buildClaudeArgs, spawnWithTimeout, parseClaudeOutput, executeClaudeCommand };

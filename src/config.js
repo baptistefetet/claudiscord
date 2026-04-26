@@ -1,4 +1,5 @@
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const ENV_PATH = path.resolve(__dirname, '..', '.env');
 require('dotenv').config({ path: ENV_PATH });
@@ -20,6 +21,7 @@ const CLAUDE_BIN = process.env.CLAUDE_BIN;
 const SANDBOX_HOME_DIR = process.env.SANDBOX_HOME_DIR;
 
 // --- Paths ---
+const ADMIN_HOME = os.homedir();
 const CONTAINER_HOME = '/home/claude';
 const JOBS_FILENAME = 'scheduled-jobs.json';
 const JOBS_RELATIVE = path.join('.claudiscord', JOBS_FILENAME);
@@ -85,6 +87,7 @@ module.exports = {
 	DISCORD_TOKEN,
 	CLAUDE_BIN,
 	SANDBOX_HOME_DIR,
+	ADMIN_HOME,
 	CONTAINER_HOME,
 	CONTAINER_NAME,
 	JOBS_RELATIVE,
