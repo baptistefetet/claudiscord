@@ -20,9 +20,19 @@ const log = require('./logger');
 
 const DOCKERFILE_DIR = path.resolve(__dirname, '..');
 
-// UID/GID of the 'claude' user inside the container
-const CONTAINER_UID = 1001;
-const CONTAINER_GID = 1001;
+// UID/GID of the 'claude' user inside the container. By convention the
+// container is built (via scripts/rebuild-sandbox.sh) with IDs that match
+// SANDBOX_HOME_DIR's owner, so we read them back from the directory itself.
+// Falls back to 1001:1001 if the directory doesn't exist yet.
+function readSandboxIds() {
+	try {
+		const st = fs.statSync(SANDBOX_HOME_DIR);
+		return { uid: st.uid, gid: st.gid };
+	} catch {
+		return { uid: 1001, gid: 1001 };
+	}
+}
+const { uid: CONTAINER_UID, gid: CONTAINER_GID } = readSandboxIds();
 
 // Detect docker availability at module load — lets commands gracefully
 // disable sandbox mode when Docker isn't installed.

@@ -14,8 +14,13 @@ Works in both DMs and private guild channels. Each channel is an independent con
 - **Optional Docker** — sandbox mode is disabled gracefully if Docker isn't installed; admin mode still works
 - **Scheduler** — cron-based jobs via `node-cron`, notifications delivered to the channel where the job was created
 
+> **Linux only.** Claudiscord ships a systemd unit, expects GNU coreutils,
+> and the sandbox aligns UIDs/GIDs the Linux way. macOS and Windows are
+> not supported.
+
 ## Prerequisites
 
+- Linux host (systemd recommended)
 - Node.js 18+
 - A Discord bot token ([Discord Developer Portal](https://discord.com/developers/applications))
 - On the portal **Bot** page: enable the **Message Content Intent**
@@ -35,9 +40,13 @@ cp .env.example .env
 # Leave AUTHORIZED_USER_ID empty to bootstrap on first DM.
 
 # Only if you want sandbox mode:
-docker build -t claudiscord-sandbox .
-mkdir -p "$SANDBOX_HOME_DIR"
+bash scripts/rebuild-sandbox.sh
 ```
+
+`rebuild-sandbox.sh` creates `SANDBOX_HOME_DIR` if needed and builds the
+image with the in-container `claude` user UID/GID matching the directory's
+owner, so bind-mounted files are read/write-able on both sides without
+manual chown setup.
 
 ## Systemd service
 
@@ -101,7 +110,7 @@ Run `claude auth login` on your own machine, then send the credentials to the bo
 
 Credentials are written to `SANDBOX_HOME_DIR/.claude/.credentials.json` and the message carrying them is deleted automatically.
 
-**Where to find credentials:**
+**Where to find credentials** (on the machine where you ran `claude auth login`):
 - **Linux**: `cat ~/.claude/.credentials.json`
 - **Mac**: `security find-generic-password -s "claude-credentials" -w`
 - **Windows**: `type %USERPROFILE%\.claude\.credentials.json`

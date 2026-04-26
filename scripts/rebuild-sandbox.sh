@@ -2,10 +2,37 @@
 set -euo pipefail
 
 IMAGE="claudiscord-sandbox"
-DOCKERFILE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
-echo "=== Building $IMAGE ==="
-docker build --no-cache -t "$IMAGE" "$DOCKERFILE_DIR"
+# Pick UID/GID for the in-container `claude` user. If SANDBOX_HOME_DIR is set
+# in .env and exists, mirror its ownership so bind-mounted files are
+# read/write-able on both sides without additional chown gymnastics.
+# Otherwise default to 1001:1001 and create the directory.
+SANDBOX_HOME_DIR=""
+if [ -f "$PROJECT_DIR/.env" ]; then
+    SANDBOX_HOME_DIR=$(grep -E '^SANDBOX_HOME_DIR=' "$PROJECT_DIR/.env" | head -1 | cut -d= -f2-)
+fi
+
+if [ -n "$SANDBOX_HOME_DIR" ] && [ -d "$SANDBOX_HOME_DIR" ]; then
+    SANDBOX_UID=$(stat -c '%u' "$SANDBOX_HOME_DIR")
+    SANDBOX_GID=$(stat -c '%g' "$SANDBOX_HOME_DIR")
+    echo "Detected SANDBOX_HOME_DIR ownership: ${SANDBOX_UID}:${SANDBOX_GID}"
+else
+    SANDBOX_UID=1001
+    SANDBOX_GID=1001
+    echo "Using default UID:GID 1001:1001"
+    if [ -n "$SANDBOX_HOME_DIR" ]; then
+        mkdir -p "$SANDBOX_HOME_DIR"
+        chown "${SANDBOX_UID}:${SANDBOX_GID}" "$SANDBOX_HOME_DIR"
+        echo "Created and chowned $SANDBOX_HOME_DIR"
+    fi
+fi
+
+echo "=== Building $IMAGE (UID=$SANDBOX_UID GID=$SANDBOX_GID) ==="
+docker build --no-cache \
+    --build-arg "SANDBOX_UID=$SANDBOX_UID" \
+    --build-arg "SANDBOX_GID=$SANDBOX_GID" \
+    -t "$IMAGE" "$PROJECT_DIR"
 
 echo ""
 echo "=== Removing old containers (volumes preserved) ==="
