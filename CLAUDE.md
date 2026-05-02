@@ -48,6 +48,7 @@ src/
   sessions.js         # { channels: { channelId -> { mode, sessionId, lastName } } }
   scheduler.js        # node-cron, reloadJobs, executeJob, per-key lock
   commands.js         # /help /clear /status /admin /sandbox /login /upgrade /restart !shell
+  stt.js              # Groq Whisper transcription for Discord voice messages
 claude/
   wait-background.sh  # PostToolUse hook: blocks until run_in_background completes
   settings.json       # Claude Code settings template (hooks config)
@@ -55,7 +56,7 @@ scripts/
   rebuild-sandbox.sh  # Rebuild Docker sandbox image
 sessions.json         # { channels: { channelId -> {…} } } (gitignored)
 scheduled-jobs.json   # Admin scheduled jobs (gitignored)
-.env                  # AUTHORIZED_USER_ID, DISCORD_TOKEN, CLAUDE_BIN, SANDBOX_HOME_DIR
+.env                  # AUTHORIZED_USER_ID, DISCORD_TOKEN, CLAUDE_BIN, SANDBOX_HOME_DIR, GROQ_API_KEY
 ```
 
 ## Service
@@ -64,6 +65,24 @@ scheduled-jobs.json   # Admin scheduled jobs (gitignored)
 - **Logs**: `journalctl -u claudiscord -f`
 - **ExecStopPost**: `pkill -f "claude.*-p"` (safety net)
 - **User**: root — required so the bootstrap can rewrite `.env`
+
+## Voice messages (speech-to-text)
+
+Discord voice messages (the mic button — flag `MessageFlags.IsVoiceMessage`)
+are transcribed via Groq Whisper before being passed to Claude. Plain audio
+attachments (`.mp3` etc.) are ignored on purpose — only the dedicated voice
+message UI triggers transcription.
+
+- Module: `src/stt.js` (single `transcribeVoiceMessage` function, no SDK).
+- Endpoint: `POST https://api.groq.com/openai/v1/audio/transcriptions`.
+- Defaults: model `whisper-large-v3`, language `fr`. Override via `STT_MODEL`
+  / `STT_LANGUAGE` in `.env`.
+- If `GROQ_API_KEY` is missing, voice messages are silently dropped (warn log).
+- Text wins if both text and voice are present in the same message — Groq is
+  not called.
+- The transcription is echoed back to the channel as `🎙️ <text>` before
+  Claude executes, so the user sees what Whisper understood.
+- API errors are surfaced to the channel and logged; the bot stays up.
 
 ## Authorization
 

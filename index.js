@@ -8,8 +8,9 @@ const { executeForMode } = require('./src/executor');
 const { isBusy } = require('./src/queue');
 const { createClient, login, splitMessage, startTypingIndicator } = require('./src/discord');
 const { handleCommand } = require('./src/commands');
+const { transcribeVoiceMessage } = require('./src/stt');
 const scheduler = require('./src/scheduler');
-const { Events, ChannelType } = require('discord.js');
+const { Events, ChannelType, MessageFlags } = require('discord.js');
 
 process.on('unhandledRejection', err => {
 	log.error('Unhandled rejection:', err);
@@ -44,7 +45,8 @@ client.on(Events.MessageCreate, async message => {
 	if (!isDM && !isGuildText) return;
 
 	const content = message.content.trim();
-	if (!content) return;
+	const isVoice = message.flags?.has(MessageFlags.IsVoiceMessage) || false;
+	if (!content && !isVoice) return;
 
 	const userId = message.author.id;
 
@@ -67,6 +69,30 @@ client.on(Events.MessageCreate, async message => {
 
 	// Strict authorization: silently ignore every other user.
 	if (!config.isAuthorized(userId)) return;
+
+	// Voice message → transcription via Groq Whisper. Text wins if both present.
+	let prompt = content;
+	if (!prompt && isVoice) {
+		if (!config.GROQ_API_KEY) {
+			log.warn('Voice message received but GROQ_API_KEY not set, ignoring');
+			return;
+		}
+		const audio = message.attachments.find(a => a.contentType?.startsWith('audio/'));
+		if (!audio) return;
+		try {
+			prompt = (await transcribeVoiceMessage(audio, {
+				apiKey: config.GROQ_API_KEY,
+				model: config.STT_MODEL,
+				language: config.STT_LANGUAGE,
+			})).trim();
+			if (!prompt) return;
+			await message.channel.send(`🎙️ ${prompt}`).catch(() => {});
+		} catch (err) {
+			log.error('STT failed:', err.message);
+			await message.channel.send(`Transcription échouée : ${err.message?.slice(0, 200) || 'unknown'}`).catch(() => {});
+			return;
+		}
+	}
 
 	// Commands first (they manage their own responses).
 	if (await handleCommand(message)) return;
@@ -107,7 +133,7 @@ client.on(Events.MessageCreate, async message => {
 	let stopTyping = null;
 	try {
 		stopTyping = startTypingIndicator(channel);
-		const result = await executeForMode(mode, content, promptOptions);
+		const result = await executeForMode(mode, prompt, promptOptions);
 
 		stopTyping();
 		stopTyping = null;

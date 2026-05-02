@@ -25,6 +25,12 @@ const CLAUDE_BIN = process.env.CLAUDE_BIN || path.join(os.homedir(), '.local/bin
 // is reported as unavailable just like when Docker is missing.
 const SANDBOX_HOME_DIR = process.env.SANDBOX_HOME_DIR || null;
 
+// Optional: enables Groq Whisper transcription of Discord voice messages.
+// If unset, voice messages are silently ignored (legacy behaviour).
+const GROQ_API_KEY = process.env.GROQ_API_KEY || null;
+const STT_MODEL = process.env.STT_MODEL || 'whisper-large-v3';
+const STT_LANGUAGE = process.env.STT_LANGUAGE || 'fr';
+
 // --- Paths ---
 const ADMIN_HOME = os.homedir();
 const CONTAINER_HOME = '/home/claude';
@@ -92,6 +98,9 @@ module.exports = {
 	DISCORD_TOKEN,
 	CLAUDE_BIN,
 	SANDBOX_HOME_DIR,
+	GROQ_API_KEY,
+	STT_MODEL,
+	STT_LANGUAGE,
 	ADMIN_HOME,
 	CONTAINER_HOME,
 	CONTAINER_NAME,

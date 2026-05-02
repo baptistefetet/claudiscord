@@ -158,6 +158,9 @@ cat ~/.claude/.credentials.json
 | `DISCORD_TOKEN` | Discord bot token | Yes |
 | `CLAUDE_BIN` | Path to Claude Code binary on the host | Optional (defaults to `~/.local/bin/claude`) |
 | `SANDBOX_HOME_DIR` | Directory bind-mounted into the container as `/home/claude` | Optional (required only for sandbox mode) |
+| `GROQ_API_KEY` | Groq API key for transcribing Discord voice messages via Whisper | Optional (voice messages ignored if unset) |
+| `STT_MODEL` | Groq Whisper model id | Optional (defaults to `whisper-large-v3`) |
+| `STT_LANGUAGE` | Transcription language, ISO-639-1 | Optional (defaults to `fr`) |
 
 ## License
 
