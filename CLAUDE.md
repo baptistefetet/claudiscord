@@ -124,9 +124,9 @@ SANDBOX_HOME_DIR/         # = /home/claude in the container
     .credentials.json     # written by /login
     settings.json         # hooks config (seeded)
     hooks/wait-background.sh
+    skills/               # user skills
   .claudiscord/
     scheduled-jobs.json   # sandbox jobs
-  skills/                 # symlink workaround (see below)
 ```
 
 ### Background task hook workaround
@@ -139,21 +139,6 @@ Files:
 - `claude/wait-background.sh` — hook template (seeded by `ensureStorage()`)
 - `claude/settings.json` — settings template registering the hook (660s timeout)
 - Sandbox volume: `~/.claude/hooks/wait-background.sh` + `~/.claude/settings.json`
-
-### Skills symlink workaround
-
-Claude Code has a hardcoded protection that blocks all tool writes (Write, Edit, Bash) to `~/.claude/` even with `--dangerously-skip-permissions` ([#37157](https://github.com/anthropics/claude-code/issues/37157)). The exemption list only includes `.claude/commands` and `.claude/agents`, not `.claude/skills` (bug).
-
-**Workaround**: move `skills/` outside `.claude/` and symlink it back. The path check is string-based and doesn't resolve symlinks.
-
-Setup:
-```bash
-VOLUME=$SANDBOX_HOME_DIR
-SANDBOX_OWNER=$(stat -c '%u:%g' "$VOLUME")
-mv "$VOLUME/.claude/skills" "$VOLUME/skills"
-ln -s ../skills "$VOLUME/.claude/skills"
-chown -R "$SANDBOX_OWNER" "$VOLUME/skills" "$VOLUME/.claude/skills"
-```
 
 ### Image rebuild
 
