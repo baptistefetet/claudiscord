@@ -21,10 +21,6 @@ process.on('uncaughtException', err => {
 
 const client = createClient();
 
-// Protect the bootstrap (first DM -> AUTHORIZED_USER_ID) against a race
-// between two messages arriving while the first registration is in flight.
-let bootstrapPending = false;
-
 // Channels currently waiting for their turn in the global queue — used to
 // avoid flooding a channel with multiple "⏳ en attente…" notices.
 const waitingNotice = new Set();
@@ -48,27 +44,8 @@ client.on(Events.MessageCreate, async message => {
 	const isVoice = message.flags?.has(MessageFlags.IsVoiceMessage) || false;
 	if (!content && !isVoice) return;
 
-	const userId = message.author.id;
-
-	// Bootstrap: the very first DM registers its author as the authorized user.
-	// Only DMs can bootstrap — unsolicited guild messages must never escalate.
-	if (!config.getAuthorizedUserId()) {
-		if (!isDM) return;
-		if (bootstrapPending) return;
-		bootstrapPending = true;
-		try {
-			config.writeEnvValue('AUTHORIZED_USER_ID', userId);
-			log.info(`Authorized user registered via first-DM bootstrap: ${userId}`);
-		} catch (err) {
-			bootstrapPending = false;
-			log.error('Bootstrap failed:', err.message);
-			return;
-		}
-		bootstrapPending = false;
-	}
-
 	// Strict authorization: silently ignore every other user.
-	if (!config.isAuthorized(userId)) return;
+	if (message.author.id !== config.AUTHORIZED_USER_ID) return;
 
 	// Voice message → transcription via Groq Whisper. Text wins if both present.
 	let prompt = content;

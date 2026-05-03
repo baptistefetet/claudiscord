@@ -1,5 +1,5 @@
 const cron = require('node-cron');
-const { ALLOWED_TOOLS, CLAUDE_TIMEOUT_MS, JOB_MODEL, JOB_EFFORT, getAuthorizedUserId } = require('./config');
+const { ALLOWED_TOOLS, AUTHORIZED_USER_ID, CLAUDE_TIMEOUT_MS, JOB_MODEL, JOB_EFFORT } = require('./config');
 const { getSystemPrompt } = require('./prompts');
 const { executeForMode } = require('./executor');
 const { loadAllJobs, jobKey, recordJobRun } = require('./jobs-store');
@@ -39,14 +39,11 @@ async function fetchJobPromptContext(channelId) {
 		channelTopic: null,
 	};
 
-	const userId = getAuthorizedUserId();
-	if (userId) {
-		try {
-			const user = await getClient().users.fetch(userId);
-			context.userName = user?.globalName || user?.username || null;
-		} catch (err) {
-			log.warn(`fetchJobPromptContext(user ${userId}) failed: ${err.message}`);
-		}
+	try {
+		const user = await getClient().users.fetch(AUTHORIZED_USER_ID);
+		context.userName = user?.globalName || user?.username || null;
+	} catch (err) {
+		log.warn(`fetchJobPromptContext(user ${AUTHORIZED_USER_ID}) failed: ${err.message}`);
 	}
 
 	if (!channelId) return context;

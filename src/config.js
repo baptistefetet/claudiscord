@@ -1,21 +1,16 @@
-const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const ENV_PATH = path.resolve(__dirname, '..', '.env');
 require('dotenv').config({ path: ENV_PATH });
 
-const REQUIRED_ENV = ['DISCORD_TOKEN'];
+const REQUIRED_ENV = ['DISCORD_TOKEN', 'AUTHORIZED_USER_ID'];
 for (const key of REQUIRED_ENV) {
 	if (!process.env[key]) {
 		throw new Error(`Missing required environment variable: ${key}`);
 	}
 }
 
-// AUTHORIZED_USER_ID is optional: empty means bootstrap-on-first-DM
-let _authorizedUserId = process.env.AUTHORIZED_USER_ID || null;
-function getAuthorizedUserId() { return _authorizedUserId; }
-function isAuthorized(userId) { return !!_authorizedUserId && userId === _authorizedUserId; }
-
+const AUTHORIZED_USER_ID = process.env.AUTHORIZED_USER_ID;
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 // Default to ~/.local/bin/claude — where claude.ai/install.sh drops the
 // binary for the user running the service. Override via .env if you have
@@ -62,39 +57,8 @@ const DM_EFFORT = 'xhigh';
 const JOB_MODEL = 'sonnet';
 const JOB_EFFORT = 'high';
 
-/**
- * Atomic .env write (tmp + rename). Replaces or appends `KEY=value`.
- * Also updates process.env and the in-memory AUTHORIZED_USER_ID cache.
- */
-function writeEnvValue(key, value) {
-	let content = '';
-	let mode = 0o600;
-	try {
-		const stat = fs.statSync(ENV_PATH);
-		mode = stat.mode & 0o777;
-		content = fs.readFileSync(ENV_PATH, 'utf8');
-	} catch (err) {
-		if (err.code !== 'ENOENT') throw err;
-	}
-	const line = `${key}=${value}`;
-	const pattern = new RegExp(`^${key}=.*$`, 'm');
-	if (pattern.test(content)) {
-		content = content.replace(pattern, line);
-	} else {
-		if (content && !content.endsWith('\n')) content += '\n';
-		content += line + '\n';
-	}
-	const tmp = ENV_PATH + '.tmp';
-	fs.writeFileSync(tmp, content, { encoding: 'utf8', mode });
-	fs.renameSync(tmp, ENV_PATH);
-	process.env[key] = value;
-	if (key === 'AUTHORIZED_USER_ID') _authorizedUserId = value || null;
-}
-
 module.exports = {
-	getAuthorizedUserId,
-	isAuthorized,
-	writeEnvValue,
+	AUTHORIZED_USER_ID,
 	DISCORD_TOKEN,
 	CLAUDE_BIN,
 	SANDBOX_HOME_DIR,

@@ -23,7 +23,7 @@ Scheduled jobs
 ```
 
 - Each Discord channel has its own mode (`admin` / `sandbox`) and its own Claude session. A DM channel is treated exactly like any other channel.
-- The authorized user is stored in `.env` (`AUTHORIZED_USER_ID`). If empty, the first DM the bot receives registers its author.
+- The authorized user is stored in `.env` (`AUTHORIZED_USER_ID`) and is required at startup — without it the process refuses to boot.
 - Global queue (`src/queue.js`): every prompt (interactive or scheduled) goes through a single FIFO. `isBusy()` is used to show a one-time "⏳ waiting" hint per channel.
 - Jobs live in two separate files — never merged, never watched:
   - `scheduled-jobs.json` (project root) for admin jobs
@@ -33,10 +33,10 @@ Scheduled jobs
 ## Files
 
 ```
-index.js              # Entry point: Discord handler, bootstrap, queue wait UX
+index.js              # Entry point: Discord handler, queue wait UX
 Dockerfile            # Sandbox image (node:22-slim + Claude CLI + user claude)
 src/
-  config.js           # .env + writeEnvValue + paths + constants
+  config.js           # .env loading + paths + constants
   prompts.js          # System prompt builder (per-channel context injection)
   logger.js           # stdout/stderr logging (journald-friendly)
   discord.js          # Client, sendToChannel, splitMessage, typing indicator
@@ -64,7 +64,7 @@ scheduled-jobs.json   # Admin scheduled jobs (gitignored)
 - **Service**: `claudiscord` (`systemctl status claudiscord`)
 - **Logs**: `journalctl -u claudiscord -f`
 - **ExecStopPost**: `pkill -f "claude.*-p"` (safety net)
-- **User**: root — required so the bootstrap can rewrite `.env`
+- **User**: root
 
 ## Voice messages (speech-to-text)
 
@@ -86,10 +86,9 @@ message UI triggers transcription.
 
 ## Authorization
 
-- `AUTHORIZED_USER_ID` in `.env` identifies the single user allowed to talk to the bot.
-- If empty at startup, the first DM the bot receives writes the author's user ID into `.env`. Guild messages never trigger the bootstrap.
+- `AUTHORIZED_USER_ID` in `.env` identifies the single user allowed to talk to the bot. It is required at startup — `src/config.js` throws if missing, so the service won't run without it.
+- The user finds their own ID via Discord's developer mode (right-click avatar → Copy User ID).
 - Every non-authorized message is silently dropped — no reply, minimal logging.
-- Writing `.env` is atomic (tmp + rename); an in-memory `bootstrapPending` flag prevents a race between concurrent first-DMs.
 
 ## Modes (per channel)
 

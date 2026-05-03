@@ -10,7 +10,7 @@ Works in both DMs and private guild channels. Each channel is an independent con
 - **Channel topic = mini CLAUDE.md** — renaming or rewriting the topic immediately changes the agent's context
 - **Two execution modes per channel** — `admin` runs Claude on the host (full system access), `sandbox` runs it in the Docker container
 - **Global queue** — one Claude prompt at a time across every channel and scheduled job (keeps jobs files race-free)
-- **Bootstrap on first DM** — leave `AUTHORIZED_USER_ID` empty in `.env` and the first person to DM the bot is registered as the only authorized user
+- **Single-user authorization** — only the Discord user whose ID is in `AUTHORIZED_USER_ID` can talk to the bot; everyone else is silently dropped
 - **Optional Docker** — sandbox mode is disabled gracefully if Docker isn't installed; admin mode still works
 - **Scheduler** — cron-based jobs via `node-cron`, notifications delivered to the channel where the job was created
 
@@ -36,9 +36,10 @@ cd claudiscord
 npm install
 
 cp .env.example .env
-# Fill DISCORD_TOKEN. Set CLAUDE_BIN only if claude isn't at
-# ~/.local/bin/claude. Set SANDBOX_HOME_DIR only if you plan to use
-# sandbox mode. Leave AUTHORIZED_USER_ID empty to bootstrap on first DM.
+# Fill DISCORD_TOKEN and AUTHORIZED_USER_ID (enable Discord Developer Mode,
+# right-click your avatar → "Copy User ID"). Set CLAUDE_BIN only if claude
+# isn't at ~/.local/bin/claude. Set SANDBOX_HOME_DIR only if you plan to
+# use sandbox mode.
 
 # Only if you want sandbox mode:
 bash scripts/rebuild-sandbox.sh
@@ -82,9 +83,6 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now claudiscord
 ```
 
-The service needs to run as a user with write access to `.env` (typically
-root) so that the first-DM bootstrap can persist `AUTHORIZED_USER_ID`.
-
 ## Verify the install
 
 ```bash
@@ -104,15 +102,6 @@ If sandbox mode is configured you'll also see `Docker image
 'claudiscord-sandbox' found`. If `SANDBOX_HOME_DIR` is empty or Docker
 isn't installed, expect a `sandbox mode disabled` warning instead — admin
 mode still works.
-
-## First run / bootstrap
-
-1. Start the service with `AUTHORIZED_USER_ID=` empty in `.env`.
-2. Send the bot a DM from your personal Discord account.
-3. The bot writes your Discord user ID into `.env` and answers that first message normally.
-4. Every subsequent message from any other user is silently ignored, both in DMs and in channels the bot has been invited to.
-
-If you'd rather skip the bootstrap, just put your Discord user ID directly in `AUTHORIZED_USER_ID` before starting.
 
 ## Using channels
 
@@ -154,7 +143,7 @@ cat ~/.claude/.credentials.json
 
 | Variable | Description | Required |
 |----------|-------------|----------|
-| `AUTHORIZED_USER_ID` | Discord user ID of the authorized user | Optional (bootstrapped on first DM if empty) |
+| `AUTHORIZED_USER_ID` | Discord user ID of the only user allowed to talk to the bot | Yes |
 | `DISCORD_TOKEN` | Discord bot token | Yes |
 | `CLAUDE_BIN` | Path to Claude Code binary on the host | Optional (defaults to `~/.local/bin/claude`) |
 | `SANDBOX_HOME_DIR` | Directory bind-mounted into the container as `/home/claude` | Optional (required only for sandbox mode) |
