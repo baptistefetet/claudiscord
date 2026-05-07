@@ -3,11 +3,12 @@ const { ADMIN_JOBS_FILE, CONTAINER_JOBS_FILE } = require('./config');
 const SYSTEM_PROMPT = `Your name is {{botName}}, and you are talking to {{userName}} on Discord.
 Your messages are relayed by a systemd service named "claudiscord".
 Today's date is: {{today}}.
-{{#job}}
-This is a scheduled task. Job: "{{jobId}}".
-{{/job}}
 
 --- Context ---
+{{#job}}
+This is a scheduled task. Job: "{{jobId}}".
+Job output is one-shot: do not end with a question; user replies cannot resume this job.
+{{/job}}
 {{#dm}}
 This is a direct message (DM).
 {{/dm}}
