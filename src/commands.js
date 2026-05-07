@@ -18,12 +18,7 @@ You need to authenticate on your own machine and send your credentials:
 
 **1.** Install Claude Code: \`curl -fsSL https://claude.ai/install.sh | bash\`
 **2.** Run: \`claude auth login\` and authorize access in your browser
-**3.** Copy your credentials:
-
-> **Linux**: \`cat ~/.claude/.credentials.json\`
-> **Mac**: credentials are stored in the Keychain. Run:
-> \`security find-generic-password -s "claude-credentials" -w\`
-> **Windows**: \`type %USERPROFILE%\\.claude\\.credentials.json\`
+**3.** Copy your credentials: \`cat ~/.claude/.credentials.json\`
 
 **4.** Send here: \`/login {"claudeAiOauth":...}\`
 
@@ -222,7 +217,7 @@ async function handleCommand(message) {
 		// inside the container would crash that prompt. Go through the global
 		// queue so we wait for any in-flight prompt (and warn the user).
 		if (isBusy()) {
-			await channel.send('\u23F3 Un prompt est en cours, l\'upgrade démarrera après.');
+			await channel.send('\u23F3 A prompt is currently running, upgrade will start after.');
 		}
 		await runQueued(async () => {
 			try {

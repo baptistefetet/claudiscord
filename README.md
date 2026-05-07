@@ -12,6 +12,7 @@ Works in both DMs and private guild channels. Each channel is an independent con
 - **Global queue** — one Claude prompt at a time across every channel and scheduled job (keeps jobs files race-free)
 - **Single-user authorization** — only the Discord user whose ID is in `AUTHORIZED_USER_ID` can talk to the bot; everyone else is silently dropped
 - **Optional Docker** — sandbox mode is disabled gracefully if Docker isn't installed; admin mode still works
+- **Voice messages** — Discord voice messages (mic button) are transcribed via Groq Whisper before being passed to Claude
 - **Scheduler** — cron-based jobs via `node-cron`, notifications delivered to the channel where the job was created
 
 > **Linux only.** Claudiscord ships a systemd unit, expects GNU coreutils,

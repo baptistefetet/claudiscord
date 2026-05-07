@@ -22,7 +22,7 @@ process.on('uncaughtException', err => {
 const client = createClient();
 
 // Channels currently waiting for their turn in the global queue — used to
-// avoid flooding a channel with multiple "⏳ en attente…" notices.
+// avoid flooding a channel with multiple "⏳ waiting…" notices.
 const waitingNotice = new Set();
 
 function resolveChannelName(channel) {
@@ -66,7 +66,7 @@ client.on(Events.MessageCreate, async message => {
 			await message.channel.send(`🎙️ ${prompt}`).catch(() => {});
 		} catch (err) {
 			log.error('STT failed:', err.message);
-			await message.channel.send(`Transcription échouée : ${err.message?.slice(0, 200) || 'unknown'}`).catch(() => {});
+			await message.channel.send(`Transcription failed: ${err.message?.slice(0, 200) || 'unknown'}`).catch(() => {});
 			return;
 		}
 	}
@@ -104,7 +104,7 @@ client.on(Events.MessageCreate, async message => {
 	// Surface the wait once per channel if another prompt is already running.
 	if (isBusy() && !waitingNotice.has(channelId)) {
 		waitingNotice.add(channelId);
-		channel.send('\u23F3 En attente du prompt précédent...').catch(() => {});
+		channel.send('\u23F3 Waiting for previous prompt...').catch(() => {});
 	}
 
 	let stopTyping = null;

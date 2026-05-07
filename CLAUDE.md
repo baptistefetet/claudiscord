@@ -104,7 +104,7 @@ message UI triggers transcription.
 
 ## Global queue
 
-All executions — interactive prompts and scheduled jobs, admin and sandbox — go through `src/queue.js::runQueued`. Only one Claude process runs at a time. If a new message arrives while something is running, `index.js` sends a one-shot "⏳ En attente du prompt précédent..." notice to the concerned channel. This sequentiality simplifies invariants around concurrent file writes (jobs files, sessions file).
+All executions — interactive prompts and scheduled jobs, admin and sandbox — go through `src/queue.js::runQueued`. Only one Claude process runs at a time. If a new message arrives while something is running, `index.js` sends a one-shot "⏳ Waiting for previous prompt..." notice to the concerned channel. This sequentiality simplifies invariants around concurrent file writes (jobs files, sessions file).
 
 ## Docker sandbox (optional)
 
