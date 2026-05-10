@@ -205,20 +205,48 @@ function extractLastTextFromSessionLog(sessionId, claudeHome) {
 }
 
 /**
- * Collect every text block from every `assistant` event in a stream-json stdout.
- * The `result` event only carries the final text block, so messages that
- * interleave text with tool_use across multiple assistant turns lose every
- * text block but the last one if we read `result` alone.
+ * Collect the user-visible text from a stream-json stdout.
+ *
+ * The `result` event only carries the final text block, so a naive read
+ * loses intermediate text when the conversation interleaves text with
+ * tool_use. But collecting *every* assistant text block goes too far the
+ * other way: it pulls in the preamble Claude often narrates before tool
+ * calls ("I'll check the logs…", "Let me look at this…"), frequently in
+ * English even when the final answer is in the user's language, which
+ * looks like leaked thinking on the Discord side.
+ *
+ * Heuristic: only text blocks emitted *after* the last `tool_result` are
+ * part of the final answer. Anything before is interstitial narration and
+ * is dropped. If no tool_result exists in the stream (no tools were used),
+ * we collect everything — the only assistant text IS the answer.
+ *
+ * Edge case: if the last assistant turn ends on `tool_use` (no closing
+ * text), there is no text after the last tool_result and this returns ''.
+ * The caller falls back to `resultEvent.result` in that case.
  */
 function collectStreamJsonText(stdout) {
-	const texts = [];
+	const events = [];
 	for (const line of stdout.split('\n')) {
 		const trimmed = line.trim();
 		if (!trimmed) continue;
-		let event;
-		try { event = JSON.parse(trimmed); } catch { continue; }
-		if (event.type !== 'assistant') continue;
-		const content = event.message?.content;
+		try { events.push(JSON.parse(trimmed)); } catch {}
+	}
+
+	let startIdx = 0;
+	for (let i = events.length - 1; i >= 0; i--) {
+		const e = events[i];
+		if (e.type !== 'user') continue;
+		const content = e.message?.content;
+		const isToolResult = Array.isArray(content)
+			&& content.some(b => b && b.type === 'tool_result');
+		if (isToolResult) { startIdx = i + 1; break; }
+	}
+
+	const texts = [];
+	for (let i = startIdx; i < events.length; i++) {
+		const e = events[i];
+		if (e.type !== 'assistant') continue;
+		const content = e.message?.content;
 		if (!Array.isArray(content)) continue;
 		for (const block of content) {
 			if (block.type === 'text' && block.text) texts.push(block.text);
