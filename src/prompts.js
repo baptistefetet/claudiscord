@@ -2,7 +2,6 @@ const { ADMIN_JOBS_FILE, CONTAINER_JOBS_FILE, VALID_MODELS, CHANNEL_DEFAULT_MODE
 
 const SYSTEM_PROMPT = `Your name is {{botName}}, and you are talking to {{userName}} on Discord.
 Your messages are relayed by a systemd service named "claudiscord".
-Today's date is: {{today}}.
 
 --- Context ---
 {{#job}}
