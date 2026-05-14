@@ -52,10 +52,9 @@ const TYPING_INTERVAL_MS = 8000;
 const ALLOWED_TOOLS = 'Bash(*) Read Write Edit Glob Grep WebSearch WebFetch Task';
 const DISALLOWED_TOOLS = 'CronCreate CronDelete CronList Monitor AskUserQuestion RemoteTrigger EnterPlanMode ExitPlanMode EnterWorktree ExitWorktree NotebookEdit ScheduleWakeup PushNotification Skill(loop) Skill(keybindings-help) Skill(schedule) Skill(claude-api) Skill(update-config) Skill(fewer-permission-prompts)';
 
-const DM_MODEL = 'opus';
-const DM_EFFORT = 'xhigh';
-const JOB_MODEL = 'sonnet';
-const JOB_EFFORT = 'high';
+const VALID_MODELS = ['opus', 'sonnet'];
+const CHANNEL_DEFAULT_MODEL = 'sonnet';
+const EFFORT_BY_MODEL = { opus: 'xhigh', sonnet: 'high' };
 
 module.exports = {
 	AUTHORIZED_USER_ID,
@@ -82,10 +81,9 @@ module.exports = {
 	CONTAINER_CPUS,
 	ALLOWED_TOOLS,
 	DISALLOWED_TOOLS,
-	DM_MODEL,
-	DM_EFFORT,
-	JOB_MODEL,
-	JOB_EFFORT,
+	VALID_MODELS,
+	CHANNEL_DEFAULT_MODEL,
+	EFFORT_BY_MODEL,
 	DOCKER_CMD_TIMEOUT,
 	UPGRADE_TIMEOUT_MS,
 };

@@ -1,20 +1,20 @@
 const fs = require('fs');
-const { SESSIONS_FILE } = require('./config');
+const { SESSIONS_FILE, VALID_MODELS, CHANNEL_DEFAULT_MODEL } = require('./config');
 const log = require('./logger');
 
 /**
  * sessions.json shape:
  * {
  *   "channels": {
- *     "<channelId>": { "mode": "admin"|"sandbox", "sessionId": "...", "lastName": "..." }
+ *     "<channelId>": { "mode": "admin"|"sandbox", "model": "opus"|"sonnet", "sessionId": "...", "lastName": "..." }
  *   }
  * }
  *
  * A channelId is valid for both DM channels and guild text channels.
- * Default mode for an unknown channel is "admin".
+ * Default mode for an unknown channel is "admin", default model is "sonnet".
  */
 
-/** @type {Map<string, {mode?: string, sessionId?: string, lastName?: string}>} */
+/** @type {Map<string, {mode?: string, model?: string, sessionId?: string, lastName?: string}>} */
 const channels = new Map();
 
 function load() {
@@ -26,6 +26,7 @@ function load() {
 				if (!entry || typeof entry !== 'object') continue;
 				channels.set(id, {
 					mode: entry.mode === 'sandbox' ? 'sandbox' : 'admin',
+					model: VALID_MODELS.includes(entry.model) ? entry.model : CHANNEL_DEFAULT_MODEL,
 					sessionId: typeof entry.sessionId === 'string' ? entry.sessionId : null,
 					lastName: typeof entry.lastName === 'string' ? entry.lastName : null,
 				});
@@ -62,6 +63,20 @@ function setMode(channelId, mode) {
 	log.info(`Channel ${channelId} mode set to: ${mode}`);
 }
 
+function getModel(channelId) {
+	const entry = channels.get(channelId);
+	const model = entry?.model;
+	return VALID_MODELS.includes(model) ? model : CHANNEL_DEFAULT_MODEL;
+}
+
+function setModel(channelId, model) {
+	if (!VALID_MODELS.includes(model)) throw new Error(`Invalid model: ${model}`);
+	const entry = ensureChannel(channelId);
+	entry.model = model;
+	persist();
+	log.info(`Channel ${channelId} model set to: ${model}`);
+}
+
 function getSessionId(channelId) {
 	return channels.get(channelId)?.sessionId || null;
 }
@@ -86,4 +101,4 @@ function clearChannel(channelId) {
 	persist();
 }
 
-module.exports = { load, getMode, setMode, getSessionId, setSessionId, setLastName, clearChannel };
+module.exports = { load, getMode, setMode, getModel, setModel, getSessionId, setSessionId, setLastName, clearChannel };

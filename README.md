@@ -9,6 +9,7 @@ Works in both DMs and private guild channels. Each channel is an independent con
 - **Per-channel conversations** — each Discord channel (DM included) keeps its own Claude session
 - **Channel topic = mini CLAUDE.md** — renaming or rewriting the topic immediately changes the agent's context
 - **Two execution modes per channel** — `admin` runs Claude on the host (full system access), `sandbox` runs it in the Docker container
+- **Per-channel model** — pick `opus` or `sonnet` per channel with `/opus` / `/sonnet` (default `sonnet`); scheduled jobs snapshot the channel's model at scheduling time
 - **Global queue** — one Claude prompt at a time across every channel and scheduled job (keeps jobs files race-free)
 - **Single-user authorization** — only the Discord user whose ID is in `AUTHORIZED_USER_ID` can talk to the bot; everyone else is silently dropped
 - **Optional Docker** — sandbox mode is disabled gracefully if Docker isn't installed; admin mode still works
@@ -119,6 +120,8 @@ mode still works.
 | `/status` | Show the channel's mode and sandbox authentication status |
 | `/admin` | Switch the current channel to admin mode (host) |
 | `/sandbox` | Switch the current channel to sandbox mode (container) |
+| `/opus` | Use Claude Opus for this channel |
+| `/sonnet` | Use Claude Sonnet for this channel (default) |
 | `/upgrade` | Sandbox only — update the container (apt + Claude Code) |
 | `/login` | Sandbox only — show auth instructions, or `/login <json>` to save credentials |
 | `/restart` | Admin only — restart the claudiscord service |

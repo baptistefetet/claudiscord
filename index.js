@@ -1,5 +1,5 @@
 const config = require('./src/config');
-const { ALLOWED_TOOLS, DM_MODEL, DM_EFFORT } = config;
+const { ALLOWED_TOOLS, EFFORT_BY_MODEL } = config;
 const { getSystemPrompt } = require('./src/prompts');
 const log = require('./src/logger');
 const sessions = require('./src/sessions');
@@ -79,6 +79,7 @@ client.on(Events.MessageCreate, async message => {
 	sessions.setLastName(channelId, channelName);
 
 	const mode = sessions.getMode(channelId);
+	const model = sessions.getModel(channelId);
 	const sessionId = sessions.getSessionId(channelId);
 	const botName = client.user.displayName || client.user.username;
 	const userName = message.author.displayName || message.author.username;
@@ -94,10 +95,11 @@ client.on(Events.MessageCreate, async message => {
 			channelName,
 			channelTopic,
 			isDM,
+			channelModel: model,
 		}),
 		allowedTools: ALLOWED_TOOLS,
-		model: DM_MODEL,
-		effort: DM_EFFORT,
+		model,
+		effort: EFFORT_BY_MODEL[model],
 		outputFormat: 'stream-json',
 	};
 

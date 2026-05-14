@@ -1,6 +1,6 @@
 const fs = require('fs');
 const cron = require('node-cron');
-const { ADMIN_JOBS_FILE, SANDBOX_JOBS_FILE } = require('./config');
+const { ADMIN_JOBS_FILE, SANDBOX_JOBS_FILE, VALID_MODELS } = require('./config');
 const log = require('./logger');
 
 const REQUIRED_FIELDS = ['id', 'prompt', 'cron', 'enabled', 'channelId'];
@@ -45,6 +45,7 @@ function validateJob(job) {
 	if (typeof job.cron !== 'string' || !cron.validate(job.cron)) return false;
 	if (typeof job.enabled !== 'boolean') return false;
 	if (typeof job.channelId !== 'string' || !job.channelId) return false;
+	if (job.model !== undefined && !VALID_MODELS.includes(job.model)) return false;
 	return true;
 }
 

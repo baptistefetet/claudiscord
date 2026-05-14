@@ -96,6 +96,7 @@ async function handleCommand(message) {
 	const channel = message.channel;
 	const channelId = channel.id;
 	const mode = sessions.getMode(channelId);
+	const model = sessions.getModel(channelId);
 
 	// Shell: !<command> — runs in host (admin mode) or container (sandbox mode)
 	if (content.startsWith('!')) {
@@ -131,13 +132,15 @@ async function handleCommand(message) {
 	}
 
 	if (content === '/help') {
-		let help = `**Available commands** (current mode: **${mode}**)
+		let help = `**Available commands** (current mode: **${mode}**, model: **${model}**)
 
 \`/help\` — Show this help
 \`/clear\` — Reset session for this channel (new conversation)
-\`/status\` — Show current mode and authentication status
+\`/status\` — Show current mode, model and authentication status
 \`/admin\` — Switch this channel to admin mode (host)
 \`/sandbox\` — Switch this channel to sandbox mode (container)
+\`/opus\` — Use Claude Opus for this channel
+\`/sonnet\` — Use Claude Sonnet for this channel
 \`!<command>\` — Execute a shell command (host if admin, container if sandbox)`;
 		if (mode === 'sandbox') {
 			help += `
@@ -188,7 +191,18 @@ async function handleCommand(message) {
 	if (content === '/status') {
 		const authed = DOCKER_AVAILABLE && hasCredentials() ? 'yes' : 'no';
 		const dockerNote = DOCKER_AVAILABLE ? '' : '\nSandbox unavailable on this host.';
-		await channel.send(`Channel mode: **${mode}**\nAuthenticated (sandbox): **${authed}**${dockerNote}`);
+		await channel.send(`Channel mode: **${mode}**\nModel: **${model}**\nAuthenticated (sandbox): **${authed}**${dockerNote}`);
+		return true;
+	}
+
+	if (content === '/opus' || content === '/sonnet') {
+		const target = content.slice(1);
+		if (model === target) {
+			await channel.send(`This channel is already using **${target}**.`);
+			return true;
+		}
+		sessions.setModel(channelId, target);
+		await channel.send(`Channel switched to **${target}**.`);
 		return true;
 	}
 

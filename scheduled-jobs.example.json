@@ -9,6 +9,7 @@
     "notify": true,
     "notifyPattern": "STATUT: PROBLEME",
     "remaining": 0,
+    "model": "sonnet",
     "created": "2026-01-01T00:00:00Z",
     "lastRun": null,
     "description": "Check sante quotidien a 7h (remaining: 0 = infini)"
@@ -22,6 +23,7 @@
     "enabled": true,
     "notify": true,
     "remaining": 1,
+    "model": "sonnet",
     "created": "2026-01-01T00:00:00Z",
     "lastRun": null,
     "description": "Exemple one-shot (remaining: 1 = supprime apres execution)"

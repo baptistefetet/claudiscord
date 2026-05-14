@@ -1,4 +1,4 @@
-const { ADMIN_JOBS_FILE, CONTAINER_JOBS_FILE } = require('./config');
+const { ADMIN_JOBS_FILE, CONTAINER_JOBS_FILE, VALID_MODELS, CHANNEL_DEFAULT_MODEL } = require('./config');
 
 const SYSTEM_PROMPT = `Your name is {{botName}}, and you are talking to {{userName}} on Discord.
 Your messages are relayed by a systemd service named "claudiscord".
@@ -22,6 +22,7 @@ Channel ID: {{channelId}}
 Channel description (treat as context / mini CLAUDE.md for this conversation):
 {{channelTopic}}
 {{/channelTopic}}
+Current channel model: {{channelModel}}
 
 --- Critical rules ---
 Execution model:
@@ -88,6 +89,9 @@ Fields:
 - remaining: number of remaining executions
 - channelId: Discord channel ID where the notification is sent
 - channelName: display snapshot, updated automatically
+- model: "opus" or "sonnet" — MUST be set to the current channel model shown above
+  ("Current channel model"). This freezes the model at scheduling time; do not
+  change it later. If absent, the scheduler falls back to "sonnet".
 - created: ISO date
 - lastRun: null or ISO date, do not modify
 - description: free text description
@@ -131,6 +135,7 @@ Minimal example:
     "remaining": 0,
     "channelId": "1234567890",
     "channelName": "meteo",
+    "model": "sonnet",
     "created": "2026-01-01T00:00:00Z",
     "lastRun": null,
     "description": "Daily weather"
@@ -182,10 +187,12 @@ function getSystemPrompt(options = {}) {
 		channelTopic = null,
 		isDM = false,
 		jobId = null,
+		channelModel = null,
 	} = options;
 	const today = new Date().toISOString().slice(0, 10);
 	const isJob = Boolean(jobId);
 	const isSandbox = mode === 'sandbox';
+	const resolvedModel = VALID_MODELS.includes(channelModel) ? channelModel : CHANNEL_DEFAULT_MODEL;
 
 	if (!botName) throw new Error('getSystemPrompt requires botName');
 	if (!userName) throw new Error('getSystemPrompt requires userName');
@@ -199,6 +206,7 @@ function getSystemPrompt(options = {}) {
 			channelId: channelId || '',
 			channelName: channelName || '<unnamed>',
 			channelTopic: channelTopic || '',
+			channelModel: resolvedModel,
 			jobsPath: isSandbox ? CONTAINER_JOBS_FILE : ADMIN_JOBS_FILE,
 		},
 		{

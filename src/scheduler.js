@@ -1,5 +1,5 @@
 const cron = require('node-cron');
-const { ALLOWED_TOOLS, AUTHORIZED_USER_ID, CLAUDE_TIMEOUT_MS, JOB_MODEL, JOB_EFFORT } = require('./config');
+const { ALLOWED_TOOLS, AUTHORIZED_USER_ID, CLAUDE_TIMEOUT_MS, EFFORT_BY_MODEL, VALID_MODELS, CHANNEL_DEFAULT_MODEL } = require('./config');
 const { getSystemPrompt } = require('./prompts');
 const { executeForMode } = require('./executor');
 const { loadAllJobs, jobKey, recordJobRun } = require('./jobs-store');
@@ -99,6 +99,7 @@ async function executeJob(job) {
 			throw new Error(`Could not resolve authorized user name for job '${key}'`);
 		}
 		resolvedChannelName = promptContext?.channelName || job.channelName || null;
+		const jobModel = VALID_MODELS.includes(job.model) ? job.model : CHANNEL_DEFAULT_MODEL;
 		const jobSystemPrompt = getSystemPrompt({
 			botName: promptContext.botName,
 			userName: promptContext.userName,
@@ -108,13 +109,14 @@ async function executeJob(job) {
 			channelTopic: promptContext?.channelTopic,
 			isDM: Boolean(promptContext?.isDM),
 			jobId: id,
+			channelModel: jobModel,
 		});
 		const jobOptions = {
 			sessionId: null,
 			systemPrompt: jobSystemPrompt,
 			allowedTools: ALLOWED_TOOLS,
-			model: JOB_MODEL,
-			effort: JOB_EFFORT,
+			model: jobModel,
+			effort: EFFORT_BY_MODEL[jobModel],
 			outputFormat: 'text',
 			timeoutMs: CLAUDE_TIMEOUT_MS,
 		};

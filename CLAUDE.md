@@ -22,7 +22,7 @@ Scheduled jobs
   -> notification sent back to job.channelId
 ```
 
-- Each Discord channel has its own mode (`admin` / `sandbox`) and its own Claude session. A DM channel is treated exactly like any other channel.
+- Each Discord channel has its own mode (`admin` / `sandbox`), its own model (`opus` / `sonnet`, default `sonnet`) and its own Claude session. A DM channel is treated exactly like any other channel.
 - The authorized user is stored in `.env` (`AUTHORIZED_USER_ID`) and is required at startup — without it the process refuses to boot.
 - Global queue (`src/queue.js`): every prompt (interactive or scheduled) goes through a single FIFO. `isBusy()` is used to show a one-time "⏳ waiting" hint per channel.
 - Jobs live in two separate files — never merged, never watched:
@@ -47,7 +47,7 @@ src/
   jobs-store.js       # loadAllJobs (admin+sandbox), recordJobRun, jobKey
   sessions.js         # { channels: { channelId -> { mode, sessionId, lastName } } }
   scheduler.js        # node-cron, reloadJobs, executeJob, per-key lock
-  commands.js         # /help /clear /status /admin /sandbox /login /upgrade /restart !shell
+  commands.js         # /help /clear /status /admin /sandbox /opus /sonnet /login /upgrade /restart !shell
   stt.js              # Groq Whisper transcription for Discord voice messages
 claude/
   wait-background.sh  # PostToolUse hook: blocks until run_in_background completes
@@ -97,6 +97,14 @@ message UI triggers transcription.
 - `/admin` and `/sandbox` switch the current channel's mode and clear its session
 - `/sandbox` reports an error and does not switch if Docker is not installed
 - The mode is persisted in `sessions.json`
+
+## Model (per channel)
+
+- Each channel has its own model (`opus` or `sonnet`, default `sonnet`).
+- `/opus` and `/sonnet` switch the current channel's model. The Claude session is NOT reset.
+- Effort is derived from the model (opus → xhigh, sonnet → high), centralized in `src/config.js::EFFORT_BY_MODEL`.
+- The model is persisted in `sessions.json` next to the mode.
+- Scheduled jobs created from a channel snapshot the channel's model at scheduling time in their `model` field (see Scheduled jobs > Format). Changing the channel's model afterwards does not affect previously scheduled jobs.
 
 ## Channel context injection
 
@@ -190,6 +198,7 @@ bash scripts/rebuild-sandbox.sh
   "notify": true,
   "notifyPattern": "STATUT: PROBLEME",
   "remaining": 0,
+  "model": "sonnet",
   "created": "2026-02-21T10:00:00Z",
   "lastRun": null,
   "description": "Daily health check at 7am"
@@ -198,6 +207,7 @@ bash scripts/rebuild-sandbox.sh
 
 - `channelId` is **required** — it's where the notification is sent. DM channels have an ID too, so a DM-bound job works identically.
 - `channelName` is a display-only snapshot of the channel name at job creation time. The scheduler refreshes it on every run.
+- `model` is `"opus"` or `"sonnet"`. Snapshot of the channel's model at scheduling time. Optional for backward compatibility — fallback is `"sonnet"`.
 - `remaining`: `0` = infinite, `>0` = decremented each run, job removed when it hits `0`.
 - Unique key: `mode:id` (the mode is implicit from the file the job lives in).
 
@@ -223,7 +233,7 @@ bash scripts/rebuild-sandbox.sh
 
 - `sessions.json` shape:
   ```json
-  { "channels": { "<channelId>": { "mode": "admin"|"sandbox", "sessionId": "...", "lastName": "..." } } }
+  { "channels": { "<channelId>": { "mode": "admin"|"sandbox", "model": "opus"|"sonnet", "sessionId": "...", "lastName": "..." } } }
   ```
 - `lastName` is a display snapshot to make `sessions.json` readable during debugging.
 - A full reset is harmless — it only drops Claude session IDs (the next prompt starts a fresh conversation per channel).
