@@ -31,7 +31,9 @@ const log = require('./logger');
  * remoteId, when non-null, means the session is currently driven from the
  * Claude mobile app via `claude --bg --remote-control`. While set, the channel
  * only accepts `/remote`, `/status`, `/help`; every other message returns an
- * invalidation hint.
+ * invalidation hint. Entering remote mode wipes `sessionId`/`sessionStarted`:
+ * `claude --bg` manages its own session UUID and we don't try to reconcile
+ * back, so the next Discord message after `/remote` stop starts fresh.
  */
 
 /** @type {Map<string, {mode?: string, model?: string, sessionId?: string, sessionStarted?: boolean, remoteId?: string|null, lastName?: string}>} */
@@ -117,6 +119,19 @@ function markSessionStarted(channelId) {
 	persist();
 }
 
+/**
+ * Non-allocating read of the channel's session state. Used by `/remote` start
+ * to hand the existing UUID to `claude --bg --resume` before `setRemoteId`
+ * wipes it.
+ */
+function getSession(channelId) {
+	const entry = channels.get(channelId);
+	return {
+		sessionId: typeof entry?.sessionId === 'string' ? entry.sessionId : null,
+		sessionStarted: entry?.sessionStarted === true,
+	};
+}
+
 function setLastName(channelId, name) {
 	const entry = ensureChannel(channelId);
 	if (entry.lastName === name) return;
@@ -142,6 +157,13 @@ function setRemoteId(channelId, remoteId) {
 	const next = typeof remoteId === 'string' && remoteId ? remoteId : null;
 	if (entry.remoteId === next) return;
 	entry.remoteId = next;
+	if (next) {
+		// Entering remote mode: forget the Discord session — `claude --bg`
+		// will manage its own UUID, and the next Discord message after stop
+		// allocates a fresh one.
+		entry.sessionId = null;
+		entry.sessionStarted = false;
+	}
 	persist();
 	log.info(`Channel ${channelId} remoteId set to: ${next}`);
 }
@@ -156,4 +178,4 @@ function listRemoteChannels() {
 	return out;
 }
 
-module.exports = { load, getMode, setMode, getModel, setModel, ensureSession, markSessionStarted, setLastName, clearChannel, getRemoteId, setRemoteId, listRemoteChannels };
+module.exports = { load, getMode, setMode, getModel, setModel, ensureSession, markSessionStarted, getSession, setLastName, clearChannel, getRemoteId, setRemoteId, listRemoteChannels };

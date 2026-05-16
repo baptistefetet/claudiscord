@@ -258,10 +258,11 @@ async function handleCommand(message) {
 			try {
 				const agentId = await runQueued(async () => {
 					if (mode === 'sandbox') ensureContainer();
-					const { sessionId, sessionStarted } = sessions.ensureSession(channelId);
+					// Hand the existing Discord session to `claude --bg --resume`
+					// so the mobile user starts with the channel's history. Read
+					// BEFORE setRemoteId, which wipes the sessionId.
+					const { sessionId, sessionStarted } = sessions.getSession(channelId);
 					const id = await startRemote({ mode, sessionId, sessionStarted, channelName });
-					// Session is now live on disk — next Discord message must use --resume.
-					sessions.markSessionStarted(channelId);
 					sessions.setRemoteId(channelId, id);
 					return id;
 				});
