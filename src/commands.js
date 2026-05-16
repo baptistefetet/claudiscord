@@ -6,11 +6,23 @@ const { UPGRADE_TIMEOUT_MS, SHELL_TIMEOUT_MS, DISCORD_MAX_MSG_LENGTH, CONTAINER_
 const sessions = require('./sessions');
 const { writeCredentials, hasCredentials, ensureContainer, DOCKER_AVAILABLE } = require('./container');
 const { runQueued, isBusy } = require('./queue');
+const { startRemote, stopRemote } = require('./remote');
+const { resolveChannelName } = require('./discord');
+const scheduler = require('./scheduler');
 const log = require('./logger');
 
 const KILL_GRACE_MS = 5000;
 // Worst case: "```\n" (4) + output + "\n... (truncated)\n```" (21) = 25 overhead
 const SHELL_MAX_OUTPUT = DISCORD_MAX_MSG_LENGTH - 25;
+
+// Per-channel lock held for the whole duration of a `/remote` toggle (queue
+// wait + spawn + state persistence). Closes two races:
+//   1. While `/remote start` is queued, `remoteId` is not yet set on the
+//      session — without this lock, a concurrent plain message or
+//      `/clear`/`/admin` would pass the remote gate and step on the session.
+//   2. Two back-to-back `/remote` calls could both pick the start branch
+//      before the first finished, spawning two agents and orphaning one.
+const remoteOpInFlight = new Set();
 
 const LOGIN_INSTRUCTIONS = `**Sandbox authentication**
 
@@ -98,6 +110,22 @@ async function handleCommand(message) {
 	const mode = sessions.getMode(channelId);
 	const model = sessions.getModel(channelId);
 
+	// Remote mode gating: while a channel is driven by the Claude mobile app,
+	// only /remote (toggle off), /status and /help are accepted. Everything
+	// else — plain messages, !shell, other slash commands — is invalidated so
+	// we never spawn a parallel `claude -p` against the live remote session.
+	// We also block during a transition (`remoteOpInFlight`) so a message
+	// arriving while `/remote start` is still queued can't slip through.
+	const remoteId = sessions.getRemoteId(channelId);
+	const remoteTransitioning = remoteOpInFlight.has(channelId);
+	if ((remoteId || remoteTransitioning) && content !== '/remote' && content !== '/status' && content !== '/help') {
+		const hint = !remoteId && remoteTransitioning
+			? '⏳ A `/remote` toggle is in progress for this channel.'
+			: `\u{1F6F0}️ This channel is in remote mode (agent \`${remoteId}\`). Send \`/remote\` to return to Discord mode.`;
+		await channel.send(hint);
+		return true;
+	}
+
 	// Shell: !<command> — runs in host (admin mode) or container (sandbox mode)
 	if (content.startsWith('!')) {
 		const command = content.slice(1).trim();
@@ -141,6 +169,7 @@ async function handleCommand(message) {
 \`/sandbox\` — Switch this channel to sandbox mode (container)
 \`/opus\` — Use Claude Opus for this channel
 \`/sonnet\` — Use Claude Sonnet for this channel
+\`/remote\` — Toggle this channel between Discord mode and remote mode (Claude mobile app)
 \`!<command>\` — Execute a shell command (host if admin, container if sandbox)`;
 		if (mode === 'sandbox') {
 			help += `
@@ -188,10 +217,70 @@ async function handleCommand(message) {
 		return true;
 	}
 
+	if (content === '/remote') {
+		// Hold the per-channel lock for the entire toggle. The gating above
+		// honours it, so the channel stays inert until the transition settles.
+		if (remoteOpInFlight.has(channelId)) {
+			await channel.send('⏳ A `/remote` toggle is already in progress for this channel.');
+			return true;
+		}
+		remoteOpInFlight.add(channelId);
+		try {
+			const existing = remoteId;
+			if (existing) {
+				if (isBusy()) await channel.send('⏳ Waiting for previous prompt...');
+				let stoppedCleanly = true;
+				try {
+					await runQueued(() => stopRemote({ mode, remoteId: existing }));
+				} catch (err) {
+					stoppedCleanly = false;
+					log.error('remote stop error:', err.message);
+				}
+				sessions.setRemoteId(channelId, null);
+				// Claude may have edited a jobs file during the mobile session — and
+				// we did NOT go through executor.js, so reload jobs here.
+				scheduler.reloadJobs();
+				if (stoppedCleanly) {
+					await channel.send('Back to Discord mode.');
+				} else {
+					await channel.send('Back to Discord mode (stop reported an error, state cleared).');
+				}
+				return true;
+			}
+
+			if (mode === 'sandbox' && !DOCKER_AVAILABLE) {
+				await channel.send('Sandbox is not available — `/remote` requires either admin mode or a working sandbox.');
+				return true;
+			}
+
+			const channelName = resolveChannelName(channel);
+			if (isBusy()) await channel.send('⏳ Waiting for previous prompt...');
+			try {
+				const agentId = await runQueued(async () => {
+					if (mode === 'sandbox') ensureContainer();
+					const { sessionId, sessionStarted } = sessions.ensureSession(channelId);
+					const id = await startRemote({ mode, sessionId, sessionStarted, channelName });
+					// Session is now live on disk — next Discord message must use --resume.
+					sessions.markSessionStarted(channelId);
+					sessions.setRemoteId(channelId, id);
+					return id;
+				});
+				await channel.send(`\u{1F6F0}️ Remote control enabled for **${channelName}** (agent \`${agentId}\`). Open the Claude mobile app to continue. Send \`/remote\` again to return to Discord mode.`);
+			} catch (err) {
+				log.error('remote start error:', err.message);
+				await channel.send(`Remote start failed: ${err.message.slice(0, 300)}`);
+			}
+			return true;
+		} finally {
+			remoteOpInFlight.delete(channelId);
+		}
+	}
+
 	if (content === '/status') {
 		const authed = DOCKER_AVAILABLE && hasCredentials() ? 'yes' : 'no';
 		const dockerNote = DOCKER_AVAILABLE ? '' : '\nSandbox unavailable on this host.';
-		await channel.send(`Channel mode: **${mode}**\nModel: **${model}**\nAuthenticated (sandbox): **${authed}**${dockerNote}`);
+		const remoteLine = remoteId ? `\nRemote: \`${remoteId}\`` : '';
+		await channel.send(`Channel mode: **${mode}**\nModel: **${model}**\nAuthenticated (sandbox): **${authed}**${remoteLine}${dockerNote}`);
 		return true;
 	}
 

@@ -47,7 +47,8 @@ src/
   jobs-store.js       # loadAllJobs (admin+sandbox), recordJobRun, jobKey
   sessions.js         # { channels: { channelId -> { mode, sessionId, lastName } } }
   scheduler.js        # node-cron, reloadJobs, executeJob, per-key lock
-  commands.js         # /help /clear /status /admin /sandbox /opus /sonnet /login /upgrade /restart !shell
+  commands.js         # /help /clear /status /admin /sandbox /opus /sonnet /remote /login /upgrade /restart !shell
+  remote.js           # /remote helpers: startRemote, stopRemote, reconcileRemotes
   stt.js              # Groq Whisper transcription for Discord voice messages
 claude/
   wait-background.sh  # PostToolUse hook: blocks until run_in_background completes
@@ -175,7 +176,7 @@ bash scripts/rebuild-sandbox.sh
 ## Claude CLI usage
 
 - `claude -p` with `--output-format stream-json` for interactive messages, `text` for jobs
-- `--resume <sessionId>` when the channel has one, fallback to new session on failure
+- Session flag chosen per channel: `--session-id <uuid>` on the first spawn (`sessionStarted: false`), `--resume <uuid>` on subsequent spawns (`sessionStarted: true`). UUID allocated up-front by `sessions.ensureSession()`. See "Sessions" below.
 - `--dangerously-skip-permissions` in sandbox (the container IS the sandbox)
 - Interactive: `--model opus --effort xhigh`
 - Jobs: `--model sonnet --effort high`
@@ -233,9 +234,21 @@ bash scripts/rebuild-sandbox.sh
 
 - `sessions.json` shape:
   ```json
-  { "channels": { "<channelId>": { "mode": "admin"|"sandbox", "model": "opus"|"sonnet", "sessionId": "<uuid>", "sessionStarted": boolean, "lastName": "..." } } }
+  { "channels": { "<channelId>": { "mode": "admin"|"sandbox", "model": "opus"|"sonnet", "sessionId": "<uuid>", "sessionStarted": boolean, "remoteId": null|"<agentId>", "lastName": "..." } } }
   ```
 - `sessionId` is a UUID v4 allocated by `sessions.ensureSession()` **before** the first claude spawn — so a message that times out is still resumable (we already know the session UUID).
 - `sessionStarted` switches the CLI flag: `false` → `--session-id <uuid>` (creates the session); `true` → `--resume <uuid>` (reuses it; reusing `--session-id` on an existing UUID errors with "Session ID X is already in use"). Flipped to `true` after a successful spawn (and on timeout, since the JSONL is on disk).
+- `remoteId` is `null` when the channel is in Discord mode (default), or an 8-hex agent ID when the channel is currently driven from the Claude mobile app via `/remote`. See "Remote control" below.
 - `lastName` is a display snapshot to make `sessions.json` readable during debugging.
 - A full reset is harmless — it only drops Claude session IDs and the `sessionStarted` bit (the next prompt starts a fresh conversation per channel).
+
+## Remote control
+
+`/remote` toggles the channel between Discord mode (default) and remote mode. In remote mode, the channel's Claude session is driven from the Claude mobile app (full UI, permissions, reasoning view, etc.) instead of from Discord.
+
+- Implementation: `src/remote.js` spawns `claude --bg --remote-control <channelName>` (host for admin, `docker exec` for sandbox). The CLI prints `backgrounded · <agentId>` on stdout — we parse the 8-hex agent ID and persist it as `remoteId` in `sessions.json`. The session UUID passed via `--session-id` / `--resume` is the same one already used for Discord, so toggling back doesn't lose the conversation history.
+- Naming: the mobile app shows each session under `<channelName>` (DM = username), so multiple channels can run in parallel and stay discoverable.
+- Gating (`src/commands.js`): while `remoteId` is set, only `/remote`, `/status`, `/help` are accepted in that channel. Every other input (plain text, `!shell`, other slash commands) returns an invalidation hint and does **not** spawn `claude -p` — this prevents two concurrent processes touching the same session.
+- Stop: `/remote` while active runs `claude stop <agentId>` (host or container), clears `remoteId`, and calls `scheduler.reloadJobs()` — Claude may have edited the jobs files during the mobile session, and we did not go through the executor path that normally triggers a reload.
+- Startup reconciliation: `reconcileRemotes()` runs after `sessions.load()` and best-effort-stops every persisted `remoteId`. After a machine reboot the daemon is gone and the stop fails harmlessly; the channel reverts to Discord mode either way.
+- Sandbox prerequisite: the in-container claude daemon needs valid credentials (`/login`). Without them the mobile app won't see the session.

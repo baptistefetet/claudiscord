@@ -6,8 +6,9 @@ const sessions = require('./src/sessions');
 const { ensureImage, DOCKER_AVAILABLE } = require('./src/container');
 const { executeForMode } = require('./src/executor');
 const { isBusy } = require('./src/queue');
-const { createClient, login, splitMessage, startTypingIndicator } = require('./src/discord');
+const { createClient, login, splitMessage, startTypingIndicator, resolveChannelName } = require('./src/discord');
 const { handleCommand } = require('./src/commands');
+const { reconcileRemotes } = require('./src/remote');
 const { transcribeVoiceMessage } = require('./src/stt');
 const scheduler = require('./src/scheduler');
 const { Events, ChannelType, MessageFlags } = require('discord.js');
@@ -24,13 +25,6 @@ const client = createClient();
 // Channels currently waiting for their turn in the global queue — used to
 // avoid flooding a channel with multiple "⏳ waiting…" notices.
 const waitingNotice = new Set();
-
-function resolveChannelName(channel) {
-	if (channel.type === ChannelType.DM) {
-		return channel.recipient?.username || channel.recipient?.globalName || '<dm>';
-	}
-	return channel.name || '<unnamed>';
-}
 
 client.on(Events.MessageCreate, async message => {
 	if (message.author.bot) return;
@@ -170,6 +164,8 @@ async function start() {
 	} else {
 		log.warn('Starting without Docker — sandbox mode disabled');
 	}
+	// Settle any remote sessions persisted from a previous run before going live.
+	try { await reconcileRemotes(); } catch (err) { log.warn('reconcileRemotes failed:', err.message); }
 	await login();
 }
 

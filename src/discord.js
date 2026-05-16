@@ -1,6 +1,13 @@
-const { Client, Events, GatewayIntentBits, Partials } = require('discord.js');
+const { Client, Events, GatewayIntentBits, Partials, ChannelType } = require('discord.js');
 const { DISCORD_TOKEN, DISCORD_MAX_MSG_LENGTH, TYPING_INTERVAL_MS } = require('./config');
 const log = require('./logger');
+
+function resolveChannelName(channel) {
+	if (channel.type === ChannelType.DM) {
+		return channel.recipient?.username || channel.recipient?.globalName || '<dm>';
+	}
+	return channel.name || '<unnamed>';
+}
 
 let client = null;
 
@@ -70,4 +77,4 @@ function startTypingIndicator(channel) {
 	return () => clearInterval(interval);
 }
 
-module.exports = { createClient, getClient, login, splitMessage, sendToChannel, startTypingIndicator };
+module.exports = { createClient, getClient, login, splitMessage, sendToChannel, startTypingIndicator, resolveChannelName };

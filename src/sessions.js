@@ -12,6 +12,7 @@ const log = require('./logger');
  *       "model": "opus"|"sonnet",
  *       "sessionId": "<uuid>",
  *       "sessionStarted": boolean,
+ *       "remoteId": null | "<agentId>",
  *       "lastName": "..."
  *     }
  *   }
@@ -26,9 +27,14 @@ const log = require('./logger');
  * which creates the session) from subsequent invocations (`--resume <uuid>`,
  * required because reusing --session-id on an existing UUID errors out with
  * "Session ID X is already in use").
+ *
+ * remoteId, when non-null, means the session is currently driven from the
+ * Claude mobile app via `claude --bg --remote-control`. While set, the channel
+ * only accepts `/remote`, `/status`, `/help`; every other message returns an
+ * invalidation hint.
  */
 
-/** @type {Map<string, {mode?: string, model?: string, sessionId?: string, sessionStarted?: boolean, lastName?: string}>} */
+/** @type {Map<string, {mode?: string, model?: string, sessionId?: string, sessionStarted?: boolean, remoteId?: string|null, lastName?: string}>} */
 const channels = new Map();
 
 function load() {
@@ -43,6 +49,7 @@ function load() {
 					model: VALID_MODELS.includes(entry.model) ? entry.model : CHANNEL_DEFAULT_MODEL,
 					sessionId: typeof entry.sessionId === 'string' ? entry.sessionId : null,
 					sessionStarted: entry.sessionStarted === true,
+					remoteId: typeof entry.remoteId === 'string' ? entry.remoteId : null,
 					lastName: typeof entry.lastName === 'string' ? entry.lastName : null,
 				});
 			}
@@ -125,4 +132,28 @@ function clearChannel(channelId) {
 	persist();
 }
 
-module.exports = { load, getMode, setMode, getModel, setModel, ensureSession, markSessionStarted, setLastName, clearChannel };
+function getRemoteId(channelId) {
+	const entry = channels.get(channelId);
+	return entry?.remoteId || null;
+}
+
+function setRemoteId(channelId, remoteId) {
+	const entry = ensureChannel(channelId);
+	const next = typeof remoteId === 'string' && remoteId ? remoteId : null;
+	if (entry.remoteId === next) return;
+	entry.remoteId = next;
+	persist();
+	log.info(`Channel ${channelId} remoteId set to: ${next}`);
+}
+
+function listRemoteChannels() {
+	const out = [];
+	for (const [channelId, entry] of channels.entries()) {
+		if (typeof entry.remoteId === 'string' && entry.remoteId) {
+			out.push({ channelId, mode: entry.mode || 'admin', remoteId: entry.remoteId });
+		}
+	}
+	return out;
+}
+
+module.exports = { load, getMode, setMode, getModel, setModel, ensureSession, markSessionStarted, setLastName, clearChannel, getRemoteId, setRemoteId, listRemoteChannels };
