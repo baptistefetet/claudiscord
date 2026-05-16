@@ -38,18 +38,11 @@ function load() {
 		if (data && data.channels && typeof data.channels === 'object') {
 			for (const [id, entry] of Object.entries(data.channels)) {
 				if (!entry || typeof entry !== 'object') continue;
-				// Backward compat: pre-refacto entries carry a sessionId but no
-				// sessionStarted field — those sessions are already born on the
-				// daemon's side, so they need --resume (sessionStarted: true).
-				const hasSessionId = typeof entry.sessionId === 'string' && entry.sessionId.length > 0;
-				const sessionStarted = typeof entry.sessionStarted === 'boolean'
-					? entry.sessionStarted
-					: hasSessionId;
 				channels.set(id, {
 					mode: entry.mode === 'sandbox' ? 'sandbox' : 'admin',
 					model: VALID_MODELS.includes(entry.model) ? entry.model : CHANNEL_DEFAULT_MODEL,
-					sessionId: hasSessionId ? entry.sessionId : null,
-					sessionStarted,
+					sessionId: typeof entry.sessionId === 'string' ? entry.sessionId : null,
+					sessionStarted: entry.sessionStarted === true,
 					lastName: typeof entry.lastName === 'string' ? entry.lastName : null,
 				});
 			}
