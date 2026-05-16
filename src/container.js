@@ -214,6 +214,7 @@ async function executeClaudeInContainer(prompt, claudeOptions, {
 
 async function executeInContainer(prompt, {
 		sessionId = null,
+		sessionStarted = false,
 		systemPrompt = null,
 		allowedTools = ALLOWED_TOOLS,
 		disallowedTools = DISALLOWED_TOOLS,
@@ -225,6 +226,7 @@ async function executeInContainer(prompt, {
 	ensureContainer();
 	const claudeOptions = {
 		sessionId,
+		sessionStarted,
 		systemPrompt,
 		allowedTools,
 		disallowedTools,
@@ -236,24 +238,16 @@ async function executeInContainer(prompt, {
 
 	const label = `Container [${CONTAINER_NAME}]`;
 	const isStreamJson = outputFormat === 'stream-json';
-	log.info(`${label}: ${sessionId ? `resume ${sessionId}` : 'new session'}, prompt length: ${prompt.length}`);
+	const attach = sessionId
+		? (sessionStarted ? `resume ${sessionId}` : `new ${sessionId}`)
+		: 'no session';
+	log.info(`${label}: ${attach}, prompt length: ${prompt.length}`);
 
-	// First attempt
-	let result = await executeClaudeInContainer(prompt, claudeOptions, {
+	const result = await executeClaudeInContainer(prompt, claudeOptions, {
 		timeoutMs,
 		label,
 		streamJson: isStreamJson,
 	});
-
-	// Fallback: if resume failed, retry with new session
-	if (result.code !== 0 && sessionId) {
-		log.warn(`${label} resume failed (exit ${result.code}), retrying with new session...`);
-		result = await executeClaudeInContainer(prompt, { ...claudeOptions, sessionId: null }, {
-			timeoutMs,
-			label,
-			streamJson: isStreamJson,
-		});
-	}
 
 	if (result.code !== 0) {
 		const combined = (result.stdout + result.stderr).toLowerCase();
@@ -264,7 +258,7 @@ async function executeInContainer(prompt, {
 		throw Object.assign(new Error(errMsg), { code: result.code });
 	}
 
-	return parseClaudeOutput(result.stdout, outputFormat, label, SANDBOX_HOME_DIR);
+	return parseClaudeOutput(result.stdout, outputFormat, label, SANDBOX_HOME_DIR, sessionId);
 }
 
 /**

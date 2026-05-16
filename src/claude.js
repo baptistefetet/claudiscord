@@ -16,10 +16,18 @@ const ADMIN_ENV = {
 /**
  * Build Claude CLI arguments from options.
  * Extra args (e.g. --dangerously-skip-permissions) can be prepended via extraArgs.
+ *
+ * Session attach strategy:
+ *   - sessionId + !sessionStarted -> `--session-id <uuid>` (creates the session).
+ *   - sessionId +  sessionStarted -> `--resume <uuid>`     (reuses the existing session;
+ *                                                          --session-id would error with
+ *                                                          "Session ID X is already in use").
+ *   - !sessionId                  -> no flag (scheduled jobs run in a fresh session).
  */
 function buildClaudeArgs(prompt, options = {}) {
 	const {
 		sessionId = null,
+		sessionStarted = false,
 		systemPrompt = null,
 		allowedTools = ALLOWED_TOOLS,
 		disallowedTools = DISALLOWED_TOOLS,
@@ -32,7 +40,7 @@ function buildClaudeArgs(prompt, options = {}) {
 	const args = ['-p', ...extraArgs];
 
 	if (sessionId) {
-		args.push('--resume', sessionId);
+		args.push(sessionStarted ? '--resume' : '--session-id', sessionId);
 	}
 	if (systemPrompt) {
 		args.push('--system-prompt', systemPrompt);
@@ -257,11 +265,11 @@ function collectStreamJsonText(stdout) {
 
 /**
  * Parse Claude CLI output (JSON, stream-json, or text).
- * claudeHome is the home dir where .claude/ lives (for JSONL fallback).
+ * claudeHome + sessionId are used by the JSONL fallback when the CLI's
+ * `result` field is empty (last assistant turn ended on tool_use).
  */
-function parseClaudeOutput(stdout, outputFormat, label = 'Claude', claudeHome = null) {
+function parseClaudeOutput(stdout, outputFormat, label = 'Claude', claudeHome = null, sessionId = null) {
 	if (outputFormat === 'stream-json') {
-		// Find the result event (scan from end) for sessionId + fallback text.
 		let resultEvent = null;
 		const lines = stdout.split('\n');
 		for (let i = lines.length - 1; i >= 0; i--) {
@@ -274,42 +282,35 @@ function parseClaudeOutput(stdout, outputFormat, label = 'Claude', claudeHome = 
 		}
 		if (!resultEvent) {
 			log.warn(`${label}: no result event in stream-json output`);
-			return { result: stdout.slice(-500), sessionId: null };
+			return { result: stdout.slice(-500) };
 		}
-		// Concatenate every text block from every assistant event — the
-		// `result` field only carries the final block.
 		const allText = collectStreamJsonText(stdout);
-		return {
-			result: allText || resultEvent.result || '',
-			sessionId: resultEvent.session_id || null,
-		};
+		return { result: allText || resultEvent.result || '' };
 	}
 
 	if (outputFormat === 'json') {
 		try {
 			const parsed = JSON.parse(stdout);
 			let result = parsed.result || '';
-			const sessionId = parsed.session_id || null;
 
-			// Fallback: when result is empty (last turn ended on tool_use),
-			// extract the last assistant text from the session JSONL
 			if (!result && sessionId) {
 				result = extractLastTextFromSessionLog(sessionId, claudeHome);
 				if (result) log.info(`${label}: recovered text from session log (result was empty)`);
 			}
 
-			return { result, sessionId };
+			return { result };
 		} catch (err) {
 			log.error(`Failed to parse ${label} JSON output:`, stdout.slice(0, 200));
-			return { result: stdout, sessionId: null };
+			return { result: stdout };
 		}
 	}
-	return { result: stdout, sessionId: null };
+	return { result: stdout };
 }
 
 async function executeClaudeCommand(prompt, options = {}) {
 	const {
 		sessionId = null,
+		sessionStarted = false,
 		systemPrompt = null,
 		allowedTools = ALLOWED_TOOLS,
 		disallowedTools = DISALLOWED_TOOLS,
@@ -323,34 +324,26 @@ async function executeClaudeCommand(prompt, options = {}) {
 		throw new Error('executeClaudeCommand requires systemPrompt');
 	}
 
-	const spawnOpts = { systemPrompt, allowedTools, disallowedTools, model, effort, outputFormat };
+	const spawnOpts = { sessionId, sessionStarted, systemPrompt, allowedTools, disallowedTools, model, effort, outputFormat };
 	const isStreamJson = outputFormat === 'stream-json';
 
-	log.info(`Spawning claude: ${sessionId ? `resume ${sessionId}` : 'new session'}, prompt length: ${prompt.length}, format: ${outputFormat}`);
+	const attach = sessionId
+		? (sessionStarted ? `resume ${sessionId}` : `new ${sessionId}`)
+		: 'no session';
+	log.info(`Spawning claude: ${attach}, prompt length: ${prompt.length}, format: ${outputFormat}`);
 
-	// First attempt: with resume if sessionId provided, otherwise new session
-	let result = await spawnWithTimeout(
+	const result = await spawnWithTimeout(
 		CLAUDE_BIN,
-		buildClaudeArgs(prompt, { ...spawnOpts, sessionId }),
+		buildClaudeArgs(prompt, spawnOpts),
 		{ timeoutMs, cwd: ADMIN_HOME, env: ADMIN_ENV, label: 'Claude', streamJson: isStreamJson },
 	);
-
-	// Fallback: if resume failed, retry with new session
-	if (result.code !== 0 && sessionId) {
-		log.warn(`Resume failed (exit ${result.code}), retrying with new session...`);
-		result = await spawnWithTimeout(
-			CLAUDE_BIN,
-			buildClaudeArgs(prompt, { ...spawnOpts, sessionId: null }),
-			{ timeoutMs, cwd: ADMIN_HOME, env: ADMIN_ENV, label: 'Claude', streamJson: isStreamJson },
-		);
-	}
 
 	if (result.code !== 0) {
 		const errMsg = result.stdout.slice(-500) || `exit code ${result.code}`;
 		throw Object.assign(new Error(errMsg), { code: result.code });
 	}
 
-	return parseClaudeOutput(result.stdout, outputFormat, 'Claude', ADMIN_HOME);
+	return parseClaudeOutput(result.stdout, outputFormat, 'Claude', ADMIN_HOME, sessionId);
 }
 
 module.exports = { buildClaudeArgs, spawnWithTimeout, parseClaudeOutput, executeClaudeCommand };

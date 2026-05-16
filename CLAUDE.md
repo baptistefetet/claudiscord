@@ -233,7 +233,9 @@ bash scripts/rebuild-sandbox.sh
 
 - `sessions.json` shape:
   ```json
-  { "channels": { "<channelId>": { "mode": "admin"|"sandbox", "model": "opus"|"sonnet", "sessionId": "...", "lastName": "..." } } }
+  { "channels": { "<channelId>": { "mode": "admin"|"sandbox", "model": "opus"|"sonnet", "sessionId": "<uuid>", "sessionStarted": boolean, "lastName": "..." } } }
   ```
+- `sessionId` is a UUID v4 allocated by `sessions.ensureSession()` **before** the first claude spawn — so a message that times out is still resumable (we already know the session UUID).
+- `sessionStarted` switches the CLI flag: `false` → `--session-id <uuid>` (creates the session); `true` → `--resume <uuid>` (reuses it; reusing `--session-id` on an existing UUID errors with "Session ID X is already in use"). Flipped to `true` after a successful spawn (and on timeout, since the JSONL is on disk).
 - `lastName` is a display snapshot to make `sessions.json` readable during debugging.
-- A full reset is harmless — it only drops Claude session IDs (the next prompt starts a fresh conversation per channel).
+- A full reset is harmless — it only drops Claude session IDs and the `sessionStarted` bit (the next prompt starts a fresh conversation per channel).

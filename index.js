@@ -80,13 +80,15 @@ client.on(Events.MessageCreate, async message => {
 
 	const mode = sessions.getMode(channelId);
 	const model = sessions.getModel(channelId);
-	const sessionId = sessions.getSessionId(channelId);
 	const botName = client.user.displayName || client.user.username;
 	const userName = message.author.displayName || message.author.username;
 	const channelTopic = !isDM ? (channel.topic || null) : null;
 
+	// sessionId & sessionStarted are resolved inside executor.executeForMode,
+	// **inside the global queue**, to avoid a race where two consecutive
+	// messages on a fresh channel both capture sessionStarted=false.
 	const promptOptions = {
-		sessionId,
+		channelId,
 		systemPrompt: getSystemPrompt({
 			botName,
 			userName,
@@ -117,10 +119,6 @@ client.on(Events.MessageCreate, async message => {
 		stopTyping();
 		stopTyping = null;
 
-		if (result.sessionId) {
-			sessions.setSessionId(channelId, result.sessionId);
-		}
-
 		const responseText = result.result || 'Empty response from Claude Code.';
 		const chunks = splitMessage(responseText);
 		for (const chunk of chunks) {
@@ -139,7 +137,7 @@ client.on(Events.MessageCreate, async message => {
 		} else if (err.message === 'Docker is not installed on this host') {
 			errMsg = 'Docker is not installed — switch this channel to admin mode with `/admin`.';
 		} else {
-			errMsg = `Claude Code error: ${err.message?.slice(0, 300) || 'unknown'}`;
+			errMsg = `Claude Code error: ${err.message?.slice(0, 300) || 'unknown'}\n(if this keeps happening, send \`/clear\` to reset the session)`;
 		}
 		await channel.send(errMsg).catch(e => log.error('Failed to send error message:', e));
 	} finally {
