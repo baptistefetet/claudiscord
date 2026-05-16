@@ -41,6 +41,15 @@ client.on(Events.MessageCreate, async message => {
 	// Strict authorization: silently ignore every other user.
 	if (message.author.id !== config.AUTHORIZED_USER_ID) return;
 
+	// If the channel is in remote mode (or transitioning), a voice message is
+	// just as invalid as a text prompt. Drop it BEFORE paying for Groq STT and
+	// before echoing `🎙️ <transcript>` — `handleCommand` would reject it
+	// anyway, but the gate there only runs after transcription.
+	if (isVoice && !content && sessions.getRemoteId(channel.id)) {
+		await channel.send(`\u{1F6F0}️ This channel is in remote mode — voice messages are ignored. Send \`/remote\` to return to Discord mode.`).catch(() => {});
+		return;
+	}
+
 	// Voice message → transcription via Groq Whisper. Text wins if both present.
 	let prompt = content;
 	if (!prompt && isVoice) {
@@ -126,6 +135,8 @@ client.on(Events.MessageCreate, async message => {
 		let errMsg;
 		if (err.code === 124) {
 			errMsg = 'Claude Code took too long, timeout!';
+		} else if (err.code === 'SANDBOX_REMOTE_ACTIVE') {
+			errMsg = '\u{1F6F0}️ A sandbox `/remote` session is active on another channel — sandbox prompts are paused until it stops.';
 		} else if (err.message === 'NOT_AUTHENTICATED') {
 			errMsg = 'You are not authenticated in the sandbox. Send `/login` for instructions.';
 		} else if (err.message === 'Docker is not installed on this host') {

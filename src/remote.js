@@ -1,5 +1,8 @@
 const { spawn } = require('child_process');
-const { CLAUDE_BIN, CONTAINER_NAME, ADMIN_HOME } = require('./config');
+const fs = require('fs');
+const path = require('path');
+const { CLAUDE_BIN, CONTAINER_NAME, ADMIN_HOME, CONTAINER_HOME } = require('./config');
+const { ADMIN_ENV } = require('./claude');
 const sessions = require('./sessions');
 const log = require('./logger');
 
@@ -19,6 +22,11 @@ const AGENT_ID_REGEX = /^backgrounded\s+·\s+([0-9a-f]{8})/m;
 // the full timeout.
 const STOP_DONE_REGEX = /(?:^|\b)(stopped|couldn't confirm|not found|already stopped)\b/im;
 
+// Strict guard before any `rm -rf` on a jobs dir. agentId comes from
+// AGENT_ID_REGEX, so it's already 8 lowercase hex — this assert is
+// belt-and-suspenders in case a caller wires in a different source.
+const AGENT_ID_STRICT = /^[0-9a-f]{8}$/;
+
 /**
  * Spawn a one-shot wrapper command. When `earlyMatch` matches against stdout
  * we SIGTERM the wrapper immediately and treat it as success — this matters
@@ -28,9 +36,9 @@ const STOP_DONE_REGEX = /(?:^|\b)(stopped|couldn't confirm|not found|already sto
  * NOT kill the in-container daemon (same mechanism leveraged by
  * `executeClaudeInContainer`), so the started session survives.
  */
-function spawnOnce(cmd, args, { timeoutMs, label, cwd, earlyMatch }) {
+function spawnOnce(cmd, args, { timeoutMs, label, cwd, env, earlyMatch }) {
 	return new Promise((resolve) => {
-		const child = spawn(cmd, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+		const child = spawn(cmd, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });
 		child.stdin.end();
 		let stdout = '';
 		let stderr = '';
@@ -87,7 +95,10 @@ async function startRemote({ mode, sessionId, sessionStarted, channelName }) {
 
 	let result;
 	if (mode === 'admin') {
-		result = await spawnOnce(CLAUDE_BIN, claudeArgs, { timeoutMs: START_TIMEOUT_MS, label: 'remote-start admin', cwd: ADMIN_HOME, earlyMatch: AGENT_ID_REGEX });
+		// ADMIN_ENV puts CLAUDE_BIN's dir on PATH; without it the bg daemon's
+		// Bash tool calls that re-invoke `claude` (skills, hooks) fail with
+		// "command not found" under systemd's stripped PATH.
+		result = await spawnOnce(CLAUDE_BIN, claudeArgs, { timeoutMs: START_TIMEOUT_MS, label: 'remote-start admin', cwd: ADMIN_HOME, env: ADMIN_ENV, earlyMatch: AGENT_ID_REGEX });
 	} else if (mode === 'sandbox') {
 		result = await spawnOnce('docker', ['exec', CONTAINER_NAME, 'claude', ...claudeArgs], { timeoutMs: START_TIMEOUT_MS, label: 'remote-start sandbox', earlyMatch: AGENT_ID_REGEX });
 	} else {
@@ -110,12 +121,15 @@ async function startRemote({ mode, sessionId, sessionStarted, channelName }) {
 /**
  * Stop a remote session by agent ID. We consider any return "best effort": the
  * CLI sometimes prints "couldn't confirm…" yet the daemon log shows the stop
- * is effective. The caller clears the channel's remoteId regardless.
+ * is effective. After the CLI call we also remove the agent's jobs/<id>/ dir,
+ * which `claude stop` leaves behind on disk — that's what makes the agent keep
+ * showing up as a "stopped session" in `claude agents`. The caller clears the
+ * channel's remoteId regardless of what we return.
  */
 async function stopRemote({ mode, remoteId }) {
 	let result;
 	if (mode === 'admin') {
-		result = await spawnOnce(CLAUDE_BIN, ['stop', remoteId], { timeoutMs: STOP_TIMEOUT_MS, label: 'remote-stop admin', cwd: ADMIN_HOME, earlyMatch: STOP_DONE_REGEX });
+		result = await spawnOnce(CLAUDE_BIN, ['stop', remoteId], { timeoutMs: STOP_TIMEOUT_MS, label: 'remote-stop admin', cwd: ADMIN_HOME, env: ADMIN_ENV, earlyMatch: STOP_DONE_REGEX });
 	} else if (mode === 'sandbox') {
 		result = await spawnOnce('docker', ['exec', CONTAINER_NAME, 'claude', 'stop', remoteId], { timeoutMs: STOP_TIMEOUT_MS, label: 'remote-stop sandbox', earlyMatch: STOP_DONE_REGEX });
 	} else {
@@ -123,7 +137,34 @@ async function stopRemote({ mode, remoteId }) {
 	}
 	const summary = (result.stdout + result.stderr).trim().slice(0, 200);
 	log.info(`Remote stop ${remoteId} (mode=${mode}): exit=${result.code} ${summary}`);
+	await cleanupJobsDir({ mode, remoteId });
 	return result.code === 0;
+}
+
+/**
+ * Remove `~/.claude/jobs/<remoteId>/` (host or container). Without this, the
+ * agent stays listed in `claude agents` as a stopped session forever. Strict
+ * 8-hex guard on remoteId: the caller threads in a value parsed from
+ * AGENT_ID_REGEX, but we re-check before touching the filesystem.
+ */
+async function cleanupJobsDir({ mode, remoteId }) {
+	if (!AGENT_ID_STRICT.test(remoteId)) {
+		log.warn(`cleanupJobsDir: refusing unsafe remoteId '${remoteId}'`);
+		return;
+	}
+	try {
+		if (mode === 'admin') {
+			const target = path.join(ADMIN_HOME, '.claude', 'jobs', remoteId);
+			fs.rmSync(target, { recursive: true, force: true });
+			log.info(`cleanupJobsDir admin: removed ${target}`);
+		} else if (mode === 'sandbox') {
+			const target = path.posix.join(CONTAINER_HOME, '.claude/jobs', remoteId);
+			await spawnOnce('docker', ['exec', CONTAINER_NAME, 'rm', '-rf', '--', target], { timeoutMs: 5000, label: 'remote-cleanup sandbox' });
+			log.info(`cleanupJobsDir sandbox: removed ${target}`);
+		}
+	} catch (err) {
+		log.warn(`cleanupJobsDir failed for ${remoteId} (mode=${mode}): ${err.message}`);
+	}
 }
 
 /**

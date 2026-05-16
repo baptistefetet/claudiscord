@@ -178,4 +178,18 @@ function listRemoteChannels() {
 	return out;
 }
 
-module.exports = { load, getMode, setMode, getModel, setModel, ensureSession, markSessionStarted, getSession, setLastName, clearChannel, getRemoteId, setRemoteId, listRemoteChannels };
+/**
+ * True when any channel currently has a sandbox-mode remote. Used to refuse
+ * other sandbox claude executions (prompts, !shell, scheduled jobs) — those
+ * would route through `killClaudeInContainer` on timeout/early-result, which
+ * pkills every non-essential PID in the container and would take the live
+ * remote daemon with it.
+ */
+function hasActiveSandboxRemote() {
+	for (const entry of channels.values()) {
+		if (entry.mode === 'sandbox' && typeof entry.remoteId === 'string' && entry.remoteId) return true;
+	}
+	return false;
+}
+
+module.exports = { load, getMode, setMode, getModel, setModel, ensureSession, markSessionStarted, getSession, setLastName, clearChannel, getRemoteId, setRemoteId, listRemoteChannels, hasActiveSandboxRemote };

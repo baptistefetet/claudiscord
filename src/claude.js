@@ -346,4 +346,4 @@ async function executeClaudeCommand(prompt, options = {}) {
 	return parseClaudeOutput(result.stdout, outputFormat, 'Claude', ADMIN_HOME, sessionId);
 }
 
-module.exports = { buildClaudeArgs, spawnWithTimeout, parseClaudeOutput, executeClaudeCommand };
+module.exports = { ADMIN_ENV, buildClaudeArgs, spawnWithTimeout, parseClaudeOutput, executeClaudeCommand };

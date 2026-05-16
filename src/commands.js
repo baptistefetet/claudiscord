@@ -139,6 +139,13 @@ async function handleCommand(message) {
 				await channel.send('Sandbox is not available — shell requires either admin mode or a working sandbox.');
 				return true;
 			}
+			// A live sandbox remote shares the container with us. `executeShell`
+			// times out via `pkill -9 -f <prefix>` which can scoop up the remote
+			// daemon. Refuse rather than risk killing the user's mobile session.
+			if (sessions.hasActiveSandboxRemote()) {
+				await channel.send('\u{1F6F0}️ A sandbox `/remote` session is active — sandbox `!shell` is paused to avoid killing it. Stop the remote first.');
+				return true;
+			}
 			ensureContainer();
 			output = await executeShell(command, { inContainer: true });
 		}
@@ -229,22 +236,18 @@ async function handleCommand(message) {
 			const existing = remoteId;
 			if (existing) {
 				if (isBusy()) await channel.send('⏳ Waiting for previous prompt...');
-				let stoppedCleanly = true;
+				let stoppedCleanly = false;
 				try {
-					await runQueued(() => stopRemote({ mode, remoteId: existing }));
+					stoppedCleanly = await runQueued(() => stopRemote({ mode, remoteId: existing }));
 				} catch (err) {
-					stoppedCleanly = false;
 					log.error('remote stop error:', err.message);
 				}
 				sessions.setRemoteId(channelId, null);
 				// Claude may have edited a jobs file during the mobile session — and
 				// we did NOT go through executor.js, so reload jobs here.
 				scheduler.reloadJobs();
-				if (stoppedCleanly) {
-					await channel.send('Back to Discord mode.');
-				} else {
-					await channel.send('Back to Discord mode (stop reported an error, state cleared).');
-				}
+				const suffix = stoppedCleanly ? '' : ' (stop reported an error, state cleared)';
+				await channel.send(`Back to Discord mode. The next message starts a fresh conversation${suffix}.`);
 				return true;
 			}
 

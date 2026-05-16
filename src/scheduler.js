@@ -4,6 +4,7 @@ const { getSystemPrompt } = require('./prompts');
 const { executeForMode } = require('./executor');
 const { loadAllJobs, jobKey, recordJobRun } = require('./jobs-store');
 const { sendToChannel, getClient } = require('./discord');
+const sessions = require('./sessions');
 const log = require('./logger');
 
 /** @type {Map<string, import('node-cron').ScheduledTask>} */
@@ -73,6 +74,14 @@ async function fetchJobPromptContext(channelId) {
 async function executeJob(job) {
 	const { id, prompt, channelId, notify, notifyPattern } = job;
 	const key = jobKey(job);
+
+	// While a sandbox remote is live we cannot run another sandbox claude:
+	// `killClaudeInContainer` on timeout/early-result would also kill the remote
+	// daemon. Skip silently — the next cron tick will pick it back up.
+	if (job.mode === 'sandbox' && sessions.hasActiveSandboxRemote()) {
+		log.warn(`Job '${key}' skipped (sandbox remote active)`);
+		return;
+	}
 
 	if (!acquireJobLock(key)) {
 		log.warn(`Job '${key}' skipped (already running)`);
