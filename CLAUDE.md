@@ -33,9 +33,9 @@ Scheduled jobs
 ## Files
 
 ```
-index.js              # Entry point: Discord handler, queue wait UX
 Dockerfile            # Sandbox image (node:22-slim + Claude CLI + user claude)
 src/
+  index.js            # Entry point: Discord handler, queue wait UX
   config.js           # .env loading + paths + constants
   prompts.js          # System prompt builder (per-channel context injection)
   logger.js           # stdout/stderr logging (journald-friendly)
@@ -113,7 +113,7 @@ message UI triggers transcription.
 
 ## Global queue
 
-All executions — interactive prompts and scheduled jobs, admin and sandbox — go through `src/queue.js::runQueued`. Only one Claude process runs at a time. If a new message arrives while something is running, `index.js` sends a one-shot "⏳ Waiting for previous prompt..." notice to the concerned channel. This sequentiality simplifies invariants around concurrent file writes (jobs files, sessions file).
+All executions — interactive prompts and scheduled jobs, admin and sandbox — go through `src/queue.js::runQueued`. Only one Claude process runs at a time. If a new message arrives while something is running, `src/index.js` sends a one-shot "⏳ Waiting for previous prompt..." notice to the concerned channel. This sequentiality simplifies invariants around concurrent file writes (jobs files, sessions file).
 
 ## Docker sandbox (optional)
 
@@ -241,7 +241,7 @@ bash scripts/rebuild-sandbox.sh
 - `remoteId` is `null` when the channel is in Discord mode (default), or an 8-hex agent ID when the channel is currently driven from the Claude mobile app via `/remote`. See "Remote control" below.
 - `lastName` is a display snapshot to make `sessions.json` readable during debugging.
 - A full reset is harmless — it only drops Claude session IDs and the `sessionStarted` bit (the next prompt starts a fresh conversation per channel).
-- Startup purge (`index.js::purgeInvalidChannels`) drops entries whose Discord channel no longer exists. Runs after `login()` and after `reconcileRemotes()` (which needs to stop any remote agent first, before the entry vanishes). Strict: only `DiscordAPIError code 10003` (Unknown Channel) triggers removal; transient errors are logged and skipped. Scheduled jobs attached to a purged channel are intentionally NOT removed — job lifecycle is managed by hand.
+- Startup purge (`src/index.js::purgeInvalidChannels`) drops entries whose Discord channel no longer exists. Runs after `login()` and after `reconcileRemotes()` (which needs to stop any remote agent first, before the entry vanishes). Strict: only `DiscordAPIError code 10003` (Unknown Channel) triggers removal; transient errors are logged and skipped. Scheduled jobs attached to a purged channel are intentionally NOT removed — job lifecycle is managed by hand.
 
 ## Remote control
 
@@ -250,7 +250,7 @@ bash scripts/rebuild-sandbox.sh
 - Implementation: `src/remote.js` spawns `claude --bg [--resume <channelSessionId>] --remote-control <channelName>` (host for admin, `docker exec` for sandbox). The CLI prints `backgrounded · <agentId>` on stdout — we parse the 8-hex agent ID and persist it as `remoteId` in `sessions.json`.
 - Asymmetric continuity: `--resume` makes `claude --bg` copy the existing Discord conversation into the bg session's JSONL, so the mobile user picks up where Discord left off. But `--bg` manages its own UUID (warns "--bg manages the session id; ignoring --session-id") and we don't reconcile back — `setRemoteId` wipes the channel's `sessionId`/`sessionStarted`, so the next Discord message after `/remote` stop starts a fresh session. Going Discord → mobile keeps history; coming back Discord → fresh.
 - Naming: the mobile app shows each session under `<channelName>` (DM = username), so multiple channels can run in parallel and stay discoverable.
-- Gating (`src/commands.js`): while `remoteId` is set, only `/remote`, `/status`, `/help` are accepted in that channel. Every other input (plain text, `!shell`, other slash commands) returns an invalidation hint and does **not** spawn `claude -p` — this prevents two concurrent processes touching the same session. Voice messages are also dropped *before* Groq STT (`index.js`), so a vocal in remote mode neither pays for transcription nor leaks the `🎙️ <transcript>` echo.
+- Gating (`src/commands.js`): while `remoteId` is set, only `/remote`, `/status`, `/help` are accepted in that channel. Every other input (plain text, `!shell`, other slash commands) returns an invalidation hint and does **not** spawn `claude -p` — this prevents two concurrent processes touching the same session. Voice messages are also dropped *before* Groq STT (`src/index.js`), so a vocal in remote mode neither pays for transcription nor leaks the `🎙️ <transcript>` echo.
 - Cross-channel sandbox lockout: while *any* channel holds a sandbox remote, every other sandbox prompt / `!shell` / scheduled job is refused (`hasActiveSandboxRemote()` check in `executor.js`, `commands.js`, `scheduler.js`). Reason: `killClaudeInContainer` pkills every non-init PID in the container on timeout or early-result, which would scoop up the live remote daemon. Admin channels are unaffected.
 - Stop: `/remote` while active runs `claude stop <agentId>` (host or container), then deletes `~/.claude/jobs/<agentId>/` so the agent stops showing up in `claude agents` as a stopped session (`claude stop` keeps the conversation around by design). Strict 8-hex guard on the agentId before any `rm -rf`. Finally clears `remoteId` and calls `scheduler.reloadJobs()` — Claude may have edited the jobs files during the mobile session, and we did not go through the executor path that normally triggers a reload.
 - Startup reconciliation: `reconcileRemotes()` runs after `sessions.load()` and best-effort-stops every persisted `remoteId` (also doing the jobs/ cleanup). After a machine reboot the daemon is gone and the stop fails harmlessly; the channel reverts to Discord mode either way.

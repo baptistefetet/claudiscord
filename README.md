@@ -68,7 +68,7 @@ Requires=docker.service
 Type=simple
 User=root
 WorkingDirectory=/path/to/claudiscord
-ExecStart=/usr/bin/node index.js
+ExecStart=/usr/bin/node src/index.js
 Restart=on-failure
 RestartSec=10
 Environment=NODE_ENV=production
