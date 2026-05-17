@@ -26,8 +26,8 @@ Scheduled jobs
 - The authorized user is stored in `.env` (`AUTHORIZED_USER_ID`) and is required at startup — without it the process refuses to boot.
 - Global queue (`src/queue.js`): every prompt (interactive or scheduled) goes through a single FIFO. `isBusy()` is used to show a one-time "⏳ waiting" hint per channel.
 - Jobs live in two separate files — never merged, never watched:
-  - `scheduled-jobs.json` (project root) for admin jobs
-  - `SANDBOX_HOME_DIR/.claudiscord/scheduled-jobs.json` for sandbox jobs
+  - `jobs.json` (project root) for admin jobs
+  - `SANDBOX_HOME_DIR/.claudiscord/jobs.json` for sandbox jobs
 - Scheduler reloads both files after each prompt (no `fs.watch`).
 
 ## Files
@@ -56,7 +56,7 @@ claude/
 scripts/
   rebuild-sandbox.sh  # Rebuild Docker sandbox image
 sessions.json         # { channels: { channelId -> {…} } } (gitignored)
-scheduled-jobs.json   # Admin scheduled jobs (gitignored)
+jobs.json             # Admin scheduled jobs (gitignored)
 .env                  # AUTHORIZED_USER_ID, DISCORD_TOKEN, CLAUDE_BIN, SANDBOX_HOME_DIR, GROQ_API_KEY
 ```
 
@@ -153,7 +153,7 @@ SANDBOX_HOME_DIR/         # = /home/claude in the container
     hooks/wait-background.sh
     skills/               # user skills
   .claudiscord/
-    scheduled-jobs.json   # sandbox jobs
+    jobs.json             # sandbox jobs
 ```
 
 ### Background task hook workaround
@@ -214,8 +214,8 @@ bash scripts/rebuild-sandbox.sh
 
 ### Storage
 
-- **Admin jobs**: `scheduled-jobs.json` at the project root (readable/writable by the host Claude only).
-- **Sandbox jobs**: `SANDBOX_HOME_DIR/.claudiscord/scheduled-jobs.json` (readable/writable by the container; the same path is readable from the host as well since the volume is a bind-mount).
+- **Admin jobs**: `jobs.json` at the project root (readable/writable by the host Claude only).
+- **Sandbox jobs**: `SANDBOX_HOME_DIR/.claudiscord/jobs.json` (readable/writable by the container; the same path is readable from the host as well since the volume is a bind-mount).
 - **No merge**: an admin prompt only sees admin jobs, a sandbox prompt only sees sandbox jobs. The scheduler loads both files and runs everything.
 
 ### Execution & reload

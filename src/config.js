@@ -29,7 +29,7 @@ const STT_LANGUAGE = process.env.STT_LANGUAGE || 'fr';
 // --- Paths ---
 const ADMIN_HOME = os.homedir();
 const CONTAINER_HOME = '/home/claude';
-const JOBS_FILENAME = 'scheduled-jobs.json';
+const JOBS_FILENAME = 'jobs.json';
 const JOBS_RELATIVE = path.join('.claudiscord', JOBS_FILENAME);
 
 const ADMIN_JOBS_FILE = path.resolve(__dirname, '..', JOBS_FILENAME);
