@@ -241,6 +241,7 @@ bash scripts/rebuild-sandbox.sh
 - `remoteId` is `null` when the channel is in Discord mode (default), or an 8-hex agent ID when the channel is currently driven from the Claude mobile app via `/remote`. See "Remote control" below.
 - `lastName` is a display snapshot to make `sessions.json` readable during debugging.
 - A full reset is harmless — it only drops Claude session IDs and the `sessionStarted` bit (the next prompt starts a fresh conversation per channel).
+- Startup purge (`index.js::purgeInvalidChannels`) drops entries whose Discord channel no longer exists. Runs after `login()` and after `reconcileRemotes()` (which needs to stop any remote agent first, before the entry vanishes). Strict: only `DiscordAPIError code 10003` (Unknown Channel) triggers removal; transient errors are logged and skipped. Scheduled jobs attached to a purged channel are intentionally NOT removed — job lifecycle is managed by hand.
 
 ## Remote control
 

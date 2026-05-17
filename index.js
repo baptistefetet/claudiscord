@@ -153,10 +153,38 @@ client.on(Events.MessageCreate, async message => {
 	}
 });
 
-client.on(Events.ClientReady, () => {
+client.on(Events.ClientReady, async () => {
 	log.info(`Connected as ${client.user.tag}`);
+	try { await purgeInvalidChannels(); } catch (err) { log.warn('purgeInvalidChannels failed:', err.message); }
 	scheduler.start();
 });
+
+// Remove sessions.json entries whose Discord channel no longer exists (channel
+// deleted, bot kicked from guild, etc.). Strict on the error code: only
+// `Unknown Channel` (10003) triggers removal — transient errors (network,
+// rate limit, permissions) are skipped so a flaky boot doesn't nuke valid
+// entries. Runs after login (needs the gateway) and after reconcileRemotes
+// (which would otherwise lose its handle on stale remote agents). Scheduled
+// jobs attached to a purged channel are intentionally left alone — the user
+// manages job lifecycle by hand.
+async function purgeInvalidChannels() {
+	const ids = sessions.listChannelIds();
+	if (ids.length === 0) return;
+	const removed = [];
+	for (const id of ids) {
+		try {
+			await client.channels.fetch(id);
+		} catch (err) {
+			if (err.code === 10003) {
+				sessions.removeChannel(id);
+				removed.push(id);
+			} else {
+				log.warn(`purgeInvalidChannels: skip ${id} (${err.message})`);
+			}
+		}
+	}
+	if (removed.length) log.info(`purgeInvalidChannels: removed ${removed.length} stale channel(s): ${removed.join(', ')}`);
+}
 
 function shutdown(signal) {
 	log.info(`Received ${signal}, shutting down...`);

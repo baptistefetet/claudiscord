@@ -147,6 +147,16 @@ function clearChannel(channelId) {
 	persist();
 }
 
+function listChannelIds() {
+	return Array.from(channels.keys());
+}
+
+function removeChannel(channelId) {
+	if (!channels.delete(channelId)) return false;
+	persist();
+	return true;
+}
+
 function getRemoteId(channelId) {
 	const entry = channels.get(channelId);
 	return entry?.remoteId || null;
@@ -192,4 +202,4 @@ function hasActiveSandboxRemote() {
 	return false;
 }
 
-module.exports = { load, getMode, setMode, getModel, setModel, ensureSession, markSessionStarted, getSession, setLastName, clearChannel, getRemoteId, setRemoteId, listRemoteChannels, hasActiveSandboxRemote };
+module.exports = { load, getMode, setMode, getModel, setModel, ensureSession, markSessionStarted, getSession, setLastName, clearChannel, listChannelIds, removeChannel, getRemoteId, setRemoteId, listRemoteChannels, hasActiveSandboxRemote };
