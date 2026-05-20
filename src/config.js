@@ -42,7 +42,7 @@ const DOCKER_IMAGE = 'claudiscord-sandbox';
 const CONTAINER_MEMORY = '512m';
 const CONTAINER_CPUS = 1;
 
-const CLAUDE_TIMEOUT_MS = 1_200_000;
+const CLAUDE_TIMEOUT_MS = 1_200_000; // 20 min — laisse la place aux gros prompts de dev
 const SHELL_TIMEOUT_MS = 300_000;
 const DOCKER_CMD_TIMEOUT = 30_000;
 const UPGRADE_TIMEOUT_MS = 300_000;

@@ -104,30 +104,11 @@ function ensureStorage() {
 	}
 
 	// .claude: created root-owned when home is pre-populated externally,
-	// so chown it whenever we create/seed files inside it.
+	// so chown it whenever we create it. Credentials are written later via /login.
 	const claudeDir = path.join(home, '.claude');
 	const claudeDirIsNew = !fs.existsSync(claudeDir);
 	fs.mkdirSync(claudeDir, { recursive: true });
 	if (claudeDirIsNew) chownContainerUser(claudeDir);
-
-	const hooksDir = path.join(claudeDir, 'hooks');
-	const hookScript = path.join(hooksDir, 'wait-background.sh');
-	if (!fs.existsSync(hookScript)) {
-		const hooksDirIsNew = !fs.existsSync(hooksDir);
-		fs.mkdirSync(hooksDir, { recursive: true });
-		if (hooksDirIsNew) chownContainerUser(hooksDir);
-		fs.copyFileSync(path.join(__dirname, '..', 'claude', 'wait-background.sh'), hookScript);
-		fs.chmodSync(hookScript, 0o755);
-		chownContainerUser(hookScript);
-		log.info('Created wait-background.sh hook');
-	}
-
-	const settingsFile = path.join(claudeDir, 'settings.json');
-	if (!fs.existsSync(settingsFile)) {
-		fs.copyFileSync(path.join(__dirname, '..', 'claude', 'settings.json'), settingsFile);
-		chownContainerUser(settingsFile);
-		log.info('Created settings.json');
-	}
 
 	const claudiscordDir = path.join(home, '.claudiscord');
 	const claudiscordDirIsNew = !fs.existsSync(claudiscordDir);
@@ -172,7 +153,7 @@ function ensureContainer() {
 }
 
 /**
- * Kill all non-essential processes inside the container (cleanup after timeout/early result).
+ * Kill all non-essential processes inside the container (cleanup after timeout).
  * Killing docker exec only kills the host-side pipe, not the container process.
  * With --init, PID 1 is tini; we also spare the 'sleep' process that keeps the container alive.
  */
@@ -190,18 +171,12 @@ function killClaudeInContainer(label) {
 async function executeClaudeInContainer(prompt, claudeOptions, {
 		timeoutMs = CLAUDE_TIMEOUT_MS,
 		label = `Container [${CONTAINER_NAME}]`,
-		streamJson = false,
 	} = {}) {
 	const claudeArgs = buildClaudeArgs(prompt, claudeOptions);
 	try {
 		return await spawnWithTimeout(
 			'docker', ['exec', '-i', CONTAINER_NAME, 'claude', ...claudeArgs],
-			{
-				timeoutMs,
-				label,
-				streamJson,
-				onEarlyKill: () => killClaudeInContainer(label),
-			},
+			{ timeoutMs, label },
 		);
 	} catch (err) {
 		if (err.code === 124) {
@@ -237,7 +212,6 @@ async function executeInContainer(prompt, {
 	};
 
 	const label = `Container [${CONTAINER_NAME}]`;
-	const isStreamJson = outputFormat === 'stream-json';
 	const attach = sessionId
 		? (sessionStarted ? `resume ${sessionId}` : `new ${sessionId}`)
 		: 'no session';
@@ -246,7 +220,6 @@ async function executeInContainer(prompt, {
 	const result = await executeClaudeInContainer(prompt, claudeOptions, {
 		timeoutMs,
 		label,
-		streamJson: isStreamJson,
 	});
 
 	if (result.code !== 0) {

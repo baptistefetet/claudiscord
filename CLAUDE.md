@@ -50,9 +50,6 @@ src/
   commands.js         # /help /clear /status /admin /sandbox /opus /sonnet /remote /login /upgrade /restart !shell
   remote.js           # /remote helpers: startRemote, stopRemote, reconcileRemotes
   stt.js              # Groq Whisper transcription for Discord voice messages
-claude/
-  wait-background.sh  # PostToolUse hook: blocks until run_in_background completes
-  settings.json       # Claude Code settings template (hooks config)
 scripts/
   rebuild-sandbox.sh  # Rebuild Docker sandbox image
 sessions.json         # { channels: { channelId -> {…} } } (gitignored)
@@ -149,23 +146,14 @@ SANDBOX_HOME_DIR/         # = /home/claude in the container
   CLAUDE.md               # customisable
   .claude/
     .credentials.json     # written by /login
-    settings.json         # hooks config (seeded)
-    hooks/wait-background.sh
     skills/               # user skills
   .claudiscord/
     jobs.json             # sandbox jobs
 ```
 
-### Background task hook workaround
+### Background tasks
 
-Claude Code's harness blocks `sleep` commands over 2 seconds in foreground Bash and returns an error suggesting `run_in_background: true`. The model follows this suggestion, gets back a background task ID, and immediately does `end_turn` — at which point claudiscord kills the process and the background task never completes.
-
-**Workaround**: a PostToolUse hook (`wait-background.sh`) intercepts Bash tool results containing a `backgroundTaskId`, reconstructs the output file path (`/tmp/claude-{UID}/{cwd-encoded}/{session_id}/tasks/{taskId}.output`), and blocks (polling every 2s) until the file has content.
-
-Files:
-- `claude/wait-background.sh` — hook template (seeded by `ensureStorage()`)
-- `claude/settings.json` — settings template registering the hook (660s timeout)
-- Sandbox volume: `~/.claude/hooks/wait-background.sh` + `~/.claude/settings.json`
+`spawnWithTimeout` (`src/claude.js`) waits for the Claude process to exit naturally — if Claude launches a background task (e.g. because the harness forced it after blocking a `sleep > 2s`), we wait for it to complete instead of killing the process at `end_turn`. The trade-off is that truly interactive commands (`gws auth login`, ssh to an unknown host, `apt install` without `-y`) will hang until `CLAUDE_TIMEOUT_MS` and block the global queue meanwhile — `/restart` is the escape hatch. The system prompt instructs Claude to avoid `run_in_background` anyway (see `src/prompts.js`).
 
 ### Image rebuild
 

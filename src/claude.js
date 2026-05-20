@@ -59,14 +59,11 @@ function buildClaudeArgs(prompt, options = {}) {
 
 /**
  * Spawn a command with timeout, stdout/stderr collection, and SIGTERM→SIGKILL.
- * Returns { stdout, stderr, code }.
- *
- * When streamJson is true (for --output-format stream-json), the promise
- * resolves as soon as the {"type":"result",...} event appears on stdout,
- * without waiting for the process to exit.  This prevents deadlocks when
- * background tasks (e.g. gws auth login) keep the process alive after the
- * conversation has ended.  onEarlyKill is called after killing the process
- * so the caller can clean up (e.g. kill orphaned processes in a container).
+ * Returns { stdout, stderr, code }. Waits for the process to exit naturally —
+ * if Claude launches a background task (e.g. forced by the harness when a
+ * `sleep` is too long), we wait for it to complete rather than killing early.
+ * The trade-off is that truly interactive commands (`gws auth login`, ssh to
+ * an unknown host, `apt install` without `-y`) will hang until CLAUDE_TIMEOUT_MS.
  */
 function spawnWithTimeout(cmd, args, options = {}) {
 	const {
@@ -74,8 +71,6 @@ function spawnWithTimeout(cmd, args, options = {}) {
 		cwd,
 		env,
 		label = 'process',
-		streamJson = false,
-		onEarlyKill = null,
 	} = options;
 
 	return new Promise((resolve, reject) => {
@@ -89,41 +84,12 @@ function spawnWithTimeout(cmd, args, options = {}) {
 
 		let stdout = '';
 		let stderr = '';
-		let resolved = false;
-		let earlyResult = null;
 
-		child.stdout.on('data', chunk => {
-			stdout += chunk;
-
-			// Stream-JSON: capture the result as soon as it appears, then
-			// terminate the process but wait for close before resolving.
-			if (streamJson && !resolved) {
-				for (const line of stdout.split('\n')) {
-					const trimmed = line.trim();
-					if (!trimmed) continue;
-					try {
-						const event = JSON.parse(trimmed);
-						if (event.type === 'result' && !earlyResult) {
-							earlyResult = { stdout, stderr, code: 0 };
-							clearTimeout(timer);
-							log.info(`${label}: stream result received, terminating process`);
-							child.kill('SIGTERM');
-							setTimeout(() => {
-								try { child.kill('SIGKILL'); } catch (_) {}
-							}, 5000);
-							if (onEarlyKill) onEarlyKill();
-							return;
-						}
-					} catch (_) {}
-				}
-			}
-		});
-
+		child.stdout.on('data', chunk => { stdout += chunk; });
 		child.stderr.on('data', chunk => { stderr += chunk; });
 
 		let killed = false;
 		const timer = setTimeout(() => {
-			if (resolved) return;
 			killed = true;
 			log.warn(`${label} timeout after ${timeoutMs}ms, sending SIGTERM`);
 			child.kill('SIGTERM');
@@ -134,12 +100,6 @@ function spawnWithTimeout(cmd, args, options = {}) {
 
 		child.on('close', (code) => {
 			clearTimeout(timer);
-			if (resolved) return;
-			if (earlyResult) {
-				resolved = true;
-				resolve({ stdout: earlyResult.stdout, stderr, code: 0 });
-				return;
-			}
 			if (killed) {
 				reject(Object.assign(new Error('timeout'), { code: 124 }));
 				return;
@@ -150,7 +110,6 @@ function spawnWithTimeout(cmd, args, options = {}) {
 
 		child.on('error', (err) => {
 			clearTimeout(timer);
-			if (resolved) return;
 			reject(err);
 		});
 	});
@@ -325,7 +284,6 @@ async function executeClaudeCommand(prompt, options = {}) {
 	}
 
 	const spawnOpts = { sessionId, sessionStarted, systemPrompt, allowedTools, disallowedTools, model, effort, outputFormat };
-	const isStreamJson = outputFormat === 'stream-json';
 
 	const attach = sessionId
 		? (sessionStarted ? `resume ${sessionId}` : `new ${sessionId}`)
@@ -335,7 +293,7 @@ async function executeClaudeCommand(prompt, options = {}) {
 	const result = await spawnWithTimeout(
 		CLAUDE_BIN,
 		buildClaudeArgs(prompt, spawnOpts),
-		{ timeoutMs, cwd: ADMIN_HOME, env: ADMIN_ENV, label: 'Claude', streamJson: isStreamJson },
+		{ timeoutMs, cwd: ADMIN_HOME, env: ADMIN_ENV, label: 'Claude' },
 	);
 
 	if (result.code !== 0) {
