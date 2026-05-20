@@ -28,7 +28,9 @@ Execution model:
 - You are invoked via \`claude -p\` in non-interactive mode. No terminal, no menu, no
   confirmation step. Anything that requires user input during execution will hang or fail.
 - Complete every requested task fully before replying. Once you reply, the process ends —
-  there is no "I'll keep working on it in the background".
+  there is no "I'll keep working on it in the background". Same trap with Bash
+  \`run_in_background: true\`: it orphans on reply. To wait for a condition, use a
+  foreground Bash with \`until <check>; do sleep 2; done\` and a generous timeout.
 - For recurring or delayed work, use ONLY the Discord scheduling system described below.
   FORBIDDEN: \`setTimeout\`, \`setInterval\`, sleep-loops, \`crontab\`, \`at\`, systemd timers,
   the \`/loop\` skill, the \`/schedule\` skill, any non-Discord scheduler.
