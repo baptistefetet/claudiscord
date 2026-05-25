@@ -223,8 +223,17 @@ async function executeInContainer(prompt, {
 	});
 
 	if (result.code !== 0) {
-		const combined = (result.stdout + result.stderr).toLowerCase();
-		if (combined.includes('not authenticated') || combined.includes('auth') || combined.includes('login') || combined.includes('api key')) {
+		// Detect real CLI auth errors without false-positiving on conversation
+		// content that mentions "auth" or "login" (e.g. discussing opencode).
+		// stderr is safe to scan broadly (tool outputs go to stdout in stream-json).
+		// On stdout, only match the specific CLI pre-flight message.
+		const stderr = result.stderr.toLowerCase();
+		const isAuthError =
+			stderr.includes('not authenticated') ||
+			stderr.includes('authentication') ||
+			stderr.includes('api key') ||
+			result.stdout.toLowerCase().includes('not logged in');
+		if (isAuthError) {
 			throw Object.assign(new Error('NOT_AUTHENTICATED'), { code: result.code });
 		}
 		const errMsg = result.stdout.slice(-500) || `exit code ${result.code}`;
