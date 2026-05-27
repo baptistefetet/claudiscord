@@ -2,7 +2,7 @@ const { spawn, execFileSync, execFile } = require('child_process');
 const { promisify } = require('util');
 const { ChannelType } = require('discord.js');
 const execFileAsync = promisify(execFile);
-const { UPGRADE_TIMEOUT_MS, SHELL_TIMEOUT_MS, DISCORD_MAX_MSG_LENGTH, CONTAINER_NAME, ADMIN_HOME } = require('./config');
+const { UPGRADE_TIMEOUT_MS, SHELL_TIMEOUT_MS, DISCORD_MAX_MSG_LENGTH, CONTAINER_NAME, ADMIN_USER_HOME } = require('./config');
 const sessions = require('./sessions');
 const { writeCredentials, hasCredentials, ensureContainer, DOCKER_AVAILABLE } = require('./container');
 const { runQueued, isBusy } = require('./queue');
@@ -46,7 +46,7 @@ function executeShell(command, { inContainer } = {}) {
 	return new Promise((resolve) => {
 		const spawnArgs = inContainer
 			? { cmd: 'docker', args: ['exec', CONTAINER_NAME, 'bash', '-c', command], opts: { stdio: ['pipe', 'pipe', 'pipe'] } }
-			: { cmd: 'bash', args: ['-c', command], opts: { cwd: ADMIN_HOME, stdio: ['pipe', 'pipe', 'pipe'], detached: true } };
+			: { cmd: 'bash', args: ['-c', command], opts: { cwd: ADMIN_USER_HOME, stdio: ['pipe', 'pipe', 'pipe'], detached: true } };
 
 		const child = spawn(spawnArgs.cmd, spawnArgs.args, spawnArgs.opts);
 		child.stdin.end();

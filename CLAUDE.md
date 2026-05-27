@@ -26,9 +26,9 @@ Scheduled jobs
 - The authorized user is stored in `.env` (`AUTHORIZED_USER_ID`) and is required at startup — without it the process refuses to boot.
 - Global queue (`src/queue.js`): every prompt (interactive or scheduled) goes through a single FIFO. `isBusy()` is used to show a one-time "⏳ waiting" hint per channel.
 - Jobs live in two separate files — never merged, never watched:
-  - `ADMIN_HOME/.claudiscord/jobs.json` for admin jobs
-  - `SANDBOX_HOME/.claudiscord/jobs.json` for sandbox jobs
-- Sessions live in `ADMIN_HOME/.claudiscord/sessions.json`.
+  - `ADMIN_USER_HOME/.claudiscord/jobs.json` for admin jobs
+  - `SANDBOX_HOST_HOME/.claudiscord/jobs.json` for sandbox jobs
+- Sessions live in `ADMIN_USER_HOME/.claudiscord/sessions.json`.
 - Scheduler reloads both files after each prompt (no `fs.watch`).
 
 ## Files
@@ -143,18 +143,18 @@ IDs.
 Both modes store runtime state under `<home>/.claudiscord/`:
 
 ```
-ADMIN_HOME/.claudiscord/          # /root/.claudiscord on this host
+ADMIN_USER_HOME/.claudiscord/     # /root/.claudiscord on this host
   jobs.json                       # admin scheduled jobs
   sessions.json                   # per-channel state (shared across modes)
 
-SANDBOX_HOME/.claudiscord/    # bind-mounted as /home/claude/.claudiscord
+SANDBOX_HOST_HOME/.claudiscord/   # bind-mounted as /home/claude/.claudiscord
   jobs.json                       # sandbox scheduled jobs
 ```
 
 The sandbox home also contains Claude config:
 
 ```
-SANDBOX_HOME/
+SANDBOX_HOST_HOME/
   CLAUDE.md               # customisable
   .claude/
     .credentials.json     # written by /login
@@ -212,8 +212,8 @@ bash scripts/rebuild-sandbox.sh
 
 ### Storage
 
-- **Admin jobs**: `ADMIN_HOME/.claudiscord/jobs.json` (readable/writable by the host Claude only).
-- **Sandbox jobs**: `SANDBOX_HOME/.claudiscord/jobs.json` (readable/writable by the container; the same path is readable from the host as well since the volume is a bind-mount).
+- **Admin jobs**: `ADMIN_USER_HOME/.claudiscord/jobs.json` (readable/writable by the host Claude only).
+- **Sandbox jobs**: `SANDBOX_HOST_HOME/.claudiscord/jobs.json` (readable/writable by the container; the same path is readable from the host as well since the volume is a bind-mount).
 - Both modes use the same `<home>/.claudiscord/` layout.
 - **No merge**: an admin prompt only sees admin jobs, a sandbox prompt only sees sandbox jobs. The scheduler loads both files and runs everything.
 
@@ -231,7 +231,7 @@ bash scripts/rebuild-sandbox.sh
 
 ## Sessions
 
-- `ADMIN_HOME/.claudiscord/sessions.json` shape:
+- `ADMIN_USER_HOME/.claudiscord/sessions.json` shape:
   ```json
   { "channels": { "<channelId>": { "mode": "admin"|"sandbox", "model": "opus"|"sonnet", "sessionId": "<uuid>", "sessionStarted": boolean, "remoteId": null|"<agentId>", "lastName": "..." } } }
   ```

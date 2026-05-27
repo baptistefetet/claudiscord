@@ -1,7 +1,7 @@
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { CLAUDE_BIN, CONTAINER_NAME, ADMIN_HOME, CONTAINER_HOME } = require('./config');
+const { CLAUDE_BIN, CONTAINER_NAME, ADMIN_USER_HOME, SANDBOX_USER_HOME } = require('./config');
 const { ADMIN_ENV } = require('./claude');
 const sessions = require('./sessions');
 const log = require('./logger');
@@ -98,7 +98,7 @@ async function startRemote({ mode, sessionId, sessionStarted, channelName }) {
 		// ADMIN_ENV puts CLAUDE_BIN's dir on PATH; without it the bg daemon's
 		// Bash tool calls that re-invoke `claude` (skills, hooks) fail with
 		// "command not found" under systemd's stripped PATH.
-		result = await spawnOnce(CLAUDE_BIN, claudeArgs, { timeoutMs: START_TIMEOUT_MS, label: 'remote-start admin', cwd: ADMIN_HOME, env: ADMIN_ENV, earlyMatch: AGENT_ID_REGEX });
+		result = await spawnOnce(CLAUDE_BIN, claudeArgs, { timeoutMs: START_TIMEOUT_MS, label: 'remote-start admin', cwd: ADMIN_USER_HOME, env: ADMIN_ENV, earlyMatch: AGENT_ID_REGEX });
 	} else if (mode === 'sandbox') {
 		result = await spawnOnce('docker', ['exec', CONTAINER_NAME, 'claude', ...claudeArgs], { timeoutMs: START_TIMEOUT_MS, label: 'remote-start sandbox', earlyMatch: AGENT_ID_REGEX });
 	} else {
@@ -129,7 +129,7 @@ async function startRemote({ mode, sessionId, sessionStarted, channelName }) {
 async function stopRemote({ mode, remoteId }) {
 	let result;
 	if (mode === 'admin') {
-		result = await spawnOnce(CLAUDE_BIN, ['stop', remoteId], { timeoutMs: STOP_TIMEOUT_MS, label: 'remote-stop admin', cwd: ADMIN_HOME, env: ADMIN_ENV, earlyMatch: STOP_DONE_REGEX });
+		result = await spawnOnce(CLAUDE_BIN, ['stop', remoteId], { timeoutMs: STOP_TIMEOUT_MS, label: 'remote-stop admin', cwd: ADMIN_USER_HOME, env: ADMIN_ENV, earlyMatch: STOP_DONE_REGEX });
 	} else if (mode === 'sandbox') {
 		result = await spawnOnce('docker', ['exec', CONTAINER_NAME, 'claude', 'stop', remoteId], { timeoutMs: STOP_TIMEOUT_MS, label: 'remote-stop sandbox', earlyMatch: STOP_DONE_REGEX });
 	} else {
@@ -154,11 +154,11 @@ async function cleanupJobsDir({ mode, remoteId }) {
 	}
 	try {
 		if (mode === 'admin') {
-			const target = path.join(ADMIN_HOME, '.claude', 'jobs', remoteId);
+			const target = path.join(ADMIN_USER_HOME, '.claude', 'jobs', remoteId);
 			fs.rmSync(target, { recursive: true, force: true });
 			log.info(`cleanupJobsDir admin: removed ${target}`);
 		} else if (mode === 'sandbox') {
-			const target = path.posix.join(CONTAINER_HOME, '.claude/jobs', remoteId);
+			const target = path.posix.join(SANDBOX_USER_HOME, '.claude/jobs', remoteId);
 			await spawnOnce('docker', ['exec', CONTAINER_NAME, 'rm', '-rf', '--', target], { timeoutMs: 5000, label: 'remote-cleanup sandbox' });
 			log.info(`cleanupJobsDir sandbox: removed ${target}`);
 		}

@@ -1,7 +1,7 @@
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { CLAUDE_BIN, CLAUDE_TIMEOUT_MS, ALLOWED_TOOLS, DISALLOWED_TOOLS, ADMIN_HOME } = require('./config');
+const { CLAUDE_BIN, CLAUDE_TIMEOUT_MS, ALLOWED_TOOLS, DISALLOWED_TOOLS, ADMIN_USER_HOME } = require('./config');
 const log = require('./logger');
 
 // systemd's inherited PATH usually omits ~/.local/bin, where `claude` itself
@@ -293,7 +293,7 @@ async function executeClaudeCommand(prompt, options = {}) {
 	const result = await spawnWithTimeout(
 		CLAUDE_BIN,
 		buildClaudeArgs(prompt, spawnOpts),
-		{ timeoutMs, cwd: ADMIN_HOME, env: ADMIN_ENV, label: 'Claude' },
+		{ timeoutMs, cwd: ADMIN_USER_HOME, env: ADMIN_ENV, label: 'Claude' },
 	);
 
 	if (result.code !== 0) {
@@ -301,7 +301,7 @@ async function executeClaudeCommand(prompt, options = {}) {
 		throw Object.assign(new Error(errMsg), { code: result.code });
 	}
 
-	return parseClaudeOutput(result.stdout, outputFormat, 'Claude', ADMIN_HOME, sessionId);
+	return parseClaudeOutput(result.stdout, outputFormat, 'Claude', ADMIN_USER_HOME, sessionId);
 }
 
 module.exports = { ADMIN_ENV, buildClaudeArgs, spawnWithTimeout, parseClaudeOutput, executeClaudeCommand };

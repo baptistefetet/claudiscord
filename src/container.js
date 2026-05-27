@@ -2,8 +2,10 @@ const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const {
-	SANDBOX_HOME,
-	CONTAINER_HOME,
+	SANDBOX_HOST_HOME,
+	SANDBOX_USER_HOME,
+	STATE_DIR,
+	JOBS_FILENAME,
 	CONTAINER_NAME,
 	DOCKER_IMAGE,
 	CONTAINER_MEMORY,
@@ -12,7 +14,6 @@ const {
 	DOCKER_CMD_TIMEOUT,
 	ALLOWED_TOOLS,
 	DISALLOWED_TOOLS,
-	JOBS_RELATIVE,
 } = require('./config');
 const { getDefaultClaudeMd } = require('./prompts');
 const { buildClaudeArgs, spawnWithTimeout, parseClaudeOutput } = require('./claude');
@@ -26,7 +27,7 @@ const DOCKERFILE_DIR = path.resolve(__dirname, '..');
 // Falls back to 1001:1001 if the directory doesn't exist yet.
 function readSandboxIds() {
 	try {
-		const st = fs.statSync(SANDBOX_HOME);
+		const st = fs.statSync(SANDBOX_HOST_HOME);
 		return { uid: st.uid, gid: st.gid };
 	} catch {
 		return { uid: 1001, gid: 1001 };
@@ -45,7 +46,7 @@ try {
 	DOCKER_AVAILABLE = false;
 	log.warn('Docker not detected — sandbox mode disabled');
 }
-if (DOCKER_AVAILABLE && !SANDBOX_HOME) {
+if (DOCKER_AVAILABLE && !SANDBOX_HOST_HOME) {
 	DOCKER_AVAILABLE = false;
 	log.warn('SANDBOX_HOME unset — sandbox mode disabled');
 }
@@ -90,7 +91,7 @@ function chownContainerUser(target) {
 }
 
 function ensureStorage() {
-	const home = SANDBOX_HOME;
+	const home = SANDBOX_HOST_HOME;
 	const isNew = !fs.existsSync(home);
 	fs.mkdirSync(home, { recursive: true });
 	if (isNew) chownContainerUser(home);
@@ -110,11 +111,11 @@ function ensureStorage() {
 	fs.mkdirSync(claudeDir, { recursive: true });
 	if (claudeDirIsNew) chownContainerUser(claudeDir);
 
-	const claudiscordDir = path.join(home, '.claudiscord');
+	const claudiscordDir = path.join(home, STATE_DIR);
 	const claudiscordDirIsNew = !fs.existsSync(claudiscordDir);
 	fs.mkdirSync(claudiscordDir, { recursive: true });
 	if (claudiscordDirIsNew) chownContainerUser(claudiscordDir);
-	const jobsFile = path.join(home, JOBS_RELATIVE);
+	const jobsFile = path.join(home, STATE_DIR, JOBS_FILENAME);
 	if (!fs.existsSync(jobsFile)) {
 		fs.writeFileSync(jobsFile, '[]', 'utf8');
 		chownContainerUser(jobsFile);
@@ -145,7 +146,7 @@ function ensureContainer() {
 		'--cpus', String(CONTAINER_CPUS),
 		'--restart', 'unless-stopped',
 		'-e', 'TZ=Europe/Paris',
-		'-v', `${SANDBOX_HOME}:${CONTAINER_HOME}`,
+		'-v', `${SANDBOX_HOST_HOME}:${SANDBOX_USER_HOME}`,
 		DOCKER_IMAGE,
 	);
 	docker('start', CONTAINER_NAME);
@@ -240,7 +241,7 @@ async function executeInContainer(prompt, {
 		throw Object.assign(new Error(errMsg), { code: result.code });
 	}
 
-	return parseClaudeOutput(result.stdout, outputFormat, label, SANDBOX_HOME, sessionId);
+	return parseClaudeOutput(result.stdout, outputFormat, label, SANDBOX_HOST_HOME, sessionId);
 }
 
 /**
@@ -250,7 +251,7 @@ async function executeInContainer(prompt, {
  */
 function writeCredentials(credentialsJson) {
 	ensureStorage();
-	const credPath = path.join(SANDBOX_HOME, '.claude', '.credentials.json');
+	const credPath = path.join(SANDBOX_HOST_HOME, '.claude', '.credentials.json');
 	const tmp = credPath + '.tmp';
 	fs.writeFileSync(tmp, credentialsJson, { mode: 0o600 });
 	fs.renameSync(tmp, credPath);
@@ -259,7 +260,7 @@ function writeCredentials(credentialsJson) {
 }
 
 function hasCredentials() {
-	const credPath = path.join(SANDBOX_HOME, '.claude', '.credentials.json');
+	const credPath = path.join(SANDBOX_HOST_HOME, '.claude', '.credentials.json');
 	return fs.existsSync(credPath);
 }
 

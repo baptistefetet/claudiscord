@@ -1,6 +1,6 @@
 const fs = require('fs');
 const cron = require('node-cron');
-const { ADMIN_JOBS_FILE, SANDBOX_JOBS_FILE, VALID_MODELS } = require('./config');
+const { ADMIN_JOBS_FILE, SANDBOX_HOST_JOBS_FILE, VALID_MODELS } = require('./config');
 const log = require('./logger');
 
 const REQUIRED_FIELDS = ['id', 'prompt', 'cron', 'enabled', 'channelId'];
@@ -8,8 +8,8 @@ const REQUIRED_FIELDS = ['id', 'prompt', 'cron', 'enabled', 'channelId'];
 function fileFor(mode) {
 	if (mode === 'admin') return ADMIN_JOBS_FILE;
 	if (mode === 'sandbox') {
-		if (!SANDBOX_JOBS_FILE) throw new Error('Sandbox is not configured (SANDBOX_HOME unset)');
-		return SANDBOX_JOBS_FILE;
+		if (!SANDBOX_HOST_JOBS_FILE) throw new Error('Sandbox is not configured (SANDBOX_HOME unset)');
+		return SANDBOX_HOST_JOBS_FILE;
 	}
 	throw new Error(`Unknown job mode: ${mode}`);
 }
@@ -62,8 +62,8 @@ function loadAllJobs() {
 			return false;
 		})
 		.map(j => ({ ...j, mode: 'admin' }));
-	const sandbox = SANDBOX_JOBS_FILE
-		? readJobsFile(SANDBOX_JOBS_FILE)
+	const sandbox = SANDBOX_HOST_JOBS_FILE
+		? readJobsFile(SANDBOX_HOST_JOBS_FILE)
 			.filter(j => {
 				if (validateJob(j)) return true;
 				log.warn(`Skipping invalid sandbox job: ${JSON.stringify(j)?.slice(0, 200)}`);

@@ -1,4 +1,4 @@
-const { ADMIN_JOBS_FILE, SANDBOX_JOBS_PATH, VALID_MODELS, CHANNEL_DEFAULT_MODEL } = require('./config');
+const { ADMIN_JOBS_FILE, SANDBOX_JOBS_FILE, VALID_MODELS, CHANNEL_DEFAULT_MODEL } = require('./config');
 
 const SYSTEM_PROMPT = `Your name is {{botName}}, and you are talking to {{userName}} on Discord.
 Your messages are relayed by a systemd service named "claudiscord".
@@ -208,7 +208,7 @@ function getSystemPrompt(options = {}) {
 			channelName: channelName || '<unnamed>',
 			channelTopic: channelTopic || '',
 			channelModel: resolvedModel,
-			jobsPath: isSandbox ? SANDBOX_JOBS_PATH : ADMIN_JOBS_FILE,
+			jobsPath: isSandbox ? SANDBOX_JOBS_FILE : ADMIN_JOBS_FILE,
 		},
 		{
 			job: isJob,
