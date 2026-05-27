@@ -40,14 +40,14 @@ npm install
 cp .env.example .env
 # Fill DISCORD_TOKEN and AUTHORIZED_USER_ID (enable Discord Developer Mode,
 # right-click your avatar → "Copy User ID"). Set CLAUDE_BIN only if claude
-# isn't at ~/.local/bin/claude. Set SANDBOX_HOME_DIR only if you plan to
+# isn't at ~/.local/bin/claude. Set SANDBOX_HOME only if you plan to
 # use sandbox mode.
 
 # Only if you want sandbox mode:
 bash scripts/rebuild-sandbox.sh
 ```
 
-`rebuild-sandbox.sh` creates `SANDBOX_HOME_DIR` if needed and builds the
+`rebuild-sandbox.sh` creates `SANDBOX_HOME` if needed and builds the
 image with the in-container `claude` user UID/GID matching the directory's
 owner, so bind-mounted files are read/write-able on both sides without
 manual chown setup.
@@ -101,7 +101,7 @@ You should see something like:
 ```
 
 If sandbox mode is configured you'll also see `Docker image
-'claudiscord-sandbox' found`. If `SANDBOX_HOME_DIR` is empty or Docker
+'claudiscord-sandbox' found`. If `SANDBOX_HOME` is empty or Docker
 isn't installed, expect a `sandbox mode disabled` warning instead — admin
 mode still works.
 
@@ -135,7 +135,7 @@ Run `claude auth login` on your own machine, then send the credentials to the bo
 /login {"claudeAiOauth":{"accessToken":"...","refreshToken":"...","expiresAt":...}}
 ```
 
-Credentials are written to `SANDBOX_HOME_DIR/.claude/.credentials.json` and the message carrying them is deleted automatically.
+Credentials are written to `SANDBOX_HOME/.claude/.credentials.json` and the message carrying them is deleted automatically.
 
 **Where to find credentials** (on the Linux box where you ran `claude auth login`):
 
@@ -150,7 +150,7 @@ cat ~/.claude/.credentials.json
 | `AUTHORIZED_USER_ID` | Discord user ID of the only user allowed to talk to the bot | Yes |
 | `DISCORD_TOKEN` | Discord bot token | Yes |
 | `CLAUDE_BIN` | Path to Claude Code binary on the host | Optional (defaults to `~/.local/bin/claude`) |
-| `SANDBOX_HOME_DIR` | Directory bind-mounted into the container as `/home/claude` | Optional (required only for sandbox mode) |
+| `SANDBOX_HOME` | Directory bind-mounted into the container as `/home/claude` | Optional (required only for sandbox mode) |
 | `GROQ_API_KEY` | Groq API key for transcribing Discord voice messages via Whisper | Optional (voice messages ignored if unset) |
 | `STT_MODEL` | Groq Whisper model id | Optional (defaults to `whisper-large-v3`) |
 | `STT_LANGUAGE` | Transcription language, ISO-639-1 | Optional (defaults to `fr`) |

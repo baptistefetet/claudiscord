@@ -1,6 +1,4 @@
 .env
-jobs.json
 node_modules/
-sessions.json
 ._*
 .DS_Store

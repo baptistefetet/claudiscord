@@ -8,7 +8,7 @@ const REQUIRED_FIELDS = ['id', 'prompt', 'cron', 'enabled', 'channelId'];
 function fileFor(mode) {
 	if (mode === 'admin') return ADMIN_JOBS_FILE;
 	if (mode === 'sandbox') {
-		if (!SANDBOX_JOBS_FILE) throw new Error('Sandbox is not configured (SANDBOX_HOME_DIR unset)');
+		if (!SANDBOX_JOBS_FILE) throw new Error('Sandbox is not configured (SANDBOX_HOME unset)');
 		return SANDBOX_JOBS_FILE;
 	}
 	throw new Error(`Unknown job mode: ${mode}`);

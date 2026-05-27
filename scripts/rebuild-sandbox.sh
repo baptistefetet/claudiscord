@@ -4,27 +4,27 @@ set -euo pipefail
 IMAGE="claudiscord-sandbox"
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
-# Pick UID/GID for the in-container `claude` user. If SANDBOX_HOME_DIR is set
+# Pick UID/GID for the in-container `claude` user. If SANDBOX_HOME is set
 # in .env and exists, mirror its ownership so bind-mounted files are
 # read/write-able on both sides without additional chown gymnastics.
 # Otherwise default to 1001:1001 and create the directory.
-SANDBOX_HOME_DIR=""
+SANDBOX_HOME=""
 if [ -f "$PROJECT_DIR/.env" ]; then
-    SANDBOX_HOME_DIR=$(grep -E '^SANDBOX_HOME_DIR=' "$PROJECT_DIR/.env" | head -1 | cut -d= -f2-)
+    SANDBOX_HOME=$(grep -E '^SANDBOX_HOME=' "$PROJECT_DIR/.env" | head -1 | cut -d= -f2-)
 fi
 
-if [ -n "$SANDBOX_HOME_DIR" ] && [ -d "$SANDBOX_HOME_DIR" ]; then
-    SANDBOX_UID=$(stat -c '%u' "$SANDBOX_HOME_DIR")
-    SANDBOX_GID=$(stat -c '%g' "$SANDBOX_HOME_DIR")
-    echo "Detected SANDBOX_HOME_DIR ownership: ${SANDBOX_UID}:${SANDBOX_GID}"
+if [ -n "$SANDBOX_HOME" ] && [ -d "$SANDBOX_HOME" ]; then
+    SANDBOX_UID=$(stat -c '%u' "$SANDBOX_HOME")
+    SANDBOX_GID=$(stat -c '%g' "$SANDBOX_HOME")
+    echo "Detected SANDBOX_HOME ownership: ${SANDBOX_UID}:${SANDBOX_GID}"
 else
     SANDBOX_UID=1001
     SANDBOX_GID=1001
     echo "Using default UID:GID 1001:1001"
-    if [ -n "$SANDBOX_HOME_DIR" ]; then
-        mkdir -p "$SANDBOX_HOME_DIR"
-        chown "${SANDBOX_UID}:${SANDBOX_GID}" "$SANDBOX_HOME_DIR"
-        echo "Created and chowned $SANDBOX_HOME_DIR"
+    if [ -n "$SANDBOX_HOME" ]; then
+        mkdir -p "$SANDBOX_HOME"
+        chown "${SANDBOX_UID}:${SANDBOX_GID}" "$SANDBOX_HOME"
+        echo "Created and chowned $SANDBOX_HOME"
     fi
 fi
 

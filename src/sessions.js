@@ -1,6 +1,6 @@
 const fs = require('fs');
 const crypto = require('crypto');
-const { SESSIONS_FILE, VALID_MODELS, CHANNEL_DEFAULT_MODEL } = require('./config');
+const { ADMIN_SESSIONS_FILE, VALID_MODELS, CHANNEL_DEFAULT_MODEL } = require('./config');
 const log = require('./logger');
 
 /**
@@ -41,7 +41,7 @@ const channels = new Map();
 
 function load() {
 	try {
-		const raw = fs.readFileSync(SESSIONS_FILE, 'utf8');
+		const raw = fs.readFileSync(ADMIN_SESSIONS_FILE, 'utf8');
 		const data = JSON.parse(raw);
 		if (data && data.channels && typeof data.channels === 'object') {
 			for (const [id, entry] of Object.entries(data.channels)) {
@@ -64,9 +64,9 @@ function load() {
 
 function persist() {
 	const obj = { channels: Object.fromEntries(channels) };
-	const tmp = SESSIONS_FILE + '.tmp';
+	const tmp = ADMIN_SESSIONS_FILE + '.tmp';
 	fs.writeFileSync(tmp, JSON.stringify(obj, null, 2), 'utf8');
-	fs.renameSync(tmp, SESSIONS_FILE);
+	fs.renameSync(tmp, ADMIN_SESSIONS_FILE);
 }
 
 function ensureChannel(channelId) {

@@ -1,3 +1,4 @@
+const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const ENV_PATH = path.resolve(__dirname, '..', '.env');
@@ -18,7 +19,7 @@ const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CLAUDE_BIN = process.env.CLAUDE_BIN || path.join(os.homedir(), '.local/bin/claude');
 // Optional: only required when sandbox mode is used. If unset, sandbox
 // is reported as unavailable just like when Docker is missing.
-const SANDBOX_HOME_DIR = process.env.SANDBOX_HOME_DIR || null;
+const SANDBOX_HOME = process.env.SANDBOX_HOME || null;
 
 // Optional: enables Groq Whisper transcription of Discord voice messages.
 // If unset, voice messages are silently ignored (legacy behaviour).
@@ -29,13 +30,17 @@ const STT_LANGUAGE = process.env.STT_LANGUAGE || 'fr';
 // --- Paths ---
 const ADMIN_HOME = os.homedir();
 const CONTAINER_HOME = '/home/claude';
+const STATE_DIR = '.claudiscord';
 const JOBS_FILENAME = 'jobs.json';
-const JOBS_RELATIVE = path.join('.claudiscord', JOBS_FILENAME);
+const ADMIN_SESSIONS_FILENAME = 'sessions.json';
 
-const ADMIN_JOBS_FILE = path.resolve(__dirname, '..', JOBS_FILENAME);
-const SANDBOX_JOBS_FILE = SANDBOX_HOME_DIR ? path.join(SANDBOX_HOME_DIR, JOBS_RELATIVE) : null;
-const SESSIONS_FILE = path.resolve(__dirname, '..', 'sessions.json');
-const CONTAINER_JOBS_FILE = path.posix.join(CONTAINER_HOME, JOBS_RELATIVE);
+fs.mkdirSync(path.join(ADMIN_HOME, STATE_DIR), { recursive: true });
+
+const ADMIN_JOBS_FILE = path.join(ADMIN_HOME, STATE_DIR, JOBS_FILENAME);
+const SANDBOX_JOBS_FILE = SANDBOX_HOME ? path.join(SANDBOX_HOME, STATE_DIR, JOBS_FILENAME) : null;
+const ADMIN_SESSIONS_FILE = path.join(ADMIN_HOME, STATE_DIR, ADMIN_SESSIONS_FILENAME);
+const SANDBOX_JOBS_PATH = path.posix.join(CONTAINER_HOME, STATE_DIR, JOBS_FILENAME);
+const JOBS_RELATIVE = path.join(STATE_DIR, JOBS_FILENAME);
 
 const CONTAINER_NAME = 'claudiscord-sandbox';
 const DOCKER_IMAGE = 'claudiscord-sandbox';
@@ -60,7 +65,7 @@ module.exports = {
 	AUTHORIZED_USER_ID,
 	DISCORD_TOKEN,
 	CLAUDE_BIN,
-	SANDBOX_HOME_DIR,
+	SANDBOX_HOME,
 	GROQ_API_KEY,
 	STT_MODEL,
 	STT_LANGUAGE,
@@ -70,8 +75,8 @@ module.exports = {
 	JOBS_RELATIVE,
 	ADMIN_JOBS_FILE,
 	SANDBOX_JOBS_FILE,
-	SESSIONS_FILE,
-	CONTAINER_JOBS_FILE,
+	ADMIN_SESSIONS_FILE,
+	SANDBOX_JOBS_PATH,
 	CLAUDE_TIMEOUT_MS,
 	SHELL_TIMEOUT_MS,
 	DISCORD_MAX_MSG_LENGTH,

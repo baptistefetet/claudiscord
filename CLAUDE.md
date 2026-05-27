@@ -26,8 +26,9 @@ Scheduled jobs
 - The authorized user is stored in `.env` (`AUTHORIZED_USER_ID`) and is required at startup — without it the process refuses to boot.
 - Global queue (`src/queue.js`): every prompt (interactive or scheduled) goes through a single FIFO. `isBusy()` is used to show a one-time "⏳ waiting" hint per channel.
 - Jobs live in two separate files — never merged, never watched:
-  - `jobs.json` (project root) for admin jobs
-  - `SANDBOX_HOME_DIR/.claudiscord/jobs.json` for sandbox jobs
+  - `ADMIN_HOME/.claudiscord/jobs.json` for admin jobs
+  - `SANDBOX_HOME/.claudiscord/jobs.json` for sandbox jobs
+- Sessions live in `ADMIN_HOME/.claudiscord/sessions.json`.
 - Scheduler reloads both files after each prompt (no `fs.watch`).
 
 ## Files
@@ -52,9 +53,7 @@ src/
   stt.js              # Groq Whisper transcription for Discord voice messages
 scripts/
   rebuild-sandbox.sh  # Rebuild Docker sandbox image
-sessions.json         # { channels: { channelId -> {…} } } (gitignored)
-jobs.json             # Admin scheduled jobs (gitignored)
-.env                  # AUTHORIZED_USER_ID, DISCORD_TOKEN, CLAUDE_BIN, SANDBOX_HOME_DIR, GROQ_API_KEY
+.env                  # AUTHORIZED_USER_ID, DISCORD_TOKEN, CLAUDE_BIN, SANDBOX_HOME, GROQ_API_KEY
 ```
 
 ## Service
@@ -117,7 +116,7 @@ All executions — interactive prompts and scheduled jobs, admin and sandbox —
 - **Image**: `claudiscord-sandbox` (local build, `node:22-slim` + Claude CLI)
 - **Container**: `claudiscord-sandbox` (single container, `--restart unless-stopped`)
 - **Limits**: 512 MB RAM, 1 CPU
-- **Volume**: `SANDBOX_HOME_DIR -> /home/claude`
+- **Volume**: `SANDBOX_HOME -> /home/claude`
 - **Network**: bridge
 - **User in container**: `claude` (non-root)
 - **CMD**: `sleep infinity`; commands run via `docker exec`
@@ -125,30 +124,41 @@ All executions — interactive prompts and scheduled jobs, admin and sandbox —
 
 ### Host user/group alignment
 
-`scripts/rebuild-sandbox.sh` reads the UID/GID of `SANDBOX_HOME_DIR` and
+`scripts/rebuild-sandbox.sh` reads the UID/GID of `SANDBOX_HOME` and
 passes them as `--build-arg SANDBOX_UID=… SANDBOX_GID=…` so the in-container
 `claude` user matches host ownership. If the directory doesn't exist yet,
 the script creates it owned by `1001:1001` and uses those defaults.
 
-Runtime echoes this: `src/container.js` reads `SANDBOX_HOME_DIR`'s ownership
+Runtime echoes this: `src/container.js` reads `SANDBOX_HOME`'s ownership
 via `fs.statSync` at startup (`readSandboxIds`) and uses those IDs for
 every chown when seeding files. Single source of truth: the directory's
 ownership.
 
-Implication: if you move `SANDBOX_HOME_DIR` to a path with different
+Implication: if you move `SANDBOX_HOME` to a path with different
 ownership, rerun `rebuild-sandbox.sh` so the image is rebuilt with matching
 IDs.
 
-### Sandbox storage layout
+### State storage layout
+
+Both modes store runtime state under `<home>/.claudiscord/`:
 
 ```
-SANDBOX_HOME_DIR/         # = /home/claude in the container
+ADMIN_HOME/.claudiscord/          # /root/.claudiscord on this host
+  jobs.json                       # admin scheduled jobs
+  sessions.json                   # per-channel state (shared across modes)
+
+SANDBOX_HOME/.claudiscord/    # bind-mounted as /home/claude/.claudiscord
+  jobs.json                       # sandbox scheduled jobs
+```
+
+The sandbox home also contains Claude config:
+
+```
+SANDBOX_HOME/
   CLAUDE.md               # customisable
   .claude/
     .credentials.json     # written by /login
     skills/               # user skills
-  .claudiscord/
-    jobs.json             # sandbox jobs
 ```
 
 ### Background tasks
@@ -202,8 +212,9 @@ bash scripts/rebuild-sandbox.sh
 
 ### Storage
 
-- **Admin jobs**: `jobs.json` at the project root (readable/writable by the host Claude only).
-- **Sandbox jobs**: `SANDBOX_HOME_DIR/.claudiscord/jobs.json` (readable/writable by the container; the same path is readable from the host as well since the volume is a bind-mount).
+- **Admin jobs**: `ADMIN_HOME/.claudiscord/jobs.json` (readable/writable by the host Claude only).
+- **Sandbox jobs**: `SANDBOX_HOME/.claudiscord/jobs.json` (readable/writable by the container; the same path is readable from the host as well since the volume is a bind-mount).
+- Both modes use the same `<home>/.claudiscord/` layout.
 - **No merge**: an admin prompt only sees admin jobs, a sandbox prompt only sees sandbox jobs. The scheduler loads both files and runs everything.
 
 ### Execution & reload
@@ -220,14 +231,14 @@ bash scripts/rebuild-sandbox.sh
 
 ## Sessions
 
-- `sessions.json` shape:
+- `ADMIN_HOME/.claudiscord/sessions.json` shape:
   ```json
   { "channels": { "<channelId>": { "mode": "admin"|"sandbox", "model": "opus"|"sonnet", "sessionId": "<uuid>", "sessionStarted": boolean, "remoteId": null|"<agentId>", "lastName": "..." } } }
   ```
 - `sessionId` is a UUID v4 allocated by `sessions.ensureSession()` **before** the first claude spawn — so a message that times out is still resumable (we already know the session UUID).
 - `sessionStarted` switches the CLI flag: `false` → `--session-id <uuid>` (creates the session); `true` → `--resume <uuid>` (reuses it; reusing `--session-id` on an existing UUID errors with "Session ID X is already in use"). Flipped to `true` after a successful spawn (and on timeout, since the JSONL is on disk).
 - `remoteId` is `null` when the channel is in Discord mode (default), or an 8-hex agent ID when the channel is currently driven from the Claude mobile app via `/remote`. See "Remote control" below.
-- `lastName` is a display snapshot to make `sessions.json` readable during debugging.
+- `lastName` is a display snapshot to make the sessions file readable during debugging.
 - A full reset is harmless — it only drops Claude session IDs and the `sessionStarted` bit (the next prompt starts a fresh conversation per channel).
 - Startup purge (`src/index.js::purgeInvalidChannels`) drops entries whose Discord channel no longer exists. Runs after `login()` and after `reconcileRemotes()` (which needs to stop any remote agent first, before the entry vanishes). Strict: only `DiscordAPIError code 10003` (Unknown Channel) triggers removal; transient errors are logged and skipped. Scheduled jobs attached to a purged channel are intentionally NOT removed — job lifecycle is managed by hand.
 
@@ -235,7 +246,7 @@ bash scripts/rebuild-sandbox.sh
 
 `/remote` toggles the channel between Discord mode (default) and remote mode. In remote mode, the channel's Claude session is driven from the Claude mobile app (full UI, permissions, reasoning view, etc.) instead of from Discord.
 
-- Implementation: `src/remote.js` spawns `claude --bg [--resume <channelSessionId>] --remote-control <channelName>` (host for admin, `docker exec` for sandbox). The CLI prints `backgrounded · <agentId>` on stdout — we parse the 8-hex agent ID and persist it as `remoteId` in `sessions.json`.
+- Implementation: `src/remote.js` spawns `claude --bg [--resume <channelSessionId>] --remote-control <channelName>` (host for admin, `docker exec` for sandbox). The CLI prints `backgrounded · <agentId>` on stdout — we parse the 8-hex agent ID and persist it as `remoteId` in the sessions file.
 - Asymmetric continuity: `--resume` makes `claude --bg` copy the existing Discord conversation into the bg session's JSONL, so the mobile user picks up where Discord left off. But `--bg` manages its own UUID (warns "--bg manages the session id; ignoring --session-id") and we don't reconcile back — `setRemoteId` wipes the channel's `sessionId`/`sessionStarted`, so the next Discord message after `/remote` stop starts a fresh session. Going Discord → mobile keeps history; coming back Discord → fresh.
 - Naming: the mobile app shows each session under `<channelName>` (DM = username), so multiple channels can run in parallel and stay discoverable.
 - Gating (`src/commands.js`): while `remoteId` is set, only `/remote`, `/status`, `/help` are accepted in that channel. Every other input (plain text, `!shell`, other slash commands) returns an invalidation hint and does **not** spawn `claude -p` — this prevents two concurrent processes touching the same session. Voice messages are also dropped *before* Groq STT (`src/index.js`), so a vocal in remote mode neither pays for transcription nor leaks the `🎙️ <transcript>` echo.

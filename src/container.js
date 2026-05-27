@@ -2,7 +2,7 @@ const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const {
-	SANDBOX_HOME_DIR,
+	SANDBOX_HOME,
 	CONTAINER_HOME,
 	CONTAINER_NAME,
 	DOCKER_IMAGE,
@@ -22,19 +22,19 @@ const DOCKERFILE_DIR = path.resolve(__dirname, '..');
 
 // UID/GID of the 'claude' user inside the container. By convention the
 // container is built (via scripts/rebuild-sandbox.sh) with IDs that match
-// SANDBOX_HOME_DIR's owner, so we read them back from the directory itself.
+// SANDBOX_HOME's owner, so we read them back from the directory itself.
 // Falls back to 1001:1001 if the directory doesn't exist yet.
 function readSandboxIds() {
 	try {
-		const st = fs.statSync(SANDBOX_HOME_DIR);
+		const st = fs.statSync(SANDBOX_HOME);
 		return { uid: st.uid, gid: st.gid };
 	} catch {
 		return { uid: 1001, gid: 1001 };
 	}
 }
-const { uid: CONTAINER_UID, gid: CONTAINER_GID } = readSandboxIds();
+const { uid: SANDBOX_UID, gid: SANDBOX_GID } = readSandboxIds();
 
-// Sandbox availability: requires both Docker installed AND SANDBOX_HOME_DIR
+// Sandbox availability: requires both Docker installed AND SANDBOX_HOME
 // configured. Either missing piece disables sandbox mode gracefully.
 // The flag is exported as DOCKER_AVAILABLE for backward compat with callers,
 // but it now reflects the combined precondition.
@@ -45,9 +45,9 @@ try {
 	DOCKER_AVAILABLE = false;
 	log.warn('Docker not detected — sandbox mode disabled');
 }
-if (DOCKER_AVAILABLE && !SANDBOX_HOME_DIR) {
+if (DOCKER_AVAILABLE && !SANDBOX_HOME) {
 	DOCKER_AVAILABLE = false;
-	log.warn('SANDBOX_HOME_DIR unset — sandbox mode disabled');
+	log.warn('SANDBOX_HOME unset — sandbox mode disabled');
 }
 
 function docker(...args) {
@@ -83,14 +83,14 @@ function ensureImage() {
 
 function chownContainerUser(target) {
 	try {
-		execFileSync('chown', [`${CONTAINER_UID}:${CONTAINER_GID}`, target], { timeout: 5000 });
+		execFileSync('chown', [`${SANDBOX_UID}:${SANDBOX_GID}`, target], { timeout: 5000 });
 	} catch (err) {
 		log.warn(`chown ${target} failed: ${err.message}`);
 	}
 }
 
 function ensureStorage() {
-	const home = SANDBOX_HOME_DIR;
+	const home = SANDBOX_HOME;
 	const isNew = !fs.existsSync(home);
 	fs.mkdirSync(home, { recursive: true });
 	if (isNew) chownContainerUser(home);
@@ -145,7 +145,7 @@ function ensureContainer() {
 		'--cpus', String(CONTAINER_CPUS),
 		'--restart', 'unless-stopped',
 		'-e', 'TZ=Europe/Paris',
-		'-v', `${SANDBOX_HOME_DIR}:${CONTAINER_HOME}`,
+		'-v', `${SANDBOX_HOME}:${CONTAINER_HOME}`,
 		DOCKER_IMAGE,
 	);
 	docker('start', CONTAINER_NAME);
@@ -240,7 +240,7 @@ async function executeInContainer(prompt, {
 		throw Object.assign(new Error(errMsg), { code: result.code });
 	}
 
-	return parseClaudeOutput(result.stdout, outputFormat, label, SANDBOX_HOME_DIR, sessionId);
+	return parseClaudeOutput(result.stdout, outputFormat, label, SANDBOX_HOME, sessionId);
 }
 
 /**
@@ -250,16 +250,16 @@ async function executeInContainer(prompt, {
  */
 function writeCredentials(credentialsJson) {
 	ensureStorage();
-	const credPath = path.join(SANDBOX_HOME_DIR, '.claude', '.credentials.json');
+	const credPath = path.join(SANDBOX_HOME, '.claude', '.credentials.json');
 	const tmp = credPath + '.tmp';
 	fs.writeFileSync(tmp, credentialsJson, { mode: 0o600 });
 	fs.renameSync(tmp, credPath);
-	execFileSync('chown', [`${CONTAINER_UID}:${CONTAINER_GID}`, credPath], { timeout: 5000 });
+	execFileSync('chown', [`${SANDBOX_UID}:${SANDBOX_GID}`, credPath], { timeout: 5000 });
 	log.info('Wrote sandbox credentials');
 }
 
 function hasCredentials() {
-	const credPath = path.join(SANDBOX_HOME_DIR, '.claude', '.credentials.json');
+	const credPath = path.join(SANDBOX_HOME, '.claude', '.credentials.json');
 	return fs.existsSync(credPath);
 }
 
