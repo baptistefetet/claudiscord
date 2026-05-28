@@ -39,17 +39,53 @@ container (claude)
         │  HTTP simple (sur le bridge / loopback → pas de TLS à gérer)
         ▼
 proxy sur l'hôte (dans claudiscord)
-  - détient le VRAI secret Anthropic
+  - lit le token côté hôte (PAR DÉFAUT : le login d'abonnement de l'instance
+    claude hôte, /root/.claude/.credentials.json — voir section dédiée)
   - jette la clé bidon, injecte le vrai header :
-      * x-api-key: <clé>                         (si clé API console)
-      * ou Authorization: Bearer <oauth>
-        + anthropic-beta: oauth-…                (si OAuth .credentials.json)
+      * Authorization: Bearer <accessToken> + anthropic-beta: oauth-…  ← DÉFAUT (abonnement)
+      * ou x-api-key: <clé API console>                                ← alternative (métré)
   - forwarde vers https://api.anthropic.com via client HTTPS standard (fetch/https)
   - relaie le flux SSE en streaming
         │  HTTPS normal (TLS client classique)
         ▼
 api.anthropic.com
 ```
+
+## Approche recommandée : réutiliser le token de l'instance hôte (abonnement)
+
+Le projet utilise `claude -p` (et pas le SDK) **précisément pour bénéficier de
+l'abonnement Anthropic** plutôt que d'une facturation à l'usage. Le proxy doit donc
+**préserver l'abonnement**, pas le sacrifier pour une clé API.
+
+Solution : le proxy réutilise le credential du **login déjà présent sur l'hôte**
+(l'instance claude du mode admin) : `/root/.claude/.credentials.json`. Schéma observé
+(mai 2026) :
+
+```
+claudeAiOauth: { accessToken, refreshToken, expiresAt, scopes,
+                 subscriptionType, rateLimitTier }
+```
+
+- Le proxy lit `claudeAiOauth.accessToken` et l'injecte en amont → **facturation
+  abonnement** (identique à aujourd'hui : même compte, même quota).
+- **Refresh délégué** : l'instance claude hôte rafraîchit déjà ce fichier à chaque usage
+  du mode admin. Si admin sert régulièrement, le proxy reste **lecteur seul** et profite
+  du token frais — quasi aucun code de refresh à écrire.
+- **Fallback refresh** (périodes d'inactivité admin) : si `expiresAt` est dépassé, le
+  proxy renouvelle via `refreshToken` (endpoint OAuth + `client_id` à capturer sur une
+  vraie session claude) et réécrit le fichier.
+
+Gotchas :
+- **Course au refresh / contention** : les `refreshToken` sont rotatifs / à usage unique.
+  Si le proxy ET la claude hôte renouvellent en même temps → risque de déconnexion.
+  Mitig. : proxy **lecteur seul** par défaut ; refresh côté proxy seulement en fallback,
+  sous lock + écriture atomique au même format JSON.
+- **Quota partagé** : les appels du sandbox tirent sur tes limites d'abonnement perso.
+- **Fragilité** : réimplé d'auth hors client → Anthropic peut changer le schéma OAuth ;
+  en s'appuyant sur le refresh fait par claude-hôte, on en réimplémente le minimum.
+
+> Variante clé API console : plus robuste (pas de refresh) mais **métré** → perd
+> l'avantage abonnement. À n'envisager que si l'abonnement pose problème.
 
 ## Implémentation (esquisse)
 
@@ -67,9 +103,10 @@ api.anthropic.com
 
 - **Streaming SSE** : bien relayer le flux (piper la réponse upstream vers le client), ne
   pas bufferiser.
-- **OAuth = refresh** : `.credentials.json` (login abonnement) **expire** et doit être
-  rafraîchi. Le proxy devrait gérer le refresh, OU — plus simple — héberger une **clé API
-  console** (stable, pas de refresh) côté hôte.
+- **OAuth = refresh** : voir « Approche recommandée » ci-dessus — défaut = réutiliser le
+  token d'abonnement de l'instance hôte (`/root/.claude/.credentials.json`), refresh
+  délégué à la claude admin + fallback proxy. La clé API console reste une alternative
+  (robuste mais métré).
 - **HTTP vs HTTPS sur le leg entrant** : HTTP simple suffit sur le bridge privé. Si claude
   exigeait HTTPS, générer un cert auto-signé pour *notre* endpoint (NODE_EXTRA_CA_CERTS dans
   le container) — ça reste notre cert pour notre endpoint, **pas** du MITM d'Anthropic.
