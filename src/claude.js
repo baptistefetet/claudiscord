@@ -187,14 +187,16 @@ function extractLastTextFromSessionLog(sessionId, claudeHome) {
  * English even when the final answer is in the user's language, which
  * looks like leaked thinking on the Discord side.
  *
- * Heuristic: only text blocks emitted *after* the last `tool_result` are
- * part of the final answer. Anything before is interstitial narration and
- * is dropped. If no tool_result exists in the stream (no tools were used),
- * we collect everything — the only assistant text IS the answer.
+ * Heuristic: only text blocks emitted *after* the last tool boundary (the
+ * last `tool_result` or `tool_use`) are part of the final answer. Anything
+ * before is interstitial narration and is dropped. If no tool activity
+ * exists in the stream (no tools were used), we collect everything — the
+ * only assistant text IS the answer.
  *
  * Edge case: if the last assistant turn ends on `tool_use` (no closing
- * text), there is no text after the last tool_result and this returns ''.
- * The caller falls back to `resultEvent.result` in that case.
+ * text — e.g. a run cut off mid tool-loop on timeout), there is no text
+ * after the last tool boundary and this returns ''. The caller falls back
+ * to `resultEvent.result`, or the session-log / timeout-recovery path.
  */
 function collectStreamJsonText(stdout) {
 	const events = [];
@@ -204,14 +206,20 @@ function collectStreamJsonText(stdout) {
 		try { events.push(JSON.parse(trimmed)); } catch {}
 	}
 
+	// Walk back to the last tool boundary — the last event carrying a
+	// tool_result (user) OR a tool_use (assistant). The final answer is the
+	// assistant text after it. Considering tool_use too (not only tool_result)
+	// matters on a timeout cut off mid tool-loop: the last assistant turn may be
+	// an interstitial "let me run X" + tool_use whose result never arrived —
+	// that narration must not be mistaken for the final answer.
 	let startIdx = 0;
 	for (let i = events.length - 1; i >= 0; i--) {
-		const e = events[i];
-		if (e.type !== 'user') continue;
-		const content = e.message?.content;
-		const isToolResult = Array.isArray(content)
-			&& content.some(b => b && b.type === 'tool_result');
-		if (isToolResult) { startIdx = i + 1; break; }
+		const content = events[i].message?.content;
+		if (!Array.isArray(content)) continue;
+		const hasToolActivity = content.some(
+			b => b && (b.type === 'tool_result' || b.type === 'tool_use'),
+		);
+		if (hasToolActivity) { startIdx = i + 1; break; }
 	}
 
 	const texts = [];
