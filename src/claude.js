@@ -101,7 +101,12 @@ function spawnWithTimeout(cmd, args, options = {}) {
 		child.on('close', (code) => {
 			clearTimeout(timer);
 			if (killed) {
-				reject(Object.assign(new Error('timeout'), { code: 124 }));
+				// Attach whatever was captured before the kill. The assistant's
+				// final answer is often already in stdout (and fully written to
+				// the session JSONL on disk) by the time a background task keeps
+				// the process alive past end_turn. Callers use it to recover the
+				// answer instead of discarding it. See recoverTextAfterTimeout.
+				reject(Object.assign(new Error('timeout'), { code: 124, stdout, stderr }));
 				return;
 			}
 			if (stderr) log.warn(`${label} stderr:`, stderr.slice(0, 500));
@@ -223,6 +228,28 @@ function collectStreamJsonText(stdout) {
 }
 
 /**
+ * Best-effort recovery of the final answer after a timeout.
+ *
+ * On timeout the process is SIGTERM'd before emitting a `result` event, so
+ * `parseClaudeOutput` can't see it. But the answer Claude already produced is
+ * usually still reachable: in the partial stream-json stdout (text after the
+ * last tool_result) and/or in the session JSONL flushed to disk. We prefer the
+ * partial stdout (cleaner — drops interstitial narration) and fall back to the
+ * on-disk session log. Returns '' when nothing usable is found (genuinely stuck
+ * before producing any answer), in which case the caller surfaces the timeout.
+ */
+function recoverTextAfterTimeout(partialStdout, outputFormat, claudeHome, sessionId) {
+	let text = '';
+	if (outputFormat === 'stream-json' && partialStdout) {
+		try { text = collectStreamJsonText(partialStdout); } catch (_) {}
+	}
+	if (!text && sessionId) {
+		text = extractLastTextFromSessionLog(sessionId, claudeHome);
+	}
+	return text ? text.trim() : '';
+}
+
+/**
  * Parse Claude CLI output (JSON, stream-json, or text).
  * claudeHome + sessionId are used by the JSONL fallback when the CLI's
  * `result` field is empty (last assistant turn ended on tool_use).
@@ -290,11 +317,23 @@ async function executeClaudeCommand(prompt, options = {}) {
 		: 'no session';
 	log.info(`Spawning claude: ${attach}, prompt length: ${prompt.length}, format: ${outputFormat}`);
 
-	const result = await spawnWithTimeout(
-		CLAUDE_BIN,
-		buildClaudeArgs(prompt, spawnOpts),
-		{ timeoutMs, cwd: ADMIN_USER_HOME, env: ADMIN_ENV, label: 'Claude' },
-	);
+	let result;
+	try {
+		result = await spawnWithTimeout(
+			CLAUDE_BIN,
+			buildClaudeArgs(prompt, spawnOpts),
+			{ timeoutMs, cwd: ADMIN_USER_HOME, env: ADMIN_ENV, label: 'Claude' },
+		);
+	} catch (err) {
+		if (err.code === 124) {
+			const recovered = recoverTextAfterTimeout(err.stdout, outputFormat, ADMIN_USER_HOME, sessionId);
+			if (recovered) {
+				log.info('Claude: recovered answer after timeout (background task held the process open)');
+				return { result: recovered, timedOut: true };
+			}
+		}
+		throw err;
+	}
 
 	if (result.code !== 0) {
 		const errMsg = result.stdout.slice(-500) || `exit code ${result.code}`;
@@ -304,4 +343,4 @@ async function executeClaudeCommand(prompt, options = {}) {
 	return parseClaudeOutput(result.stdout, outputFormat, 'Claude', ADMIN_USER_HOME, sessionId);
 }
 
-module.exports = { ADMIN_ENV, buildClaudeArgs, spawnWithTimeout, parseClaudeOutput, executeClaudeCommand };
+module.exports = { ADMIN_ENV, buildClaudeArgs, spawnWithTimeout, parseClaudeOutput, recoverTextAfterTimeout, executeClaudeCommand };

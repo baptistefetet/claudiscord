@@ -16,7 +16,7 @@ const {
 	DISALLOWED_TOOLS,
 } = require('./config');
 const { getDefaultClaudeMd } = require('./prompts');
-const { buildClaudeArgs, spawnWithTimeout, parseClaudeOutput } = require('./claude');
+const { buildClaudeArgs, spawnWithTimeout, parseClaudeOutput, recoverTextAfterTimeout } = require('./claude');
 const log = require('./logger');
 
 const DOCKERFILE_DIR = path.resolve(__dirname, '..');
@@ -218,10 +218,25 @@ async function executeInContainer(prompt, {
 		: 'no session';
 	log.info(`${label}: ${attach}, prompt length: ${prompt.length}`);
 
-	const result = await executeClaudeInContainer(prompt, claudeOptions, {
-		timeoutMs,
-		label,
-	});
+	let result;
+	try {
+		result = await executeClaudeInContainer(prompt, claudeOptions, {
+			timeoutMs,
+			label,
+		});
+	} catch (err) {
+		// On timeout the container procs were already pkilled by
+		// executeClaudeInContainer; try to recover the answer Claude produced
+		// before a background task held the process open past end_turn.
+		if (err.code === 124) {
+			const recovered = recoverTextAfterTimeout(err.stdout, outputFormat, SANDBOX_HOST_HOME, sessionId);
+			if (recovered) {
+				log.info(`${label}: recovered answer after timeout (background task held the process open)`);
+				return { result: recovered, timedOut: true };
+			}
+		}
+		throw err;
+	}
 
 	if (result.code !== 0) {
 		// Detect real CLI auth errors without false-positiving on conversation

@@ -125,7 +125,13 @@ client.on(Events.MessageCreate, async message => {
 		stopTyping = null;
 
 		const responseText = result.result || 'Empty response from Claude Code.';
-		const chunks = splitMessage(responseText);
+		// result.timedOut: Claude hit the timeout (e.g. a background task held the
+		// process open past end_turn) but had already produced an answer we
+		// recovered. Flag it so the user knows the run was cut short.
+		const prefix = result.timedOut
+			? '⏱️ Timeout reached, but here is the answer Claude already produced:\n\n'
+			: '';
+		const chunks = splitMessage(prefix + responseText);
 		for (const chunk of chunks) {
 			await channel.send(chunk);
 		}
