@@ -274,6 +274,21 @@ function writeCredentials(credentialsJson) {
 	log.info('Wrote sandbox credentials');
 }
 
+/**
+ * Write an uploaded file into the sandbox volume's .claudiscord/files dir, then
+ * chown it to the container's `claude` user so the non-root process can read it
+ * through the bind-mount. Mirrors writeCredentials.
+ */
+function writeSandboxUpload(filename, buffer) {
+	const dir = path.join(SANDBOX_HOST_HOME, STATE_DIR, 'files');
+	const isNew = !fs.existsSync(dir);
+	fs.mkdirSync(dir, { recursive: true });
+	if (isNew) chownContainerUser(dir);
+	const dest = path.join(dir, filename);
+	fs.writeFileSync(dest, buffer);
+	chownContainerUser(dest);
+}
+
 function hasCredentials() {
 	const credPath = path.join(SANDBOX_HOST_HOME, '.claude', '.credentials.json');
 	return fs.existsSync(credPath);
@@ -285,5 +300,6 @@ module.exports = {
 	ensureContainer,
 	executeInContainer,
 	writeCredentials,
+	writeSandboxUpload,
 	hasCredentials,
 };

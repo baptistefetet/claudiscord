@@ -1,4 +1,4 @@
-const { ADMIN_JOBS_FILE, SANDBOX_JOBS_FILE, VALID_MODELS, CHANNEL_DEFAULT_MODEL } = require('./config');
+const { ADMIN_JOBS_FILE, SANDBOX_JOBS_FILE, ADMIN_FILES_DIR, SANDBOX_FILES_DIR, VALID_MODELS, CHANNEL_DEFAULT_MODEL } = require('./config');
 
 const SYSTEM_PROMPT = `Your name is {{botName}}, and you are talking to {{userName}} on Discord.
 Your messages are relayed by a systemd service named "claudiscord".
@@ -66,6 +66,17 @@ Sandbox mode (Docker container):
   \`/tmp\`, etc.) is ephemeral and wiped on container rebuild.
 - Available tools: Bash, file editing, web access. No GUI, no display.
 {{/sandbox}}
+
+--- Uploaded files ---
+The user can send files/photos to this channel. An upload does NOT trigger a prompt: the
+bot just saves the files and shows their names. They are stored in:
+- Directory: {{filesPath}}
+When the user mentions a file name, it MAY be a file they just uploaded, so check this
+directory. But that is not guaranteed — they may instead be referring to some other file in
+your working environment. Use the context to decide where to look.
+The same name may be re-uploaded with different content between two messages: if the file
+comes from this uploads directory, RE-READ it from disk on every mention — never rely on
+content you saw earlier.
 
 --- Scheduling ---
 MANDATORY RULE:
@@ -209,6 +220,7 @@ function getSystemPrompt(options = {}) {
 			channelTopic: channelTopic || '',
 			channelModel: resolvedModel,
 			jobsPath: isSandbox ? SANDBOX_JOBS_FILE : ADMIN_JOBS_FILE,
+			filesPath: isSandbox ? SANDBOX_FILES_DIR : ADMIN_FILES_DIR,
 		},
 		{
 			job: isJob,

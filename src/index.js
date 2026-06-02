@@ -12,6 +12,7 @@ const { createClient, login, splitMessage, startTypingIndicator, resolveChannelN
 const { handleCommand } = require('./commands');
 const { reconcileRemotes } = require('./remote');
 const { transcribeVoiceMessage } = require('./stt');
+const { saveUploads } = require('./uploads');
 const scheduler = require('./scheduler');
 const { Events, ChannelType, MessageFlags } = require('discord.js');
 
@@ -38,7 +39,7 @@ client.on(Events.MessageCreate, async message => {
 
 	const content = message.content.trim();
 	const isVoice = message.flags?.has(MessageFlags.IsVoiceMessage) || false;
-	if (!content && !isVoice) return;
+	if (!content && !isVoice && message.attachments.size === 0) return;
 
 	// Strict authorization: silently ignore every other user.
 	if (message.author.id !== config.AUTHORIZED_USER_ID) return;
@@ -74,6 +75,24 @@ client.on(Events.MessageCreate, async message => {
 			await message.channel.send(`Transcription failed: ${err.message?.slice(0, 200) || 'unknown'}`).catch(() => {});
 			return;
 		}
+	}
+
+	// File/photo upload: no text, not a voice message, but attachments present.
+	// Like voice, text wins — a caption turns the message into a normal prompt and
+	// the attachments are ignored. An upload never invokes Claude: we just persist
+	// the files and echo their names so the user can reference them in a later
+	// message. Placed before handleCommand so uploads work even in /remote mode
+	// (they don't spawn Claude; the files become available to the mobile session too).
+	if (!prompt && !isVoice && message.attachments.size > 0) {
+		try {
+			const saved = await saveUploads([...message.attachments.values()], sessions.getMode(channel.id));
+			const list = saved.map(n => `\`${n}\``).join(', ');
+			await channel.send(`📎 Received ${saved.length} file(s): ${list}`).catch(() => {});
+		} catch (err) {
+			log.error('Upload failed:', err.message);
+			await channel.send(`Upload failed: ${err.message?.slice(0, 200) || 'unknown'}`).catch(() => {});
+		}
+		return;
 	}
 
 	// Commands first (they manage their own responses).

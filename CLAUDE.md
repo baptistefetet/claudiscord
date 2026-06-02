@@ -51,6 +51,7 @@ src/
   commands.js         # /help /clear /status /admin /sandbox /opus /sonnet /remote /login /upgrade /restart !shell
   remote.js           # /remote helpers: startRemote, stopRemote, reconcileRemotes
   stt.js              # Groq Whisper transcription for Discord voice messages
+  uploads.js          # Save Discord file/photo attachments to .claudiscord/files
 scripts/
   rebuild-sandbox.sh  # Rebuild Docker sandbox image
 .env                  # AUTHORIZED_USER_ID, DISCORD_TOKEN, CLAUDE_BIN, SANDBOX_HOME, GROQ_API_KEY
@@ -80,6 +81,32 @@ message UI triggers transcription.
 - The transcription is echoed back to the channel as `🎙️ <text>` before
   Claude executes, so the user sees what Whisper understood.
 - API errors are surfaced to the channel and logged; the bot stays up.
+
+## File uploads
+
+The user can drop files/photos into a channel (with no text). An upload does NOT
+spawn Claude: the bot saves the attachments and echoes their names. The user then
+references them by name in a later message.
+
+- Module: `src/uploads.js` (single `saveUploads(attachments, mode)` function; download
+  pattern borrowed from `src/stt.js`).
+- Target dir, per channel mode, sibling of `jobs.json`:
+  - admin → `ADMIN_USER_HOME/.claudiscord/files/`
+  - sandbox → `SANDBOX_HOST_HOME/.claudiscord/files/`, bind-mounted as
+    `/home/claude/.claudiscord/files/`. Files are `chown`'d to the container's
+    `claude` user (`container.js::writeSandboxUpload`) so the non-root process can read
+    them.
+- Naming: original Discord `attachment.name` (basename), de-duplicated within a single
+  batch (`image.png`, `image-2.png`). Across messages the same name is overwritten — no
+  automatic cleanup.
+- Text wins: a message carrying both a caption and attachments is treated as a normal
+  prompt (attachments ignored), mirroring voice messages. The detection in
+  `src/index.js` runs before `handleCommand`, so uploads also work in `/remote` mode
+  (they don't spawn `claude -p`).
+- The system prompt (`src/prompts.js`, "Uploaded files" section, `{{filesPath}}`) tells
+  Claude the files dir and that a mentioned name *may* be an upload (re-read from disk
+  each time, content can change) but could just as well be any other file in the
+  environment.
 
 ## Authorization
 
@@ -146,9 +173,11 @@ Both modes store runtime state under `<home>/.claudiscord/`:
 ADMIN_USER_HOME/.claudiscord/     # /root/.claudiscord on this host
   jobs.json                       # admin scheduled jobs
   sessions.json                   # per-channel state (shared across modes)
+  files/                          # uploaded files (admin channels)
 
 SANDBOX_HOST_HOME/.claudiscord/   # bind-mounted as /home/claude/.claudiscord
   jobs.json                       # sandbox scheduled jobs
+  files/                          # uploaded files (sandbox channels)
 ```
 
 The sandbox home also contains Claude config:
