@@ -1,8 +1,8 @@
 /**
  * Global sequential execution queue.
  *
- * Every Claude prompt (admin/sandbox, DM/channel, interactive/scheduled)
- * goes through runQueued() so that at most one Claude process runs at a time.
+ * Every agent prompt (admin/sandbox, DM/channel, interactive/scheduled)
+ * goes through runQueued() so that at most one agent process runs at a time.
  * The sequentiality simplifies many invariants (no concurrent writes on jobs
  * files, no concurrent container exec, etc.).
  *

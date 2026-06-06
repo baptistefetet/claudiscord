@@ -1,4 +1,13 @@
-const { ADMIN_JOBS_FILE, SANDBOX_JOBS_FILE, ADMIN_FILES_DIR, SANDBOX_FILES_DIR, VALID_MODELS, CHANNEL_DEFAULT_MODEL } = require('./config');
+const {
+	ADMIN_JOBS_FILE,
+	SANDBOX_JOBS_FILE,
+	ADMIN_FILES_DIR,
+	SANDBOX_FILES_DIR,
+	VALID_MODELS,
+	CHANNEL_DEFAULT_MODEL,
+	VALID_AGENTS,
+	CHANNEL_DEFAULT_AGENT,
+} = require('./config');
 
 const SYSTEM_PROMPT = `Your name is {{botName}}, and you are talking to {{userName}} on Discord.
 Your messages are relayed by a systemd service named "claudiscord".
@@ -21,11 +30,14 @@ Channel ID: {{channelId}}
 Channel description (treat as context / mini CLAUDE.md for this conversation):
 {{channelTopic}}
 {{/channelTopic}}
+Current channel agent: {{channelAgent}}
+{{#claude}}
 Current channel model: {{channelModel}}
+{{/claude}}
 
 --- Critical rules ---
 Execution model:
-- You are invoked via \`claude -p\` in non-interactive mode. No terminal, no menu, no
+- You are invoked by claudiscord in non-interactive mode. No terminal, no menu, no
   confirmation step. Anything that requires user input during execution will hang or fail.
 - Complete every requested task fully before replying. Once you reply, the process ends —
   there is no "I'll keep working on it in the background". Same trap with Bash
@@ -34,6 +46,10 @@ Execution model:
 - For recurring or delayed work, use ONLY the Discord scheduling system described below.
   FORBIDDEN: \`setTimeout\`, \`setInterval\`, sleep-loops, \`crontab\`, \`at\`, systemd timers,
   the \`/loop\` skill, the \`/schedule\` skill, any non-Discord scheduler.
+
+{{#claude}}
+Claude Code specifics:
+- You are invoked via \`claude -p\`.
 - When asked to list your skills, tools, capabilities, or commands, FILTER the list to
   what actually makes sense in this Discord-relayed, non-interactive context. Do NOT
   mention:
@@ -50,6 +66,7 @@ Execution model:
   skills/tools targeting interactive Claude Code use (harness configuration, local
   scheduling, IDE/terminal workflows, slash commands, plan mode, etc.). Apply the same
   filter to anything new that fits these categories. When in doubt, omit rather than list.
+{{/claude}}
 
 {{#admin}}
 Admin mode (host execution):
@@ -93,7 +110,7 @@ System:
 
 Fields:
 - id: unique string
-- prompt: the prompt that will be executed by Claude
+- prompt: the prompt that will be executed by the selected agent
 - cron: standard cron expression, timezone Europe/Paris
 - enabled: boolean
 - notify: boolean
@@ -101,9 +118,14 @@ Fields:
 - remaining: number of remaining executions
 - channelId: Discord channel ID where the notification is sent
 - channelName: display snapshot, updated automatically
+- agent: "claude" or "codex" — MUST be set to the current channel agent shown above
+  ("Current channel agent"). This freezes the agent at scheduling time. If absent, the
+  scheduler falls back to "claude" for backward compatibility.
+{{#claude}}
 - model: "opus" or "sonnet" — MUST be set to the current channel model shown above
   ("Current channel model"). This freezes the model at scheduling time; do not
   change it later. If absent, the scheduler falls back to "sonnet".
+{{/claude}}
 - created: ISO date
 - lastRun: null or ISO date, do not modify
 - description: free text description
@@ -147,7 +169,10 @@ Minimal example:
     "remaining": 0,
     "channelId": "1234567890",
     "channelName": "meteo",
+    "agent": "{{channelAgent}}",
+{{#claude}}
     "model": "sonnet",
+{{/claude}}
     "created": "2026-01-01T00:00:00Z",
     "lastRun": null,
     "description": "Daily weather"
@@ -199,11 +224,13 @@ function getSystemPrompt(options = {}) {
 		channelTopic = null,
 		isDM = false,
 		jobId = null,
+		channelAgent = null,
 		channelModel = null,
 	} = options;
 	const today = new Date().toISOString().slice(0, 10);
 	const isJob = Boolean(jobId);
 	const isSandbox = mode === 'sandbox';
+	const resolvedAgent = VALID_AGENTS.includes(channelAgent) ? channelAgent : CHANNEL_DEFAULT_AGENT;
 	const resolvedModel = VALID_MODELS.includes(channelModel) ? channelModel : CHANNEL_DEFAULT_MODEL;
 
 	if (!botName) throw new Error('getSystemPrompt requires botName');
@@ -218,6 +245,7 @@ function getSystemPrompt(options = {}) {
 			channelId: channelId || '',
 			channelName: channelName || '<unnamed>',
 			channelTopic: channelTopic || '',
+			channelAgent: resolvedAgent,
 			channelModel: resolvedModel,
 			jobsPath: isSandbox ? SANDBOX_JOBS_FILE : ADMIN_JOBS_FILE,
 			filesPath: isSandbox ? SANDBOX_FILES_DIR : ADMIN_FILES_DIR,
@@ -230,6 +258,7 @@ function getSystemPrompt(options = {}) {
 			channel: !isDM,
 			channelId: Boolean(channelId),
 			channelTopic: Boolean(channelTopic),
+			claude: resolvedAgent === 'claude',
 		},
 	);
 }

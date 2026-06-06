@@ -6,7 +6,7 @@ const { getSystemPrompt } = require('./prompts');
 const log = require('./logger');
 const sessions = require('./sessions');
 const { ensureImage, DOCKER_AVAILABLE } = require('./container');
-const { executeForMode } = require('./executor');
+const { executePrompt } = require('./executor');
 const { isBusy } = require('./queue');
 const { createClient, login, splitMessage, startTypingIndicator, resolveChannelName } = require('./discord');
 const { handleCommand } = require('./commands');
@@ -103,14 +103,15 @@ client.on(Events.MessageCreate, async message => {
 	sessions.setLastName(channelId, channelName);
 
 	const mode = sessions.getMode(channelId);
+	const agent = sessions.getAgent(channelId);
 	const model = sessions.getModel(channelId);
 	const botName = client.user.displayName || client.user.username;
 	const userName = message.author.displayName || message.author.username;
 	const channelTopic = !isDM ? (channel.topic || null) : null;
 
-	// sessionId & sessionStarted are resolved inside executor.executeForMode,
-	// **inside the global queue**, to avoid a race where two consecutive
-	// messages on a fresh channel both capture sessionStarted=false.
+	// sessionId is resolved inside executor.executePrompt, inside the global
+	// queue, so back-to-back messages cannot race before the first generated
+	// UUID has been persisted.
 	const promptOptions = {
 		channelId,
 		systemPrompt: getSystemPrompt({
@@ -121,6 +122,7 @@ client.on(Events.MessageCreate, async message => {
 			channelName,
 			channelTopic,
 			isDM,
+			channelAgent: agent,
 			channelModel: model,
 		}),
 		allowedTools: ALLOWED_TOOLS,
@@ -138,12 +140,13 @@ client.on(Events.MessageCreate, async message => {
 	let stopTyping = null;
 	try {
 		stopTyping = startTypingIndicator(channel);
-		const result = await executeForMode(mode, prompt, promptOptions);
+		const result = await executePrompt(agent, mode, prompt, promptOptions);
 
 		stopTyping();
 		stopTyping = null;
 
-		const responseText = result.result || 'Empty response from Claude Code.';
+		const agentLabel = agent === 'codex' ? 'Codex' : 'Claude Code';
+		const responseText = result.result || `Empty response from ${agentLabel}.`;
 		const chunks = splitMessage(responseText);
 		for (const chunk of chunks) {
 			await channel.send(chunk);
@@ -155,15 +158,22 @@ client.on(Events.MessageCreate, async message => {
 
 		let errMsg;
 		if (err.code === 124) {
-			errMsg = 'Claude Code took too long, timeout!';
+			errMsg = `${agent === 'codex' ? 'Codex' : 'Claude Code'} took too long, timeout!`;
 		} else if (err.code === 'SANDBOX_REMOTE_ACTIVE') {
 			errMsg = '\u{1F6F0}️ A sandbox `/remote` session is active on another channel — sandbox prompts are paused until it stops.';
+		} else if (err.code === 'CODEX_NOT_AVAILABLE') {
+			errMsg = 'Codex is not installed or no longer available on this host.';
+		} else if (err.code === 'CODEX_ADMIN_ONLY') {
+			errMsg = 'Codex is only available in admin mode. Use `/admin` first.';
+		} else if (err.code === 'CHANNEL_CONTEXT_CHANGED') {
+			errMsg = 'Channel mode or agent changed while this message was waiting. Send it again.';
 		} else if (err.message === 'NOT_AUTHENTICATED') {
 			errMsg = 'You are not authenticated in the sandbox. Send `/login` for instructions.';
 		} else if (err.message === 'Docker is not installed on this host') {
 			errMsg = 'Docker is not installed — switch this channel to admin mode with `/admin`.';
 		} else {
-			errMsg = `Claude Code error: ${err.message?.slice(0, 300) || 'unknown'}\n(if this keeps happening, send \`/clear\` to reset the session)`;
+			const agentLabel = agent === 'codex' ? 'Codex' : 'Claude Code';
+			errMsg = `${agentLabel} error: ${err.message?.slice(0, 300) || 'unknown'}\n(if this keeps happening, send \`/clear\` to reset the session)`;
 		}
 		await channel.send(errMsg).catch(e => log.error('Failed to send error message:', e));
 	} finally {

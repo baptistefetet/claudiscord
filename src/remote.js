@@ -80,17 +80,14 @@ function spawnOnce(cmd, args, { timeoutMs, label, cwd, env, earlyMatch }) {
  * `claude --bg [--resume <uuid>] --remote-control <channelName>` (host or
  * container) and returns the 8-hex agent ID parsed from stdout.
  *
- * When sessionId+sessionStarted are passed, `--resume` makes `--bg` copy the
- * existing Discord conversation into its newly-allocated bg JSONL — so the
- * mobile user starts with the Discord history. `--bg` warns "--bg manages
- * the session id; ignoring --session-id" and allocates its own UUID, which
- * is why we don't bother trying to thread the UUID through; the caller wipes
- * the channel's Discord sessionId so the next post-stop Discord message
- * starts fresh.
+ * When sessionId is passed, `--resume` makes `--bg` copy the existing Discord
+ * conversation into its newly-allocated bg JSONL, so the mobile user starts
+ * with the Discord history. The caller then wipes the channel's Discord
+ * sessionId so the next post-stop Discord message starts fresh.
  */
-async function startRemote({ mode, sessionId, sessionStarted, channelName }) {
+async function startRemote({ mode, sessionId, channelName }) {
 	const claudeArgs = ['--bg'];
-	if (sessionId && sessionStarted) claudeArgs.push('--resume', sessionId);
+	if (sessionId) claudeArgs.push('--resume', sessionId);
 	claudeArgs.push('--remote-control', channelName);
 
 	let result;

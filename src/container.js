@@ -10,13 +10,18 @@ const {
 	DOCKER_IMAGE,
 	CONTAINER_MEMORY,
 	CONTAINER_CPUS,
-	CLAUDE_TIMEOUT_MS,
+	PROMPT_TIMEOUT_MS,
 	DOCKER_CMD_TIMEOUT,
 	ALLOWED_TOOLS,
 	DISALLOWED_TOOLS,
 } = require('./config');
 const { getDefaultClaudeMd } = require('./prompts');
-const { buildClaudeArgs, spawnWithTimeout, parseClaudeOutput } = require('./claude');
+const {
+	buildClaudeArgs,
+	spawnWithTimeout,
+	extractClaudeSessionId,
+	parseClaudeOutput,
+} = require('./claude');
 const log = require('./logger');
 
 const DOCKERFILE_DIR = path.resolve(__dirname, '..');
@@ -170,7 +175,7 @@ function killClaudeInContainer(label) {
 }
 
 async function executeClaudeInContainer(prompt, claudeOptions, {
-		timeoutMs = CLAUDE_TIMEOUT_MS,
+		timeoutMs = PROMPT_TIMEOUT_MS,
 		label = `Container [${CONTAINER_NAME}]`,
 	} = {}) {
 	const claudeArgs = buildClaudeArgs(prompt, claudeOptions);
@@ -190,19 +195,17 @@ async function executeClaudeInContainer(prompt, claudeOptions, {
 
 async function executeInContainer(prompt, {
 		sessionId = null,
-		sessionStarted = false,
 		systemPrompt = null,
 		allowedTools = ALLOWED_TOOLS,
 		disallowedTools = DISALLOWED_TOOLS,
 		model = null,
 		effort = null,
 		outputFormat = 'text',
-		timeoutMs = CLAUDE_TIMEOUT_MS,
+		timeoutMs = PROMPT_TIMEOUT_MS,
 	} = {}) {
 	ensureContainer();
 	const claudeOptions = {
 		sessionId,
-		sessionStarted,
 		systemPrompt,
 		allowedTools,
 		disallowedTools,
@@ -213,15 +216,19 @@ async function executeInContainer(prompt, {
 	};
 
 	const label = `Container [${CONTAINER_NAME}]`;
-	const attach = sessionId
-		? (sessionStarted ? `resume ${sessionId}` : `new ${sessionId}`)
-		: 'no session';
+	const attach = sessionId ? `resume ${sessionId}` : 'new session';
 	log.info(`${label}: ${attach}, prompt length: ${prompt.length}`);
 
-	const result = await executeClaudeInContainer(prompt, claudeOptions, {
-		timeoutMs,
-		label,
-	});
+	let result;
+	try {
+		result = await executeClaudeInContainer(prompt, claudeOptions, {
+			timeoutMs,
+			label,
+		});
+	} catch (err) {
+		err.sessionId = extractClaudeSessionId(err.stdout);
+		throw err;
+	}
 
 	if (result.code !== 0) {
 		// Detect real CLI auth errors without false-positiving on conversation
@@ -238,7 +245,10 @@ async function executeInContainer(prompt, {
 			throw Object.assign(new Error('NOT_AUTHENTICATED'), { code: result.code });
 		}
 		const errMsg = result.stdout.slice(-500) || `exit code ${result.code}`;
-		throw Object.assign(new Error(errMsg), { code: result.code });
+		throw Object.assign(new Error(errMsg), {
+			code: result.code,
+			sessionId: extractClaudeSessionId(result.stdout),
+		});
 	}
 
 	return parseClaudeOutput(result.stdout, outputFormat, label);

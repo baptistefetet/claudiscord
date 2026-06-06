@@ -5,6 +5,7 @@ const execFileAsync = promisify(execFile);
 const { UPGRADE_TIMEOUT_MS, SHELL_TIMEOUT_MS, DISCORD_MAX_MSG_LENGTH, CONTAINER_NAME, ADMIN_USER_HOME } = require('./config');
 const sessions = require('./sessions');
 const { writeCredentials, hasCredentials, ensureContainer, DOCKER_AVAILABLE } = require('./container');
+const { CODEX_AVAILABLE } = require('./codex');
 const { runQueued, isBusy } = require('./queue');
 const { startRemote, stopRemote } = require('./remote');
 const { resolveChannelName } = require('./discord');
@@ -108,6 +109,7 @@ async function handleCommand(message) {
 	const channel = message.channel;
 	const channelId = channel.id;
 	const mode = sessions.getMode(channelId);
+	const agent = sessions.getAgent(channelId);
 	const model = sessions.getModel(channelId);
 
 	// Remote mode gating: while a channel is driven by the Claude mobile app,
@@ -167,15 +169,17 @@ async function handleCommand(message) {
 	}
 
 	if (content === '/help') {
-		let help = `**Available commands** (current mode: **${mode}**, model: **${model}**)
+		const modelLabel = agent === 'claude' ? `, model: **${model}**` : '';
+		let help = `**Available commands** (current mode: **${mode}**, agent: **${agent}**${modelLabel})
 
 \`/help\` — Show this help
 \`/clear\` — Reset session for this channel (new conversation)
-\`/status\` — Show current mode, model and authentication status
+\`/status\` — Show current mode, agent and authentication status
 \`/admin\` — Switch this channel to admin mode (host)
 \`/sandbox\` — Switch this channel to sandbox mode (container)
 \`/opus\` — Use Claude Opus for this channel
 \`/sonnet\` — Use Claude Sonnet for this channel
+\`/codex\` — Use Codex for this channel (admin mode only)
 \`/remote\` — Toggle this channel between Discord mode and remote mode (Claude mobile app)
 \`!<command>\` — Execute a shell command (host if admin, container if sandbox)`;
 		if (mode === 'sandbox') {
@@ -219,12 +223,18 @@ async function handleCommand(message) {
 			return true;
 		}
 		sessions.setMode(channelId, 'sandbox');
-		sessions.clearChannel(channelId);
-		await channel.send('Channel switched to **sandbox** mode. Session reset.');
+		if (agent === 'codex') sessions.setAgent(channelId, 'claude');
+		else sessions.clearChannel(channelId);
+		const agentNote = agent === 'codex' ? ' Agent switched back to **claude**.' : '';
+		await channel.send(`Channel switched to **sandbox** mode.${agentNote} Session reset.`);
 		return true;
 	}
 
 	if (content === '/remote') {
+		if (agent !== 'claude') {
+			await channel.send('`/remote` is only available with the **claude** agent. Use `/opus` or `/sonnet` first.');
+			return true;
+		}
 		// Hold the per-channel lock for the entire toggle. The gating above
 		// honours it, so the channel stays inert until the transition settles.
 		if (remoteOpInFlight.has(channelId)) {
@@ -264,8 +274,8 @@ async function handleCommand(message) {
 					// Hand the existing Discord session to `claude --bg --resume`
 					// so the mobile user starts with the channel's history. Read
 					// BEFORE setRemoteId, which wipes the sessionId.
-					const { sessionId, sessionStarted } = sessions.getSession(channelId);
-					const id = await startRemote({ mode, sessionId, sessionStarted, channelName });
+					const { sessionId } = sessions.getSession(channelId);
+					const id = await startRemote({ mode, sessionId, channelName });
 					sessions.setRemoteId(channelId, id);
 					return id;
 				});
@@ -284,18 +294,43 @@ async function handleCommand(message) {
 		const authed = DOCKER_AVAILABLE && hasCredentials() ? 'yes' : 'no';
 		const dockerNote = DOCKER_AVAILABLE ? '' : '\nSandbox unavailable on this host.';
 		const remoteLine = remoteId ? `\nRemote: \`${remoteId}\`` : '';
-		await channel.send(`Channel mode: **${mode}**\nModel: **${model}**\nAuthenticated (sandbox): **${authed}**${remoteLine}${dockerNote}`);
+		const modelLine = agent === 'claude' ? `\nModel: **${model}**` : '';
+		const codexLine = CODEX_AVAILABLE ? '' : '\nCodex unavailable on this host.';
+		await channel.send(`Channel mode: **${mode}**\nAgent: **${agent}**${modelLine}\nAuthenticated (sandbox): **${authed}**${remoteLine}${dockerNote}${codexLine}`);
 		return true;
 	}
 
 	if (content === '/opus' || content === '/sonnet') {
 		const target = content.slice(1);
-		if (model === target) {
+		if (agent === 'claude' && model === target) {
 			await channel.send(`This channel is already using **${target}**.`);
 			return true;
 		}
 		sessions.setModel(channelId, target);
-		await channel.send(`Channel switched to **${target}**.`);
+		if (agent !== 'claude') {
+			sessions.setAgent(channelId, 'claude');
+			await channel.send(`Channel switched to **claude ${target}**. Session reset.`);
+		} else {
+			await channel.send(`Channel switched to **${target}**.`);
+		}
+		return true;
+	}
+
+	if (content === '/codex') {
+		if (mode !== 'admin') {
+			await channel.send('`/codex` is only available in admin mode. Use `/admin` first.');
+			return true;
+		}
+		if (!CODEX_AVAILABLE) {
+			await channel.send('Codex is not installed or not available on this host.');
+			return true;
+		}
+		if (agent === 'codex') {
+			await channel.send('This channel is already using **codex**.');
+			return true;
+		}
+		sessions.setAgent(channelId, 'codex');
+		await channel.send('Channel switched to **codex**. Session reset.');
 		return true;
 	}
 

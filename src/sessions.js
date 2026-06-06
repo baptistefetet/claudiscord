@@ -1,6 +1,11 @@
 const fs = require('fs');
-const crypto = require('crypto');
-const { ADMIN_SESSIONS_FILE, VALID_MODELS, CHANNEL_DEFAULT_MODEL } = require('./config');
+const {
+	ADMIN_SESSIONS_FILE,
+	VALID_MODELS,
+	CHANNEL_DEFAULT_MODEL,
+	VALID_AGENTS,
+	CHANNEL_DEFAULT_AGENT,
+} = require('./config');
 const log = require('./logger');
 
 /**
@@ -9,9 +14,9 @@ const log = require('./logger');
  *   "channels": {
  *     "<channelId>": {
  *       "mode": "admin"|"sandbox",
+ *       "agent": "claude"|"codex",
  *       "model": "opus"|"sonnet",
  *       "sessionId": "<uuid>",
- *       "sessionStarted": boolean,
  *       "remoteId": null | "<agentId>",
  *       "lastName": "..."
  *     }
@@ -19,24 +24,22 @@ const log = require('./logger');
  * }
  *
  * A channelId is valid for both DM channels and guild text channels.
- * Default mode for an unknown channel is "admin", default model is "sonnet".
+ * Default mode for an unknown channel is "admin", default agent is "claude",
+ * and default model is "sonnet".
  *
- * sessionId is allocated up-front by ensureSession() so we always know it
- * before spawning claude (lets a message that times out remain resumable).
- * sessionStarted distinguishes the first invocation (`--session-id <uuid>`,
- * which creates the session) from subsequent invocations (`--resume <uuid>`,
- * required because reusing --session-id on an existing UUID errors out with
- * "Session ID X is already in use").
+ * The active agent allocates sessionId and emits it in its JSON output. The
+ * executor persists it after the first spawn, including on timeout when the
+ * ID was emitted before the process was killed.
  *
  * remoteId, when non-null, means the session is currently driven from the
  * Claude mobile app via `claude --bg --remote-control`. While set, the channel
  * only accepts `/remote`, `/status`, `/help`; every other message returns an
- * invalidation hint. Entering remote mode wipes `sessionId`/`sessionStarted`:
- * `claude --bg` manages its own session UUID and we don't try to reconcile
- * back, so the next Discord message after `/remote` stop starts fresh.
+ * invalidation hint. Entering remote mode wipes `sessionId`: `claude --bg`
+ * manages its own session UUID and we don't try to reconcile back, so the
+ * next Discord message after `/remote` stop starts fresh.
  */
 
-/** @type {Map<string, {mode?: string, model?: string, sessionId?: string, sessionStarted?: boolean, remoteId?: string|null, lastName?: string}>} */
+/** @type {Map<string, {mode?: string, agent?: string, model?: string, sessionId?: string, remoteId?: string|null, lastName?: string}>} */
 const channels = new Map();
 
 function load() {
@@ -46,12 +49,20 @@ function load() {
 		if (data && data.channels && typeof data.channels === 'object') {
 			for (const [id, entry] of Object.entries(data.channels)) {
 				if (!entry || typeof entry !== 'object') continue;
+				const mode = entry.mode === 'sandbox' ? 'sandbox' : 'admin';
+				const remoteId = typeof entry.remoteId === 'string' ? entry.remoteId : null;
+				let agent = VALID_AGENTS.includes(entry.agent) ? entry.agent : CHANNEL_DEFAULT_AGENT;
+				let sessionId = typeof entry.sessionId === 'string' ? entry.sessionId : null;
+				if (mode === 'sandbox' || remoteId) agent = 'claude';
+				// Legacy entries preallocated Claude UUIDs before spawn. A false
+				// bit means that UUID may never have been created on disk.
+				if (entry.sessionStarted === false) sessionId = null;
 				channels.set(id, {
-					mode: entry.mode === 'sandbox' ? 'sandbox' : 'admin',
+					mode,
+					agent,
 					model: VALID_MODELS.includes(entry.model) ? entry.model : CHANNEL_DEFAULT_MODEL,
-					sessionId: typeof entry.sessionId === 'string' ? entry.sessionId : null,
-					sessionStarted: entry.sessionStarted === true,
-					remoteId: typeof entry.remoteId === 'string' ? entry.remoteId : null,
+					sessionId,
+					remoteId,
 					lastName: typeof entry.lastName === 'string' ? entry.lastName : null,
 				});
 			}
@@ -87,6 +98,22 @@ function setMode(channelId, mode) {
 	log.info(`Channel ${channelId} mode set to: ${mode}`);
 }
 
+function getAgent(channelId) {
+	const entry = channels.get(channelId);
+	const agent = entry?.agent;
+	return VALID_AGENTS.includes(agent) ? agent : CHANNEL_DEFAULT_AGENT;
+}
+
+function setAgent(channelId, agent) {
+	if (!VALID_AGENTS.includes(agent)) throw new Error(`Invalid agent: ${agent}`);
+	const entry = ensureChannel(channelId);
+	if (entry.agent === agent) return;
+	entry.agent = agent;
+	entry.sessionId = null;
+	persist();
+	log.info(`Channel ${channelId} agent set to: ${agent}; session cleared`);
+}
+
 function getModel(channelId) {
 	const entry = channels.get(channelId);
 	const model = entry?.model;
@@ -101,35 +128,23 @@ function setModel(channelId, model) {
 	log.info(`Channel ${channelId} model set to: ${model}`);
 }
 
-function ensureSession(channelId) {
-	const entry = ensureChannel(channelId);
-	if (typeof entry.sessionId !== 'string' || !entry.sessionId) {
-		entry.sessionId = crypto.randomUUID();
-		entry.sessionStarted = false;
-		persist();
-		log.info(`Channel ${channelId} new session allocated: ${entry.sessionId}`);
-	}
-	return { sessionId: entry.sessionId, sessionStarted: entry.sessionStarted === true };
-}
-
-function markSessionStarted(channelId) {
-	const entry = channels.get(channelId);
-	if (!entry || entry.sessionStarted === true) return;
-	entry.sessionStarted = true;
-	persist();
-}
-
 /**
- * Non-allocating read of the channel's session state. Used by `/remote` start
- * to hand the existing UUID to `claude --bg --resume` before `setRemoteId`
- * wipes it.
+ * Non-allocating read of the channel's active agent session.
  */
 function getSession(channelId) {
 	const entry = channels.get(channelId);
 	return {
 		sessionId: typeof entry?.sessionId === 'string' ? entry.sessionId : null,
-		sessionStarted: entry?.sessionStarted === true,
 	};
+}
+
+function setSessionId(channelId, sessionId) {
+	if (typeof sessionId !== 'string' || !sessionId) return;
+	const entry = ensureChannel(channelId);
+	if (entry.sessionId === sessionId) return;
+	entry.sessionId = sessionId;
+	persist();
+	log.info(`Channel ${channelId} session set to: ${sessionId}`);
 }
 
 function setLastName(channelId, name) {
@@ -143,7 +158,6 @@ function clearChannel(channelId) {
 	const entry = channels.get(channelId);
 	if (!entry) return;
 	entry.sessionId = null;
-	entry.sessionStarted = false;
 	persist();
 }
 
@@ -172,7 +186,6 @@ function setRemoteId(channelId, remoteId) {
 		// will manage its own UUID, and the next Discord message after stop
 		// allocates a fresh one.
 		entry.sessionId = null;
-		entry.sessionStarted = false;
 	}
 	persist();
 	log.info(`Channel ${channelId} remoteId set to: ${next}`);
@@ -202,4 +215,22 @@ function hasActiveSandboxRemote() {
 	return false;
 }
 
-module.exports = { load, getMode, setMode, getModel, setModel, ensureSession, markSessionStarted, getSession, setLastName, clearChannel, listChannelIds, removeChannel, getRemoteId, setRemoteId, listRemoteChannels, hasActiveSandboxRemote };
+module.exports = {
+	load,
+	getMode,
+	setMode,
+	getAgent,
+	setAgent,
+	getModel,
+	setModel,
+	getSession,
+	setSessionId,
+	setLastName,
+	clearChannel,
+	listChannelIds,
+	removeChannel,
+	getRemoteId,
+	setRemoteId,
+	listRemoteChannels,
+	hasActiveSandboxRemote,
+};

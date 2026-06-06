@@ -1,6 +1,6 @@
 const { spawn } = require('child_process');
 const path = require('path');
-const { CLAUDE_BIN, CLAUDE_TIMEOUT_MS, ALLOWED_TOOLS, DISALLOWED_TOOLS, ADMIN_USER_HOME } = require('./config');
+const { CLAUDE_BIN, PROMPT_TIMEOUT_MS, ALLOWED_TOOLS, DISALLOWED_TOOLS, ADMIN_USER_HOME } = require('./config');
 const log = require('./logger');
 
 // systemd's inherited PATH usually omits ~/.local/bin, where `claude` itself
@@ -17,16 +17,12 @@ const ADMIN_ENV = {
  * Extra args (e.g. --dangerously-skip-permissions) can be prepended via extraArgs.
  *
  * Session attach strategy:
- *   - sessionId + !sessionStarted -> `--session-id <uuid>` (creates the session).
- *   - sessionId +  sessionStarted -> `--resume <uuid>`     (reuses the existing session;
- *                                                          --session-id would error with
- *                                                          "Session ID X is already in use").
- *   - !sessionId                  -> no flag (scheduled jobs run in a fresh session).
+ *   - sessionId  -> `--resume <uuid>`.
+ *   - !sessionId -> no flag; Claude allocates an ID and emits it in JSON output.
  */
 function buildClaudeArgs(prompt, options = {}) {
 	const {
 		sessionId = null,
-		sessionStarted = false,
 		systemPrompt = null,
 		allowedTools = ALLOWED_TOOLS,
 		disallowedTools = DISALLOWED_TOOLS,
@@ -39,7 +35,7 @@ function buildClaudeArgs(prompt, options = {}) {
 	const args = ['-p', ...extraArgs];
 
 	if (sessionId) {
-		args.push(sessionStarted ? '--resume' : '--session-id', sessionId);
+		args.push('--resume', sessionId);
 	}
 	if (systemPrompt) {
 		args.push('--system-prompt', systemPrompt);
@@ -62,14 +58,15 @@ function buildClaudeArgs(prompt, options = {}) {
  * if Claude launches a background task (e.g. forced by the harness when a
  * `sleep` is too long), we wait for it to complete rather than killing early.
  * The trade-off is that truly interactive commands (`gws auth login`, ssh to
- * an unknown host, `apt install` without `-y`) will hang until CLAUDE_TIMEOUT_MS.
+ * an unknown host, `apt install` without `-y`) will hang until PROMPT_TIMEOUT_MS.
  */
 function spawnWithTimeout(cmd, args, options = {}) {
 	const {
-		timeoutMs = CLAUDE_TIMEOUT_MS,
+		timeoutMs = PROMPT_TIMEOUT_MS,
 		cwd,
 		env,
 		label = 'process',
+		input = null,
 	} = options;
 
 	return new Promise((resolve, reject) => {
@@ -79,7 +76,8 @@ function spawnWithTimeout(cmd, args, options = {}) {
 			stdio: ['pipe', 'pipe', 'pipe'],
 		});
 
-		child.stdin.end();
+		child.stdin.on('error', () => {});
+		child.stdin.end(input === null ? undefined : input);
 
 		let stdout = '';
 		let stderr = '';
@@ -88,19 +86,21 @@ function spawnWithTimeout(cmd, args, options = {}) {
 		child.stderr.on('data', chunk => { stderr += chunk; });
 
 		let killed = false;
+		let killTimer = null;
 		const timer = setTimeout(() => {
 			killed = true;
 			log.warn(`${label} timeout after ${timeoutMs}ms, sending SIGTERM`);
 			child.kill('SIGTERM');
-			setTimeout(() => {
+			killTimer = setTimeout(() => {
 				try { child.kill('SIGKILL'); } catch (_) {}
 			}, 5000);
 		}, timeoutMs);
 
 		child.on('close', (code) => {
 			clearTimeout(timer);
+			if (killTimer) clearTimeout(killTimer);
 			if (killed) {
-				reject(Object.assign(new Error('timeout'), { code: 124 }));
+				reject(Object.assign(new Error('timeout'), { code: 124, stdout, stderr }));
 				return;
 			}
 			if (stderr) log.warn(`${label} stderr:`, stderr.slice(0, 500));
@@ -109,9 +109,26 @@ function spawnWithTimeout(cmd, args, options = {}) {
 
 		child.on('error', (err) => {
 			clearTimeout(timer);
+			if (killTimer) clearTimeout(killTimer);
+			err.stdout = stdout;
+			err.stderr = stderr;
 			reject(err);
 		});
 	});
+}
+
+function extractClaudeSessionId(stdout) {
+	for (const line of (stdout || '').split('\n')) {
+		const trimmed = line.trim();
+		if (!trimmed) continue;
+		try {
+			const event = JSON.parse(trimmed);
+			if (typeof event.session_id === 'string' && event.session_id) {
+				return event.session_id;
+			}
+		} catch {}
+	}
+	return null;
 }
 
 /**
@@ -188,51 +205,82 @@ function parseClaudeOutput(stdout, outputFormat, label = 'Claude') {
 		}
 		if (!resultEvent) {
 			log.warn(`${label}: no result event in stream-json output`);
-			return { result: stdout.slice(-500) };
+			return {
+				result: stdout.slice(-500),
+				sessionId: extractClaudeSessionId(stdout),
+			};
 		}
 		const allText = collectStreamJsonText(stdout);
-		return { result: allText || resultEvent.result || '' };
+		return {
+			result: allText || resultEvent.result || '',
+			sessionId: extractClaudeSessionId(stdout),
+		};
 	}
 
-	return { result: stdout };
+	if (outputFormat === 'json') {
+		try {
+			const event = JSON.parse(stdout);
+			return {
+				result: event.result || '',
+				sessionId: typeof event.session_id === 'string' ? event.session_id : null,
+			};
+		} catch {
+			log.warn(`${label}: invalid json output`);
+		}
+	}
+
+	return { result: stdout, sessionId: null };
 }
 
 async function executeClaudeCommand(prompt, options = {}) {
 	const {
 		sessionId = null,
-		sessionStarted = false,
 		systemPrompt = null,
 		allowedTools = ALLOWED_TOOLS,
 		disallowedTools = DISALLOWED_TOOLS,
 		model = null,
 		effort = null,
 		outputFormat = 'text',
-		timeoutMs = CLAUDE_TIMEOUT_MS,
+		timeoutMs = PROMPT_TIMEOUT_MS,
 	} = options;
 
 	if (!systemPrompt) {
 		throw new Error('executeClaudeCommand requires systemPrompt');
 	}
 
-	const spawnOpts = { sessionId, sessionStarted, systemPrompt, allowedTools, disallowedTools, model, effort, outputFormat };
+	const spawnOpts = { sessionId, systemPrompt, allowedTools, disallowedTools, model, effort, outputFormat };
 
-	const attach = sessionId
-		? (sessionStarted ? `resume ${sessionId}` : `new ${sessionId}`)
-		: 'no session';
+	const attach = sessionId ? `resume ${sessionId}` : 'new session';
 	log.info(`Spawning claude: ${attach}, prompt length: ${prompt.length}, format: ${outputFormat}`);
 
-	const result = await spawnWithTimeout(
-		CLAUDE_BIN,
-		buildClaudeArgs(prompt, spawnOpts),
-		{ timeoutMs, cwd: ADMIN_USER_HOME, env: ADMIN_ENV, label: 'Claude' },
-	);
+	let result;
+	try {
+		result = await spawnWithTimeout(
+			CLAUDE_BIN,
+			buildClaudeArgs(prompt, spawnOpts),
+			{ timeoutMs, cwd: ADMIN_USER_HOME, env: ADMIN_ENV, label: 'Claude' },
+		);
+	} catch (err) {
+		err.sessionId = extractClaudeSessionId(err.stdout);
+		throw err;
+	}
 
 	if (result.code !== 0) {
 		const errMsg = result.stdout.slice(-500) || `exit code ${result.code}`;
-		throw Object.assign(new Error(errMsg), { code: result.code });
+		throw Object.assign(new Error(errMsg), {
+			code: result.code,
+			sessionId: extractClaudeSessionId(result.stdout),
+		});
 	}
 
 	return parseClaudeOutput(result.stdout, outputFormat, 'Claude');
 }
 
-module.exports = { ADMIN_ENV, buildClaudeArgs, spawnWithTimeout, parseClaudeOutput, executeClaudeCommand };
+module.exports = {
+	ADMIN_ENV,
+	buildClaudeArgs,
+	spawnWithTimeout,
+	extractClaudeSessionId,
+	parseClaudeOutput,
+	executeClaudeCommand,
+};

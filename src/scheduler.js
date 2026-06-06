@@ -1,7 +1,16 @@
 const cron = require('node-cron');
-const { ALLOWED_TOOLS, AUTHORIZED_USER_ID, CLAUDE_TIMEOUT_MS, EFFORT_BY_MODEL, VALID_MODELS, CHANNEL_DEFAULT_MODEL } = require('./config');
+const {
+	ALLOWED_TOOLS,
+	AUTHORIZED_USER_ID,
+	PROMPT_TIMEOUT_MS,
+	EFFORT_BY_MODEL,
+	VALID_MODELS,
+	CHANNEL_DEFAULT_MODEL,
+	VALID_AGENTS,
+	CHANNEL_DEFAULT_AGENT,
+} = require('./config');
 const { getSystemPrompt } = require('./prompts');
-const { executeForMode } = require('./executor');
+const { executePrompt } = require('./executor');
 const { loadAllJobs, jobKey, recordJobRun } = require('./jobs-store');
 const { sendToChannel, getClient } = require('./discord');
 const sessions = require('./sessions');
@@ -108,6 +117,7 @@ async function executeJob(job) {
 			throw new Error(`Could not resolve authorized user name for job '${key}'`);
 		}
 		resolvedChannelName = promptContext?.channelName || job.channelName || null;
+		const jobAgent = VALID_AGENTS.includes(job.agent) ? job.agent : CHANNEL_DEFAULT_AGENT;
 		const jobModel = VALID_MODELS.includes(job.model) ? job.model : CHANNEL_DEFAULT_MODEL;
 		const jobSystemPrompt = getSystemPrompt({
 			botName: promptContext.botName,
@@ -118,6 +128,7 @@ async function executeJob(job) {
 			channelTopic: promptContext?.channelTopic,
 			isDM: Boolean(promptContext?.isDM),
 			jobId: id,
+			channelAgent: jobAgent,
 			channelModel: jobModel,
 		});
 		const jobOptions = {
@@ -127,9 +138,9 @@ async function executeJob(job) {
 			model: jobModel,
 			effort: EFFORT_BY_MODEL[jobModel],
 			outputFormat: 'text',
-			timeoutMs: CLAUDE_TIMEOUT_MS,
+			timeoutMs: PROMPT_TIMEOUT_MS,
 		};
-		const { result: output } = await executeForMode(job.mode, fullPrompt, jobOptions);
+		const { result: output } = await executePrompt(jobAgent, job.mode, fullPrompt, jobOptions);
 
 		log.info(`Job '${key}' completed (output: ${output.length} chars)`);
 
@@ -152,14 +163,14 @@ async function executeJob(job) {
 		if (err.code === 124) {
 			log.error(`Job '${key}': TIMEOUT`);
 			if (notify && promptContext?.channelId) {
-				await sendToChannel(channelId, `\u{1F6A8} **Job '${id}' \u2014 TIMEOUT**\nNo response after ${CLAUDE_TIMEOUT_MS / 1000}s.`).catch(e => log.error('Notify failed:', e.message));
+				await sendToChannel(channelId, `\u{1F6A8} **Job '${id}' \u2014 TIMEOUT**\nNo response after ${PROMPT_TIMEOUT_MS / 1000}s.`).catch(e => log.error('Notify failed:', e.message));
 			} else if (notify) {
 				log.warn(`Job '${key}': timeout notification skipped (unresolved channelId '${channelId}')`);
 			}
 		} else {
 			log.error(`Job '${key}': ERROR (code ${err.code || 'unknown'})`, err.message);
 			if (notify && promptContext?.channelId) {
-				await sendToChannel(channelId, `\u{1F6A8} **Job '${id}' \u2014 ERROR**\nClaude failed with code ${err.code || 'unknown'}.`).catch(e => log.error('Notify failed:', e.message));
+				await sendToChannel(channelId, `\u{1F6A8} **Job '${id}' \u2014 ERROR**\nAgent failed with code ${err.code || 'unknown'}.`).catch(e => log.error('Notify failed:', e.message));
 			} else if (notify) {
 				log.warn(`Job '${key}': error notification skipped (unresolved channelId '${channelId}')`);
 			}

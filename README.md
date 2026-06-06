@@ -1,20 +1,21 @@
 # Claudiscord
 
-A single-user Discord bot that relays your messages to [Claude Code](https://docs.anthropic.com/en/docs/claude-code), with optional Docker sandboxing and a built-in job scheduler.
+A single-user Discord bot that relays your messages to [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or the optional [Codex CLI](https://developers.openai.com/codex/cli), with optional Docker sandboxing and a built-in job scheduler.
 
 Works in both DMs and private guild channels. Each channel is an independent conversation (its own session, its own mode), and the channel topic is injected into the system prompt as a mini `CLAUDE.md` — perfect for per-project contexts without manual `/clear`.
 
 ## Features
 
-- **Per-channel conversations** — each Discord channel (DM included) keeps its own Claude session
+- **Per-channel conversations** — each Discord channel (DM included) keeps its own active-agent session
+- **Per-channel agent** — use Claude Code by default, or switch an admin channel to Codex with `/codex`
 - **Channel topic = mini CLAUDE.md** — renaming or rewriting the topic immediately changes the agent's context
-- **Two execution modes per channel** — `admin` runs Claude on the host (full system access), `sandbox` runs it in the Docker container
-- **Per-channel model** — pick `opus` or `sonnet` per channel with `/opus` / `/sonnet` (default `sonnet`); scheduled jobs snapshot the channel's model at scheduling time
-- **Global queue** — one Claude prompt at a time across every channel and scheduled job (keeps jobs files race-free)
+- **Two execution modes per channel** — `admin` runs the selected agent on the host, `sandbox` runs Claude in the Docker container
+- **Per-channel Claude model** — pick `opus` or `sonnet` per channel with `/opus` / `/sonnet` (default `sonnet`); scheduled jobs snapshot the channel's agent and model at scheduling time
+- **Global queue** — one agent prompt at a time across every channel and scheduled job (keeps jobs files race-free)
 - **Single-user authorization** — only the Discord user whose ID is in `AUTHORIZED_USER_ID` can talk to the bot; everyone else is silently dropped
 - **Optional Docker** — sandbox mode is disabled gracefully if Docker isn't installed; admin mode still works
-- **Voice messages** — Discord voice messages (mic button) are transcribed via Groq Whisper before being passed to Claude
-- **File uploads** — drop files/photos into a channel (no text) and the bot saves them to `.claudiscord/files/`; reference them by name in your next message and Claude reads them
+- **Voice messages** — Discord voice messages (mic button) are transcribed via Groq Whisper before being passed to the active agent
+- **File uploads** — drop files/photos into a channel (no text) and the bot saves them to `.claudiscord/files/`; reference them by name in your next message and the active agent reads them
 - **Scheduler** — cron-based jobs via `node-cron`, notifications delivered to the channel where the job was created
 
 > **Linux only.** Claudiscord ships a systemd unit, expects GNU coreutils,
@@ -29,6 +30,7 @@ Works in both DMs and private guild channels. Each channel is an independent con
 - On the portal **Bot** page: enable the **Message Content Intent**
 - On the portal **Installation / Bot** page: in addition to `Direct Messages` grant the **Guilds** and **Guild Messages** privileges so the bot can read the channels you invite it to
 - Claude Code CLI installed on the host (`curl -fsSL https://claude.ai/install.sh | bash`) — claudiscord defaults to `~/.local/bin/claude` (the install script's default location); set `CLAUDE_BIN` in `.env` only if it's elsewhere
+- **Optional**: Codex CLI installed and authenticated on the host; set `CODEX_BIN` only if it isn't available as `codex` in `PATH`
 - **Optional**: Docker (only required for sandbox mode)
 
 ## Installation
@@ -41,8 +43,8 @@ npm install
 cp .env.example .env
 # Fill DISCORD_TOKEN and AUTHORIZED_USER_ID (enable Discord Developer Mode,
 # right-click your avatar → "Copy User ID"). Set CLAUDE_BIN only if claude
-# isn't at ~/.local/bin/claude. Set SANDBOX_HOME only if you plan to
-# use sandbox mode.
+# isn't at ~/.local/bin/claude. Set CODEX_BIN only if Codex isn't in PATH.
+# Set SANDBOX_HOME only if you plan to use sandbox mode.
 
 # Only if you want sandbox mode:
 bash scripts/rebuild-sandbox.sh
@@ -73,7 +75,7 @@ ExecStart=/usr/bin/node src/index.js
 Restart=on-failure
 RestartSec=10
 Environment=NODE_ENV=production
-ExecStopPost=/bin/bash -c 'pkill -f "claude.*-p" || true'
+ExecStopPost=/bin/bash -c 'pkill -f "[c]laude.*-p" || true; pkill -f "[c]odex exec" || true'
 
 [Install]
 WantedBy=multi-user.target
@@ -109,14 +111,15 @@ mode still works.
 ## Using channels
 
 - Invite the bot to any guild channel you want (private or not — the bot only talks back to the authorized user anyway).
-- Set the channel's **topic** to whatever you want Claude to keep in mind for this conversation — it's injected into the system prompt alongside the channel name.
+- Set the channel's **topic** to whatever you want the agent to keep in mind for this conversation — it's injected into the system prompt alongside the channel name.
 - The first message in a new channel defaults to **admin** mode. Switch with `/sandbox` if you'd rather keep that channel to a containerized workspace.
+- Claude Code is the default agent. `/codex` selects Codex for an admin channel; `/opus` or `/sonnet` selects Claude again.
 
 ## File uploads
 
 Drag a file or photo into a channel **without any text** and the bot saves it instead of
-prompting Claude — it replies with the saved file name(s). Reference those names in your
-next message and Claude reads them from disk.
+prompting the agent — it replies with the saved file name(s). Reference those names in your
+next message and the active agent reads them from disk.
 
 - Files land in `<home>/.claudiscord/files/`: `~/.claudiscord/files/` in admin mode,
   `SANDBOX_HOME/.claudiscord/files/` (visible in the container at
@@ -131,12 +134,13 @@ next message and Claude reads them from disk.
 | Command | Description |
 |---------|-------------|
 | `/help` | Show available commands |
-| `/clear` | Reset the Claude session of the current channel |
-| `/status` | Show the channel's mode and sandbox authentication status |
+| `/clear` | Reset the active agent session of the current channel |
+| `/status` | Show the channel's mode, agent and authentication status |
 | `/admin` | Switch the current channel to admin mode (host) |
 | `/sandbox` | Switch the current channel to sandbox mode (container) |
 | `/opus` | Use Claude Opus for this channel |
 | `/sonnet` | Use Claude Sonnet for this channel (default) |
+| `/codex` | Use Codex for this channel (admin mode only; optional) |
 | `/upgrade` | Sandbox only — update the container (apt + Claude Code) |
 | `/login` | Sandbox only — show auth instructions, or `/login <json>` to save credentials |
 | `/restart` | Admin only — restart the claudiscord service |
@@ -165,6 +169,7 @@ cat ~/.claude/.credentials.json
 | `AUTHORIZED_USER_ID` | Discord user ID of the only user allowed to talk to the bot | Yes |
 | `DISCORD_TOKEN` | Discord bot token | Yes |
 | `CLAUDE_BIN` | Path to Claude Code binary on the host | Optional (defaults to `~/.local/bin/claude`) |
+| `CODEX_BIN` | Path or command name for Codex CLI on the host | Optional (defaults to `codex`) |
 | `SANDBOX_HOME` | Directory bind-mounted into the container as `/home/claude` | Optional (required only for sandbox mode) |
 | `GROQ_API_KEY` | Groq API key for transcribing Discord voice messages via Whisper | Optional (voice messages ignored if unset) |
 | `STT_MODEL` | Groq Whisper model id | Optional (defaults to `whisper-large-v3`) |

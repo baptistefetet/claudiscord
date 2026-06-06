@@ -1,23 +1,19 @@
 const { executeClaudeCommand } = require('./claude');
+const { executeCodexCommand } = require('./codex');
 const { executeInContainer } = require('./container');
 const { runQueued } = require('./queue');
 const sessions = require('./sessions');
 
 /**
- * Execute a Claude prompt on the host (admin) or in the single sandbox container.
- * All executions pass through the global queue — only one Claude runs at a time
- * across every channel, command, and scheduled job.
+ * Execute a prompt with the selected agent and environment. All executions
+ * pass through the global queue, so only one agent process runs at a time
+ * across every channel and scheduled job.
  *
- * When `channelId` is provided, the session state (UUID + sessionStarted) is
- * read **inside** the queue, just before spawn — that's critical, otherwise two
- * back-to-back messages on a fresh channel could both capture `sessionStarted:
- * false` and both try `--session-id`, the second one erroring with "already in
- * use". Successful spawns flip `sessionStarted` so the next call uses
- * `--resume`. A timeout also flips it because the session may already exist on
- * disk, but its partial response is never returned. Scheduled jobs pass no
- * channelId — they get a fresh session every run (options.sessionId stays null).
+ * Channel session state is read inside the queue, just before spawn. The agent
+ * returns its generated UUID, which is persisted before the next queued prompt
+ * can run. Scheduled jobs pass no channelId and get a fresh session every run.
  */
-function executeForMode(mode, prompt, options = {}) {
+function executePrompt(agent, mode, prompt, options = {}) {
 	const { channelId, ...rest } = options;
 	// Refuse sandbox executions while another channel holds a sandbox remote:
 	// a timeout here triggers `killClaudeInContainer`, which
@@ -28,25 +24,52 @@ function executeForMode(mode, prompt, options = {}) {
 		throw Object.assign(new Error('SANDBOX_REMOTE_ACTIVE'), { code: 'SANDBOX_REMOTE_ACTIVE' });
 	}
 	return runQueued(async () => {
-		let opts = rest;
-		if (channelId) {
-			const { sessionId, sessionStarted } = sessions.ensureSession(channelId);
-			opts = { ...rest, sessionId, sessionStarted };
+		if (
+			channelId
+			&& (sessions.getAgent(channelId) !== agent || sessions.getMode(channelId) !== mode)
+		) {
+			throw Object.assign(new Error('CHANNEL_CONTEXT_CHANGED'), {
+				code: 'CHANNEL_CONTEXT_CHANGED',
+			});
 		}
+
+		const sessionId = channelId
+			? sessions.getSession(channelId).sessionId
+			: (rest.sessionId || null);
+		const opts = { ...rest, sessionId };
+		const sessionContextIsCurrent = () => (
+			!channelId
+			|| (sessions.getAgent(channelId) === agent && sessions.getMode(channelId) === mode)
+		);
+
 		try {
 			let result;
-			if (mode === 'admin') result = await executeClaudeCommand(prompt, opts);
-			else if (mode === 'sandbox') result = await executeInContainer(prompt, opts);
-			else throw new Error(`Unknown execution mode: ${mode}`);
-			if (channelId) sessions.markSessionStarted(channelId);
+			if (agent === 'codex') {
+				if (mode !== 'admin') {
+					throw Object.assign(new Error('CODEX_ADMIN_ONLY'), {
+						code: 'CODEX_ADMIN_ONLY',
+					});
+				}
+				result = await executeCodexCommand(prompt, opts);
+			} else if (agent === 'claude') {
+				if (mode === 'admin') result = await executeClaudeCommand(prompt, opts);
+				else if (mode === 'sandbox') result = await executeInContainer(prompt, opts);
+				else throw new Error(`Unknown execution mode: ${mode}`);
+			} else {
+				throw new Error(`Unknown agent: ${agent}`);
+			}
+
+			if (channelId && result.sessionId && sessionContextIsCurrent()) {
+				sessions.setSessionId(channelId, result.sessionId);
+			}
 			return result;
 		} catch (err) {
-			// Timeout: claude ran for the full window, the session JSONL is on
-			// disk — the next message must use --resume.
-			if (channelId && err.code === 124) sessions.markSessionStarted(channelId);
+			if (channelId && err.sessionId && sessionContextIsCurrent()) {
+				sessions.setSessionId(channelId, err.sessionId);
+			}
 			throw err;
 		}
 	});
 }
 
-module.exports = { executeForMode };
+module.exports = { executePrompt };

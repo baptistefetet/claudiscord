@@ -16,6 +16,9 @@ const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 // binary for the user running the service. Override via .env if you have
 // it elsewhere.
 const CLAUDE_BIN = process.env.CLAUDE_BIN || path.join(os.homedir(), '.local/bin/claude');
+// Optional. Keep PATH lookup as the default because Codex installation paths
+// vary between package managers. Availability is detected in src/codex.js.
+const CODEX_BIN = process.env.CODEX_BIN || 'codex';
 // Optional: only required when sandbox mode is used. If unset, sandbox
 // is reported as unavailable just like when Docker is missing.
 const SANDBOX_HOST_HOME = process.env.SANDBOX_HOME || null;
@@ -48,7 +51,7 @@ const DOCKER_IMAGE = 'claudiscord-sandbox';
 const CONTAINER_MEMORY = '512m';
 const CONTAINER_CPUS = 1;
 
-const CLAUDE_TIMEOUT_MS = 1_200_000; // 20 min — laisse la place aux gros prompts de dev
+const PROMPT_TIMEOUT_MS = 1_200_000; // 20 min — laisse la place aux gros prompts de dev
 const SHELL_TIMEOUT_MS = 300_000;
 const DOCKER_CMD_TIMEOUT = 30_000;
 const UPGRADE_TIMEOUT_MS = 300_000;
@@ -61,11 +64,14 @@ const DISALLOWED_TOOLS = 'CronCreate CronDelete CronList Monitor AskUserQuestion
 const VALID_MODELS = ['opus', 'sonnet'];
 const CHANNEL_DEFAULT_MODEL = 'sonnet';
 const EFFORT_BY_MODEL = { opus: 'xhigh', sonnet: 'high' };
+const VALID_AGENTS = ['claude', 'codex'];
+const CHANNEL_DEFAULT_AGENT = 'claude';
 
 module.exports = {
 	AUTHORIZED_USER_ID,
 	DISCORD_TOKEN,
 	CLAUDE_BIN,
+	CODEX_BIN,
 	SANDBOX_HOST_HOME,
 	GROQ_API_KEY,
 	STT_MODEL,
@@ -82,7 +88,7 @@ module.exports = {
 	SANDBOX_FILES_DIR,
 	STATE_DIR,
 	JOBS_FILENAME,
-	CLAUDE_TIMEOUT_MS,
+	PROMPT_TIMEOUT_MS,
 	SHELL_TIMEOUT_MS,
 	DISCORD_MAX_MSG_LENGTH,
 	TYPING_INTERVAL_MS,
@@ -94,6 +100,8 @@ module.exports = {
 	VALID_MODELS,
 	CHANNEL_DEFAULT_MODEL,
 	EFFORT_BY_MODEL,
+	VALID_AGENTS,
+	CHANNEL_DEFAULT_AGENT,
 	DOCKER_CMD_TIMEOUT,
 	UPGRADE_TIMEOUT_MS,
 };
