@@ -192,7 +192,9 @@ SANDBOX_HOST_HOME/
 
 ### Background tasks
 
-`spawnWithTimeout` (`src/claude.js`) waits for the Claude process to exit naturally — if Claude launches a background task (e.g. because the harness forced it after blocking a `sleep > 2s`), we wait for it to complete instead of killing the process at `end_turn`. The trade-off is that truly interactive commands (`gws auth login`, ssh to an unknown host, `apt install` without `-y`) will hang until `CLAUDE_TIMEOUT_MS` and block the global queue meanwhile — `/restart` is the escape hatch. The system prompt instructs Claude to avoid `run_in_background` anyway (see `src/prompts.js`).
+`spawnWithTimeout` (`src/claude.js`) waits for Claude Code to exit naturally.
+After 20 minutes, the process is killed and the user receives a timeout error;
+partial output is not recovered. The channel session remains resumable.
 
 ### Image rebuild
 
@@ -209,7 +211,7 @@ bash scripts/rebuild-sandbox.sh
 - Jobs: `--model sonnet --effort high`
 - Host cwd: `os.homedir()` of the user running the service (auto-loads `$HOME/CLAUDE.md`) — typically `/root` on Linux when the service runs as root, `/var/root` on macOS
 - Sandbox cwd: `/home/claude`
-- Timeout: 1200s (SIGTERM then SIGKILL after 5s)
+- Timeout: 1200s (SIGTERM then SIGKILL after 5s, no partial-answer recovery)
 
 ## Scheduled jobs
 
@@ -279,7 +281,7 @@ bash scripts/rebuild-sandbox.sh
 - Asymmetric continuity: `--resume` makes `claude --bg` copy the existing Discord conversation into the bg session's JSONL, so the mobile user picks up where Discord left off. But `--bg` manages its own UUID (warns "--bg manages the session id; ignoring --session-id") and we don't reconcile back — `setRemoteId` wipes the channel's `sessionId`/`sessionStarted`, so the next Discord message after `/remote` stop starts a fresh session. Going Discord → mobile keeps history; coming back Discord → fresh.
 - Naming: the mobile app shows each session under `<channelName>` (DM = username), so multiple channels can run in parallel and stay discoverable.
 - Gating (`src/commands.js`): while `remoteId` is set, only `/remote`, `/status`, `/help` are accepted in that channel. Every other input (plain text, `!shell`, other slash commands) returns an invalidation hint and does **not** spawn `claude -p` — this prevents two concurrent processes touching the same session. Voice messages are also dropped *before* Groq STT (`src/index.js`), so a vocal in remote mode neither pays for transcription nor leaks the `🎙️ <transcript>` echo.
-- Cross-channel sandbox lockout: while *any* channel holds a sandbox remote, every other sandbox prompt / `!shell` / scheduled job is refused (`hasActiveSandboxRemote()` check in `executor.js`, `commands.js`, `scheduler.js`). Reason: `killClaudeInContainer` pkills every non-init PID in the container on timeout or early-result, which would scoop up the live remote daemon. Admin channels are unaffected.
+- Cross-channel sandbox lockout: while *any* channel holds a sandbox remote, every other sandbox prompt / `!shell` / scheduled job is refused (`hasActiveSandboxRemote()` check in `executor.js`, `commands.js`, `scheduler.js`). Reason: `killClaudeInContainer` pkills every non-init PID in the container on timeout, which would scoop up the live remote daemon. Admin channels are unaffected.
 - Stop: `/remote` while active runs `claude stop <agentId>` (host or container), then deletes `~/.claude/jobs/<agentId>/` so the agent stops showing up in `claude agents` as a stopped session (`claude stop` keeps the conversation around by design). Strict 8-hex guard on the agentId before any `rm -rf`. Finally clears `remoteId` and calls `scheduler.reloadJobs()` — Claude may have edited the jobs files during the mobile session, and we did not go through the executor path that normally triggers a reload.
 - Startup reconciliation: `reconcileRemotes()` runs after `sessions.load()` and best-effort-stops every persisted `remoteId` (also doing the jobs/ cleanup). After a machine reboot the daemon is gone and the stop fails harmlessly; the channel reverts to Discord mode either way.
 - Sandbox prerequisite: the in-container claude daemon needs valid credentials (`/login`). Without them the mobile app won't see the session.

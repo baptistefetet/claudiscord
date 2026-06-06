@@ -191,7 +191,7 @@ function listRemoteChannels() {
 /**
  * True when any channel currently has a sandbox-mode remote. Used to refuse
  * other sandbox claude executions (prompts, !shell, scheduled jobs) — those
- * would route through `killClaudeInContainer` on timeout/early-result, which
+ * would route through `killClaudeInContainer` on timeout, which
  * pkills every non-essential PID in the container and would take the live
  * remote daemon with it.
  */

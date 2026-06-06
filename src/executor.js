@@ -12,14 +12,15 @@ const sessions = require('./sessions');
  * read **inside** the queue, just before spawn — that's critical, otherwise two
  * back-to-back messages on a fresh channel could both capture `sessionStarted:
  * false` and both try `--session-id`, the second one erroring with "already in
- * use". Successful (or timeout-aborted) spawns flip `sessionStarted` so the
- * next call uses `--resume`. Scheduled jobs pass no channelId — they get a
- * fresh session every run (options.sessionId stays null).
+ * use". Successful spawns flip `sessionStarted` so the next call uses
+ * `--resume`. A timeout also flips it because the session may already exist on
+ * disk, but its partial response is never returned. Scheduled jobs pass no
+ * channelId — they get a fresh session every run (options.sessionId stays null).
  */
 function executeForMode(mode, prompt, options = {}) {
 	const { channelId, ...rest } = options;
 	// Refuse sandbox executions while another channel holds a sandbox remote:
-	// a timeout/early-result here triggers `killClaudeInContainer`, which
+	// a timeout here triggers `killClaudeInContainer`, which
 	// pkills every non-init PID in the container and would take the live
 	// remote daemon with it. The channel hosting the remote is already gated
 	// inside `handleCommand`, so this only blocks *other* sandbox traffic.
