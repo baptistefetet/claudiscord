@@ -1,5 +1,4 @@
 const { spawn } = require('child_process');
-const fs = require('fs');
 const path = require('path');
 const { CLAUDE_BIN, CLAUDE_TIMEOUT_MS, ALLOWED_TOOLS, DISALLOWED_TOOLS, ADMIN_USER_HOME } = require('./config');
 const log = require('./logger');
@@ -33,7 +32,7 @@ function buildClaudeArgs(prompt, options = {}) {
 		disallowedTools = DISALLOWED_TOOLS,
 		model = null,
 		effort = null,
-		outputFormat = 'json',
+		outputFormat = 'text',
 		extraArgs = [],
 	} = options;
 
@@ -116,62 +115,6 @@ function spawnWithTimeout(cmd, args, options = {}) {
 }
 
 /**
- * Extract assistant text blocks from the most recent turn of a session JSONL.
- * "Most recent turn" = every assistant entry after the last real user prompt
- * (tool_result entries are also typed `user` and must be skipped). Used as
- * fallback when the CLI result field is empty (happens when the last
- * assistant turn ends on a tool_use instead of end_turn).
- */
-function extractLastTextFromSessionLog(sessionId, claudeHome) {
-	if (!sessionId || !claudeHome) return '';
-	try {
-		const projectsDir = path.join(claudeHome, '.claude', 'projects');
-		if (!fs.existsSync(projectsDir)) return '';
-
-		let jsonlPath = null;
-		for (const dir of fs.readdirSync(projectsDir)) {
-			const candidate = path.join(projectsDir, dir, `${sessionId}.jsonl`);
-			if (fs.existsSync(candidate)) { jsonlPath = candidate; break; }
-		}
-		if (!jsonlPath) return '';
-
-		const lines = fs.readFileSync(jsonlPath, 'utf8').split('\n');
-		const entries = [];
-		for (const line of lines) {
-			if (!line.trim()) continue;
-			try { entries.push(JSON.parse(line)); } catch {}
-		}
-
-		// Walk backwards to the last real user prompt, then collect every text
-		// block from every assistant entry that follows.
-		let startIdx = 0;
-		for (let i = entries.length - 1; i >= 0; i--) {
-			const e = entries[i];
-			if (e.type !== 'user') continue;
-			const content = e.message?.content;
-			const isToolResult = Array.isArray(content)
-				&& content.some(b => b && b.type === 'tool_result');
-			if (!isToolResult) { startIdx = i + 1; break; }
-		}
-
-		const texts = [];
-		for (let i = startIdx; i < entries.length; i++) {
-			const e = entries[i];
-			if (e.type !== 'assistant') continue;
-			const content = e.message?.content;
-			if (!Array.isArray(content)) continue;
-			for (const block of content) {
-				if (block.type === 'text' && block.text) texts.push(block.text);
-			}
-		}
-		return texts.join('\n\n');
-	} catch (err) {
-		log.warn(`Failed to read session log for ${sessionId}:`, err.message);
-		return '';
-	}
-}
-
-/**
  * Collect the user-visible text from a stream-json stdout.
  *
  * The `result` event only carries the final text block, so a naive read
@@ -229,11 +172,9 @@ function collectStreamJsonText(stdout) {
 }
 
 /**
- * Parse Claude CLI output (JSON, stream-json, or text).
- * claudeHome + sessionId are used by the JSONL fallback when the CLI's
- * `result` field is empty (last assistant turn ended on tool_use).
+ * Parse Claude CLI output (stream-json or text).
  */
-function parseClaudeOutput(stdout, outputFormat, label = 'Claude', claudeHome = null, sessionId = null) {
+function parseClaudeOutput(stdout, outputFormat, label = 'Claude') {
 	if (outputFormat === 'stream-json') {
 		let resultEvent = null;
 		const lines = stdout.split('\n');
@@ -253,22 +194,6 @@ function parseClaudeOutput(stdout, outputFormat, label = 'Claude', claudeHome = 
 		return { result: allText || resultEvent.result || '' };
 	}
 
-	if (outputFormat === 'json') {
-		try {
-			const parsed = JSON.parse(stdout);
-			let result = parsed.result || '';
-
-			if (!result && sessionId) {
-				result = extractLastTextFromSessionLog(sessionId, claudeHome);
-				if (result) log.info(`${label}: recovered text from session log (result was empty)`);
-			}
-
-			return { result };
-		} catch (err) {
-			log.error(`Failed to parse ${label} JSON output:`, stdout.slice(0, 200));
-			return { result: stdout };
-		}
-	}
 	return { result: stdout };
 }
 
@@ -281,7 +206,7 @@ async function executeClaudeCommand(prompt, options = {}) {
 		disallowedTools = DISALLOWED_TOOLS,
 		model = null,
 		effort = null,
-		outputFormat = 'json',
+		outputFormat = 'text',
 		timeoutMs = CLAUDE_TIMEOUT_MS,
 	} = options;
 
@@ -307,7 +232,7 @@ async function executeClaudeCommand(prompt, options = {}) {
 		throw Object.assign(new Error(errMsg), { code: result.code });
 	}
 
-	return parseClaudeOutput(result.stdout, outputFormat, 'Claude', ADMIN_USER_HOME, sessionId);
+	return parseClaudeOutput(result.stdout, outputFormat, 'Claude');
 }
 
 module.exports = { ADMIN_ENV, buildClaudeArgs, spawnWithTimeout, parseClaudeOutput, executeClaudeCommand };

@@ -196,7 +196,7 @@ async function executeInContainer(prompt, {
 		disallowedTools = DISALLOWED_TOOLS,
 		model = null,
 		effort = null,
-		outputFormat = 'json',
+		outputFormat = 'text',
 		timeoutMs = CLAUDE_TIMEOUT_MS,
 	} = {}) {
 	ensureContainer();
@@ -241,7 +241,7 @@ async function executeInContainer(prompt, {
 		throw Object.assign(new Error(errMsg), { code: result.code });
 	}
 
-	return parseClaudeOutput(result.stdout, outputFormat, label, SANDBOX_HOST_HOME, sessionId);
+	return parseClaudeOutput(result.stdout, outputFormat, label);
 }
 
 /**
