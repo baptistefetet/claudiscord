@@ -9,7 +9,7 @@ See `README.md` for installation, setup and Discord commands reference.
 ```
 Discord message (DM or guild text channel)
   -> authorization filter (authorized user only)
-  -> command dispatcher (/admin, /sandbox, /clear, /login, …)
+  -> command dispatcher (/admin, /sandbox, /clear, …)
   -> session lookup by channelId
   -> executePrompt(agent, mode, prompt) [global queue — one agent at a time]
        claude + admin   -> host Claude
@@ -50,7 +50,7 @@ src/
   jobs-store.js       # loadAllJobs (admin+sandbox), recordJobRun, jobKey
   sessions.js         # { channels: { channelId -> { mode, agent, sessionId, ... } } }
   scheduler.js        # node-cron, reloadJobs, executeJob, per-key lock
-  commands.js         # /help /clear /status /admin /sandbox /opus /sonnet /codex /remote /login /upgrade /restart !shell
+  commands.js         # /help /clear /status /admin /sandbox /opus /sonnet /codex /remote /upgrade /restart !shell
   remote.js           # /remote helpers: startRemote, stopRemote, reconcileRemotes
   stt.js              # Groq Whisper transcription for Discord voice messages
   uploads.js          # Save Discord file/photo attachments to .claudiscord/files
@@ -191,9 +191,15 @@ The sandbox home also contains Claude config:
 SANDBOX_HOST_HOME/
   CLAUDE.md               # customisable
   .claude/
-    .credentials.json     # written by /login
+    .credentials.json     # seeded from host on first use
     skills/               # user skills
 ```
+
+`ensureStorage()` seeds `SANDBOX_HOST_HOME/.claude/.credentials.json` from
+`ADMIN_USER_HOME/.claude/.credentials.json` when the sandbox file is absent.
+The copy is atomic, mode `0600`, and chowned to the sandbox UID/GID. An existing
+sandbox credential is never overwritten. If host credentials are missing or
+invalid, sandbox creation continues but Claude reports an authentication error.
 
 ### Background tasks
 
@@ -303,4 +309,4 @@ bash scripts/rebuild-sandbox.sh
 - Cross-channel sandbox lockout: while *any* channel holds a sandbox remote, every other sandbox prompt / `!shell` / scheduled job is refused (`hasActiveSandboxRemote()` check in `executor.js`, `commands.js`, `scheduler.js`). Reason: `killClaudeInContainer` pkills every non-init PID in the container on timeout, which would scoop up the live remote daemon. Admin channels are unaffected.
 - Stop: `/remote` while active runs `claude stop <agentId>` (host or container), then deletes `~/.claude/jobs/<agentId>/` so the agent stops showing up in `claude agents` as a stopped session (`claude stop` keeps the conversation around by design). Strict 8-hex guard on the agentId before any `rm -rf`. Finally clears `remoteId` and calls `scheduler.reloadJobs()` — Claude may have edited the jobs files during the mobile session, and we did not go through the executor path that normally triggers a reload.
 - Startup reconciliation: `reconcileRemotes()` runs after `sessions.load()` and best-effort-stops every persisted `remoteId` (also doing the jobs/ cleanup). After a machine reboot the daemon is gone and the stop fails harmlessly; the channel reverts to Discord mode either way.
-- Sandbox prerequisite: the in-container claude daemon needs valid credentials (`/login`). Without them the mobile app won't see the session.
+- Sandbox prerequisite: the in-container claude daemon needs valid credentials, seeded from the host on first use. Without them the mobile app won't see the session.

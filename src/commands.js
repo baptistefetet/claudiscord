@@ -1,10 +1,9 @@
 const { spawn, execFileSync, execFile } = require('child_process');
 const { promisify } = require('util');
-const { ChannelType } = require('discord.js');
 const execFileAsync = promisify(execFile);
 const { UPGRADE_TIMEOUT_MS, SHELL_TIMEOUT_MS, DISCORD_MAX_MSG_LENGTH, CONTAINER_NAME, ADMIN_USER_HOME } = require('./config');
 const sessions = require('./sessions');
-const { writeCredentials, hasCredentials, ensureContainer, DOCKER_AVAILABLE } = require('./container');
+const { ensureContainer, DOCKER_AVAILABLE } = require('./container');
 const { CODEX_AVAILABLE } = require('./codex');
 const { runQueued, isBusy } = require('./queue');
 const { startRemote, stopRemote } = require('./remote');
@@ -24,18 +23,6 @@ const SHELL_MAX_OUTPUT = DISCORD_MAX_MSG_LENGTH - 25;
 //   2. Two back-to-back `/remote` calls could both pick the start branch
 //      before the first finished, spawning two agents and orphaning one.
 const remoteOpInFlight = new Set();
-
-const LOGIN_INSTRUCTIONS = `**Sandbox authentication**
-
-You need to authenticate on your own machine and send your credentials:
-
-**1.** Install Claude Code: \`curl -fsSL https://claude.ai/install.sh | bash\`
-**2.** Run: \`claude auth login\` and authorize access in your browser
-**3.** Copy your credentials: \`cat ~/.claude/.credentials.json\`
-
-**4.** Send here: \`/login {"claudeAiOauth":...}\`
-
-The message will be automatically deleted after registration.`;
 
 /**
  * Execute a shell command asynchronously and return output for Discord.
@@ -174,7 +161,7 @@ async function handleCommand(message) {
 
 \`/help\` — Show this help
 \`/clear\` — Reset session for this channel (new conversation)
-\`/status\` — Show current mode, agent and authentication status
+\`/status\` — Show current mode, agent and runtime status
 \`/admin\` — Switch this channel to admin mode (host)
 \`/sandbox\` — Switch this channel to sandbox mode (container)
 \`/opus\` — Use Claude Opus for this channel
@@ -184,9 +171,7 @@ async function handleCommand(message) {
 \`!<command>\` — Execute a shell command (host if admin, container if sandbox)`;
 		if (mode === 'sandbox') {
 			help += `
-\`/upgrade\` — Update sandbox container (apt + Claude Code)
-\`/login\` — Sandbox authentication instructions
-\`/login <json>\` — Save your Claude Code credentials`;
+\`/upgrade\` — Update sandbox container (apt + Claude Code)`;
 		}
 		if (mode === 'admin') {
 			help += `
@@ -291,12 +276,11 @@ async function handleCommand(message) {
 	}
 
 	if (content === '/status') {
-		const authed = DOCKER_AVAILABLE && hasCredentials() ? 'yes' : 'no';
 		const dockerNote = DOCKER_AVAILABLE ? '' : '\nSandbox unavailable on this host.';
 		const remoteLine = remoteId ? `\nRemote: \`${remoteId}\`` : '';
 		const modelLine = agent === 'claude' ? `\nModel: **${model}**` : '';
 		const codexLine = CODEX_AVAILABLE ? '' : '\nCodex unavailable on this host.';
-		await channel.send(`Channel mode: **${mode}**\nAgent: **${agent}**${modelLine}\nAuthenticated (sandbox): **${authed}**${remoteLine}${dockerNote}${codexLine}`);
+		await channel.send(`Channel mode: **${mode}**\nAgent: **${agent}**${modelLine}${remoteLine}${dockerNote}${codexLine}`);
 		return true;
 	}
 
@@ -392,52 +376,6 @@ async function handleCommand(message) {
 				await channel.send(`Upgrade error: ${err.message.slice(0, 300)}`);
 			}
 		}).catch(err => log.error('Queued upgrade error:', err.message));
-		return true;
-	}
-
-	if (content.startsWith('/login')) {
-		if (mode !== 'sandbox') {
-			await channel.send('`/login` is only used in sandbox mode.');
-			return true;
-		}
-		const arg = content.slice('/login'.length).trim();
-
-		if (!arg) {
-			await channel.send(LOGIN_INSTRUCTIONS);
-			return true;
-		}
-
-		// Credentials must only ever be sent in a DM: in a guild channel the bot
-		// might not be able to delete the message, leaving the OAuth JSON visible
-		// to anyone with read access.
-		if (channel.type !== ChannelType.DM) {
-			await message.delete().catch(() => {});
-			await channel.send('Send `/login <json>` only in DM — pasting credentials in a guild channel is unsafe.');
-			return true;
-		}
-
-		const tryDelete = () => message.delete().catch(() => {});
-
-		try {
-			const parsed = JSON.parse(arg);
-			if (!parsed.claudeAiOauth || !parsed.claudeAiOauth.accessToken) {
-				await channel.send('Invalid format. JSON must contain `claudeAiOauth.accessToken`.');
-				tryDelete();
-				return true;
-			}
-
-			writeCredentials(arg);
-			await channel.send('Credentials saved. You can now use the sandbox.');
-			tryDelete();
-		} catch (err) {
-			if (err instanceof SyntaxError) {
-				await channel.send('Invalid JSON. Send the exact content of `~/.claude/.credentials.json`.');
-			} else {
-				log.error('Login error:', err.message);
-				await channel.send(`Error: ${err.message}`);
-			}
-			tryDelete();
-		}
 		return true;
 	}
 

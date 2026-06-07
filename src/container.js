@@ -2,6 +2,7 @@ const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const {
+	ADMIN_USER_HOME,
 	SANDBOX_HOST_HOME,
 	SANDBOX_USER_HOME,
 	STATE_DIR,
@@ -95,6 +96,44 @@ function chownContainerUser(target) {
 	}
 }
 
+function writeSandboxCredentials(credentialsJson) {
+	const credPath = path.join(SANDBOX_HOST_HOME, '.claude', '.credentials.json');
+	const tmp = `${credPath}.${process.pid}.${Date.now()}.tmp`;
+	try {
+		fs.writeFileSync(tmp, credentialsJson, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+		fs.renameSync(tmp, credPath);
+		fs.chmodSync(credPath, 0o600);
+		execFileSync('chown', [`${SANDBOX_UID}:${SANDBOX_GID}`, credPath], { timeout: 5000 });
+	} finally {
+		fs.rmSync(tmp, { force: true });
+	}
+}
+
+function seedCredentialsFromHost() {
+	const sandboxCredPath = path.join(SANDBOX_HOST_HOME, '.claude', '.credentials.json');
+	if (fs.existsSync(sandboxCredPath)) return false;
+
+	const hostCredPath = path.join(ADMIN_USER_HOME, '.claude', '.credentials.json');
+	let credentialsJson;
+	try {
+		credentialsJson = fs.readFileSync(hostCredPath, 'utf8');
+		const parsed = JSON.parse(credentialsJson);
+		if (!parsed.claudeAiOauth?.accessToken) {
+			log.warn(`Host credentials at ${hostCredPath} are missing claudeAiOauth.accessToken`);
+			return false;
+		}
+	} catch (err) {
+		if (err.code !== 'ENOENT') {
+			log.warn(`Could not read host credentials at ${hostCredPath}: ${err.message}`);
+		}
+		return false;
+	}
+
+	writeSandboxCredentials(credentialsJson);
+	log.info('Seeded sandbox credentials from host');
+	return true;
+}
+
 function ensureStorage() {
 	const home = SANDBOX_HOST_HOME;
 	const isNew = !fs.existsSync(home);
@@ -110,7 +149,7 @@ function ensureStorage() {
 	}
 
 	// .claude: created root-owned when home is pre-populated externally,
-	// so chown it whenever we create it. Credentials are written later via /login.
+	// so chown it whenever we create it.
 	const claudeDir = path.join(home, '.claude');
 	const claudeDirIsNew = !fs.existsSync(claudeDir);
 	fs.mkdirSync(claudeDir, { recursive: true });
@@ -125,6 +164,8 @@ function ensureStorage() {
 		fs.writeFileSync(jobsFile, '[]', 'utf8');
 		chownContainerUser(jobsFile);
 	}
+
+	seedCredentialsFromHost();
 }
 
 function ensureContainer() {
@@ -255,24 +296,9 @@ async function executeInContainer(prompt, {
 }
 
 /**
- * Write Claude Code credentials into the sandbox volume.
- * The user obtains these by running `claude auth login` on their own machine
- * and copying ~/.claude/.credentials.json.
- */
-function writeCredentials(credentialsJson) {
-	ensureStorage();
-	const credPath = path.join(SANDBOX_HOST_HOME, '.claude', '.credentials.json');
-	const tmp = credPath + '.tmp';
-	fs.writeFileSync(tmp, credentialsJson, { mode: 0o600 });
-	fs.renameSync(tmp, credPath);
-	execFileSync('chown', [`${SANDBOX_UID}:${SANDBOX_GID}`, credPath], { timeout: 5000 });
-	log.info('Wrote sandbox credentials');
-}
-
-/**
  * Write an uploaded file into the sandbox volume's .claudiscord/files dir, then
  * chown it to the container's `claude` user so the non-root process can read it
- * through the bind-mount. Mirrors writeCredentials.
+ * through the bind-mount.
  */
 function writeSandboxUpload(filename, buffer) {
 	const dir = path.join(SANDBOX_HOST_HOME, STATE_DIR, 'files');
@@ -284,17 +310,10 @@ function writeSandboxUpload(filename, buffer) {
 	chownContainerUser(dest);
 }
 
-function hasCredentials() {
-	const credPath = path.join(SANDBOX_HOST_HOME, '.claude', '.credentials.json');
-	return fs.existsSync(credPath);
-}
-
 module.exports = {
 	DOCKER_AVAILABLE,
 	ensureImage,
 	ensureContainer,
 	executeInContainer,
-	writeCredentials,
 	writeSandboxUpload,
-	hasCredentials,
 };

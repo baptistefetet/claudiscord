@@ -135,32 +135,31 @@ next message and the active agent reads them from disk.
 |---------|-------------|
 | `/help` | Show available commands |
 | `/clear` | Reset the active agent session of the current channel |
-| `/status` | Show the channel's mode, agent and authentication status |
+| `/status` | Show the channel's mode, agent and runtime status |
 | `/admin` | Switch the current channel to admin mode (host) |
 | `/sandbox` | Switch the current channel to sandbox mode (container) |
 | `/opus` | Use Claude Opus for this channel |
 | `/sonnet` | Use Claude Sonnet for this channel (default) |
 | `/codex` | Use Codex for this channel (admin mode only; optional) |
 | `/upgrade` | Sandbox only — update the container (apt + Claude Code) |
-| `/login` | Sandbox only — show auth instructions, or `/login <json>` to save credentials |
 | `/restart` | Admin only — restart the claudiscord service |
 | `!<command>` | Run a shell command (host if the channel is admin, container if sandbox) |
 
 ## Sandbox authentication
 
-Run `claude auth login` on your own machine, then send the credentials to the bot **inside a sandbox-mode channel**:
+When sandbox storage is initialized, Claudiscord copies the host credentials
+from `~/.claude/.credentials.json` to
+`SANDBOX_HOME/.claude/.credentials.json`. Existing sandbox credentials are
+never overwritten, so token updates made inside the sandbox are preserved.
+
+Authenticate Claude Code on the host before first use:
 
 ```
-/login {"claudeAiOauth":{"accessToken":"...","refreshToken":"...","expiresAt":...}}
+claude auth login
 ```
 
-Credentials are written to `SANDBOX_HOME/.claude/.credentials.json` and the message carrying them is deleted automatically.
-
-**Where to find credentials** (on the Linux box where you ran `claude auth login`):
-
-```
-cat ~/.claude/.credentials.json
-```
+If host credentials are missing or invalid, sandbox initialization continues
+but Claude reports an authentication error until the host is authenticated.
 
 ## Configuration
 
