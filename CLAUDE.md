@@ -15,6 +15,7 @@ Discord message (DM or guild text channel)
        claude + admin   -> host Claude
        claude + sandbox -> single container
        codex  + admin   -> host Codex
+       codex  + sandbox -> single container
 
 Scheduled jobs
   -> node-cron
@@ -35,7 +36,7 @@ Scheduled jobs
 ## Files
 
 ```
-Dockerfile            # Sandbox image (node:22-slim + Claude CLI + user claude)
+Dockerfile            # Sandbox image (node:22-slim + Claude/Codex CLIs + user claude)
 src/
   index.js            # Entry point: Discord handler, queue wait UX
   config.js           # .env loading + paths + constants
@@ -44,8 +45,8 @@ src/
   discord.js          # Client, sendToChannel, splitMessage, typing indicator
   queue.js            # Single global FIFO (runQueued, isBusy)
   claude.js           # Host Claude CLI execution + shared spawn helper
-  codex.js            # Optional host Codex CLI execution and JSONL parser
-  container.js        # Docker: DOCKER_AVAILABLE, ensureImage/Container, creds
+  codex.js            # Host Codex CLI execution, shared args and JSONL parser
+  container.js        # Docker: image/container, Claude/Codex execution, creds
   executor.js         # executePrompt(agent, mode, prompt, opts) — dispatch + queue
   jobs-store.js       # loadAllJobs (admin+sandbox), recordJobRun, jobKey
   sessions.js         # { channels: { channelId -> { mode, agent, sessionId, ... } } }
@@ -56,6 +57,8 @@ src/
   uploads.js          # Save Discord file/photo attachments to .claudiscord/files
 scripts/
   rebuild-sandbox.sh  # Rebuild Docker sandbox image
+test/
+  codex.test.js       # Codex args, JSONL parsing and auth-error tests
 .env                  # AUTHORIZED_USER_ID, DISCORD_TOKEN, CLAUDE_BIN, CODEX_BIN, SANDBOX_HOME, GROQ_API_KEY
 ```
 
@@ -119,18 +122,18 @@ references them by name in a later message.
 ## Modes (per channel)
 
 - `admin` (default) — prompts executed directly on the host with access to system tools
-- `sandbox` — Claude prompts executed inside the Docker container with `--dangerously-skip-permissions`
+- `sandbox` — prompts executed inside the Docker container; Claude uses `--dangerously-skip-permissions`, Codex uses `--yolo`
 - `/admin` and `/sandbox` switch the current channel's mode and clear its session
 - `/sandbox` reports an error and does not switch if Docker is not installed
-- Switching a Codex channel to `/sandbox` also switches its agent back to Claude
 - The mode is persisted in `sessions.json`
 
 ## Agent and model (per channel)
 
 - Each channel has an agent (`claude` or `codex`, default `claude`).
-- `/codex` selects Codex and resets the channel session. It is available only in admin mode and only when the binary is installed.
+- `/codex` selects Codex and resets the channel session. It works in admin and sandbox modes when the corresponding binary is installed.
 - `/opus` and `/sonnet` select Claude and its model. Switching from Codex resets the session; changing only the Claude model does not.
 - Codex uses the model configured by the Codex CLI; claudiscord does not override it.
+- Codex reasoning effort is always overridden to `xhigh`, centralized in `src/config.js::CODEX_REASONING_EFFORT`.
 - Effort is derived from the model (opus → xhigh, sonnet → high), centralized in `src/config.js::EFFORT_BY_MODEL`.
 - Agent and model are persisted in `sessions.json` next to the mode.
 - Scheduled jobs snapshot the channel's agent and Claude model at scheduling time. Missing `agent` fields fall back to `claude` for backward compatibility.
@@ -145,9 +148,9 @@ All executions — interactive prompts and scheduled jobs, Claude and Codex — 
 
 ## Docker sandbox (optional)
 
-- **Image**: `claudiscord-sandbox` (local build, `node:22-slim` + Claude CLI)
+- **Image**: `claudiscord-sandbox` (local build, `node:22-slim` + Claude and Codex CLIs)
 - **Container**: `claudiscord-sandbox` (single container, `--restart unless-stopped`)
-- **Limits**: 512 MB RAM, 1 CPU
+- **Limit**: 1 CPU; no container RAM limit
 - **Volume**: `SANDBOX_HOME -> /home/claude`
 - **Network**: bridge
 - **User in container**: `claude` (non-root)
@@ -185,7 +188,7 @@ SANDBOX_HOST_HOME/.claudiscord/   # bind-mounted as /home/claude/.claudiscord
   files/                          # uploaded files (sandbox channels)
 ```
 
-The sandbox home also contains Claude config:
+The sandbox home also contains agent config:
 
 ```
 SANDBOX_HOST_HOME/
@@ -193,17 +196,23 @@ SANDBOX_HOST_HOME/
   .claude/
     .credentials.json     # seeded from host on first use
     skills/               # user skills
+  .codex/
+    auth.json             # seeded from host on first use
+    config.toml           # minimal file config, xhigh reasoning
 ```
 
 `ensureStorage()` seeds `SANDBOX_HOST_HOME/.claude/.credentials.json` from
 `ADMIN_USER_HOME/.claude/.credentials.json` when the sandbox file is absent.
-The copy is atomic, mode `0600`, and chowned to the sandbox UID/GID. An existing
-sandbox credential is never overwritten. If host credentials are missing or
-invalid, sandbox creation continues but Claude reports an authentication error.
+It likewise seeds `SANDBOX_HOST_HOME/.codex/auth.json` from
+`ADMIN_USER_HOME/.codex/auth.json`. Copies are atomic, mode `0600`, and chowned
+to the sandbox UID/GID. Existing sandbox credentials are never overwritten so
+each CLI can refresh its tokens in place. If host credentials are missing or
+invalid, sandbox creation continues but the corresponding agent reports an
+authentication error.
 
 ### Background tasks
 
-`spawnWithTimeout` (`src/claude.js`) waits for Claude Code to exit naturally.
+`spawnWithTimeout` (`src/claude.js`) waits for the active CLI to exit naturally.
 After 20 minutes, the process is killed and the user receives a timeout error;
 partial output is not recovered. The channel session remains resumable.
 
@@ -225,14 +234,16 @@ bash scripts/rebuild-sandbox.sh
 
 ## Codex CLI usage
 
-- Optional host-only integration, detected at startup from `CODEX_BIN` (default `codex`)
-- `codex exec --yolo --skip-git-repo-check --json -` for a new conversation
-- `codex exec resume --yolo --skip-git-repo-check --json <uuid> -` for subsequent prompts
+- Optional host integration, detected at startup from `CODEX_BIN` (default `codex`); the sandbox image installs `@openai/codex`
+- `codex exec --yolo --skip-git-repo-check --json -c model_reasoning_effort="xhigh" -` for a new conversation
+- `codex exec resume --yolo --skip-git-repo-check --json -c model_reasoning_effort="xhigh" <uuid> -` for subsequent prompts
 - Prompts are passed through stdin; progress is not relayed to Discord
 - `thread.started.thread_id` supplies the session UUID and the last completed `agent_message` supplies the response
 - The shared Discord prompt is injected through the `developer_instructions` config override
-- Codex model selection and authentication remain owned by the Codex CLI configuration
-- Codex is intentionally unsupported in the Docker sandbox and in `/remote`
+- Codex model selection and authentication remain owned by the Codex CLI configuration; reasoning effort is forced to `xhigh`
+- Sandbox execution uses `/home/claude` as cwd and `/home/claude/.codex` as `CODEX_HOME`
+- `/upgrade` updates the sandbox Codex package with `npm install -g @openai/codex@latest`
+- Codex remains unsupported in `/remote`
 
 ## Scheduled jobs
 
@@ -306,7 +317,7 @@ bash scripts/rebuild-sandbox.sh
 - Asymmetric continuity: `--resume` makes `claude --bg` copy the existing Discord conversation into the bg session's JSONL, so the mobile user picks up where Discord left off. But `--bg` manages its own UUID and we don't reconcile back — `setRemoteId` wipes the channel's `sessionId`, so the next Discord message after `/remote` stop starts a fresh session. Going Discord → mobile keeps history; coming back Discord → fresh.
 - Naming: the mobile app shows each session under `<channelName>` (DM = username), so multiple channels can run in parallel and stay discoverable.
 - Gating (`src/commands.js`): while `remoteId` is set, only `/remote`, `/status`, `/help` are accepted in that channel. Every other input (plain text, `!shell`, other slash commands) returns an invalidation hint and does **not** spawn `claude -p` — this prevents two concurrent processes touching the same session. Voice messages are also dropped *before* Groq STT (`src/index.js`), so a vocal in remote mode neither pays for transcription nor leaks the `🎙️ <transcript>` echo.
-- Cross-channel sandbox lockout: while *any* channel holds a sandbox remote, every other sandbox prompt / `!shell` / scheduled job is refused (`hasActiveSandboxRemote()` check in `executor.js`, `commands.js`, `scheduler.js`). Reason: `killClaudeInContainer` pkills every non-init PID in the container on timeout, which would scoop up the live remote daemon. Admin channels are unaffected.
+- Cross-channel sandbox lockout: while *any* channel holds a sandbox remote, every other sandbox prompt / `!shell` / scheduled job is refused (`hasActiveSandboxRemote()` check in `executor.js`, `commands.js`, `scheduler.js`). Reason: `killAgentProcessesInContainer` pkills every non-init PID in the container on timeout, which would scoop up the live remote daemon. Admin channels are unaffected.
 - Stop: `/remote` while active runs `claude stop <agentId>` (host or container), then deletes `~/.claude/jobs/<agentId>/` so the agent stops showing up in `claude agents` as a stopped session (`claude stop` keeps the conversation around by design). Strict 8-hex guard on the agentId before any `rm -rf`. Finally clears `remoteId` and calls `scheduler.reloadJobs()` — Claude may have edited the jobs files during the mobile session, and we did not go through the executor path that normally triggers a reload.
 - Startup reconciliation: `reconcileRemotes()` runs after `sessions.load()` and best-effort-stops every persisted `remoteId` (also doing the jobs/ cleanup). After a machine reboot the daemon is gone and the stop fails harmlessly; the channel reverts to Discord mode either way.
 - Sandbox prerequisite: the in-container claude daemon needs valid credentials, seeded from the host on first use. Without them the mobile app won't see the session.

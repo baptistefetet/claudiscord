@@ -48,7 +48,6 @@ const SANDBOX_FILES_DIR = path.posix.join(SANDBOX_USER_HOME, STATE_DIR, 'files')
 
 const CONTAINER_NAME = 'claudiscord-sandbox';
 const DOCKER_IMAGE = 'claudiscord-sandbox';
-const CONTAINER_MEMORY = '512m';
 const CONTAINER_CPUS = 1;
 
 const PROMPT_TIMEOUT_MS = 1_200_000; // 20 min — laisse la place aux gros prompts de dev
@@ -66,6 +65,7 @@ const CHANNEL_DEFAULT_MODEL = 'sonnet';
 const EFFORT_BY_MODEL = { opus: 'xhigh', sonnet: 'high' };
 const VALID_AGENTS = ['claude', 'codex'];
 const CHANNEL_DEFAULT_AGENT = 'claude';
+const CODEX_REASONING_EFFORT = 'xhigh';
 
 module.exports = {
 	AUTHORIZED_USER_ID,
@@ -93,7 +93,6 @@ module.exports = {
 	DISCORD_MAX_MSG_LENGTH,
 	TYPING_INTERVAL_MS,
 	DOCKER_IMAGE,
-	CONTAINER_MEMORY,
 	CONTAINER_CPUS,
 	ALLOWED_TOOLS,
 	DISALLOWED_TOOLS,
@@ -102,6 +101,7 @@ module.exports = {
 	EFFORT_BY_MODEL,
 	VALID_AGENTS,
 	CHANNEL_DEFAULT_AGENT,
+	CODEX_REASONING_EFFORT,
 	DOCKER_CMD_TIMEOUT,
 	UPGRADE_TIMEOUT_MS,
 };

@@ -1,9 +1,20 @@
 const { spawn, execFileSync, execFile } = require('child_process');
 const { promisify } = require('util');
 const execFileAsync = promisify(execFile);
-const { UPGRADE_TIMEOUT_MS, SHELL_TIMEOUT_MS, DISCORD_MAX_MSG_LENGTH, CONTAINER_NAME, ADMIN_USER_HOME } = require('./config');
+const {
+	UPGRADE_TIMEOUT_MS,
+	SHELL_TIMEOUT_MS,
+	DISCORD_MAX_MSG_LENGTH,
+	CONTAINER_NAME,
+	ADMIN_USER_HOME,
+	CODEX_REASONING_EFFORT,
+} = require('./config');
 const sessions = require('./sessions');
-const { ensureContainer, DOCKER_AVAILABLE } = require('./container');
+const {
+	ensureContainer,
+	DOCKER_AVAILABLE,
+	isCodexAvailableInContainer,
+} = require('./container');
 const { CODEX_AVAILABLE } = require('./codex');
 const { runQueued, isBusy } = require('./queue');
 const { startRemote, stopRemote } = require('./remote');
@@ -166,12 +177,12 @@ async function handleCommand(message) {
 \`/sandbox\` — Switch this channel to sandbox mode (container)
 \`/opus\` — Use Claude Opus for this channel
 \`/sonnet\` — Use Claude Sonnet for this channel
-\`/codex\` — Use Codex for this channel (admin mode only)
+\`/codex\` — Use Codex for this channel
 \`/remote\` — Toggle this channel between Discord mode and remote mode (Claude mobile app)
 \`!<command>\` — Execute a shell command (host if admin, container if sandbox)`;
 		if (mode === 'sandbox') {
 			help += `
-\`/upgrade\` — Update sandbox container (apt + Claude Code)`;
+\`/upgrade\` — Update sandbox container (apt + Claude Code + Codex)`;
 		}
 		if (mode === 'admin') {
 			help += `
@@ -208,10 +219,8 @@ async function handleCommand(message) {
 			return true;
 		}
 		sessions.setMode(channelId, 'sandbox');
-		if (agent === 'codex') sessions.setAgent(channelId, 'claude');
-		else sessions.clearChannel(channelId);
-		const agentNote = agent === 'codex' ? ' Agent switched back to **claude**.' : '';
-		await channel.send(`Channel switched to **sandbox** mode.${agentNote} Session reset.`);
+		sessions.clearChannel(channelId);
+		await channel.send('Channel switched to **sandbox** mode. Session reset.');
 		return true;
 	}
 
@@ -279,8 +288,12 @@ async function handleCommand(message) {
 		const dockerNote = DOCKER_AVAILABLE ? '' : '\nSandbox unavailable on this host.';
 		const remoteLine = remoteId ? `\nRemote: \`${remoteId}\`` : '';
 		const modelLine = agent === 'claude' ? `\nModel: **${model}**` : '';
-		const codexLine = CODEX_AVAILABLE ? '' : '\nCodex unavailable on this host.';
-		await channel.send(`Channel mode: **${mode}**\nAgent: **${agent}**${modelLine}${remoteLine}${dockerNote}${codexLine}`);
+		const reasoningLine = agent === 'codex' ? `\nReasoning: **${CODEX_REASONING_EFFORT}**` : '';
+		const codexAvailable = mode === 'admin'
+			? CODEX_AVAILABLE
+			: isCodexAvailableInContainer();
+		const codexLine = codexAvailable ? '' : `\nCodex unavailable in **${mode}** mode.`;
+		await channel.send(`Channel mode: **${mode}**\nAgent: **${agent}**${modelLine}${reasoningLine}${remoteLine}${dockerNote}${codexLine}`);
 		return true;
 	}
 
@@ -301,12 +314,11 @@ async function handleCommand(message) {
 	}
 
 	if (content === '/codex') {
-		if (mode !== 'admin') {
-			await channel.send('`/codex` is only available in admin mode. Use `/admin` first.');
-			return true;
-		}
-		if (!CODEX_AVAILABLE) {
-			await channel.send('Codex is not installed or not available on this host.');
+		const codexAvailable = mode === 'admin'
+			? CODEX_AVAILABLE
+			: (DOCKER_AVAILABLE && isCodexAvailableInContainer());
+		if (!codexAvailable) {
+			await channel.send(`Codex is not installed or not available in **${mode}** mode.`);
 			return true;
 		}
 		if (agent === 'codex') {
@@ -314,7 +326,7 @@ async function handleCommand(message) {
 			return true;
 		}
 		sessions.setAgent(channelId, 'codex');
-		await channel.send('Channel switched to **codex**. Session reset.');
+		await channel.send(`Channel switched to **codex** with **${CODEX_REASONING_EFFORT}** reasoning. Session reset.`);
 		return true;
 	}
 
@@ -366,11 +378,25 @@ async function handleCommand(message) {
 					'exec', '-u', 'root', CONTAINER_NAME, 'bash', '-c',
 					'cp /home/claude/.local/share/claude/versions/$(ls -t /home/claude/.local/share/claude/versions/ | head -1) /usr/local/bin/claude && chmod 755 /usr/local/bin/claude',
 				], { encoding: 'utf8', timeout: 10000 });
-				let version = '';
+				await channel.send('Updating Codex...');
+				await execFileAsync('docker', [
+					'exec', '-u', 'root', CONTAINER_NAME,
+					'npm', 'install', '-g', '--prefix', '/usr/local',
+					'@openai/codex@latest', '--no-fund', '--no-audit',
+				], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
+				let claudeVersion = '';
+				let codexVersion = '';
 				try {
-					version = (await execFileAsync('docker', ['exec', CONTAINER_NAME, 'claude', '--version'], { encoding: 'utf8', timeout: 10000 })).stdout.trim();
+					claudeVersion = (await execFileAsync('docker', ['exec', CONTAINER_NAME, 'claude', '--version'], { encoding: 'utf8', timeout: 10000 })).stdout.trim();
 				} catch {}
-				await channel.send(`Container updated.${version ? `\nVersion: \`${version}\`` : ''}`);
+				try {
+					codexVersion = (await execFileAsync('docker', ['exec', CONTAINER_NAME, 'codex', '--version'], { encoding: 'utf8', timeout: 10000 })).stdout.trim();
+				} catch {}
+				const versions = [
+					claudeVersion ? `Claude: \`${claudeVersion}\`` : null,
+					codexVersion ? `Codex: \`${codexVersion}\`` : null,
+				].filter(Boolean);
+				await channel.send(`Container updated.${versions.length ? `\n${versions.join('\n')}` : ''}`);
 			} catch (err) {
 				log.error('Upgrade error:', err.message);
 				await channel.send(`Upgrade error: ${err.message.slice(0, 300)}`);

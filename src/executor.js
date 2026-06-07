@@ -1,6 +1,6 @@
 const { executeClaudeCommand } = require('./claude');
 const { executeCodexCommand } = require('./codex');
-const { executeInContainer } = require('./container');
+const { executeInContainer, executeCodexInContainer } = require('./container');
 const { runQueued } = require('./queue');
 const sessions = require('./sessions');
 
@@ -16,7 +16,7 @@ const sessions = require('./sessions');
 function executePrompt(agent, mode, prompt, options = {}) {
 	const { channelId, ...rest } = options;
 	// Refuse sandbox executions while another channel holds a sandbox remote:
-	// a timeout here triggers `killClaudeInContainer`, which
+	// a timeout here triggers `killAgentProcessesInContainer`, which
 	// pkills every non-init PID in the container and would take the live
 	// remote daemon with it. The channel hosting the remote is already gated
 	// inside `handleCommand`, so this only blocks *other* sandbox traffic.
@@ -45,12 +45,9 @@ function executePrompt(agent, mode, prompt, options = {}) {
 		try {
 			let result;
 			if (agent === 'codex') {
-				if (mode !== 'admin') {
-					throw Object.assign(new Error('CODEX_ADMIN_ONLY'), {
-						code: 'CODEX_ADMIN_ONLY',
-					});
-				}
-				result = await executeCodexCommand(prompt, opts);
+				if (mode === 'admin') result = await executeCodexCommand(prompt, opts);
+				else if (mode === 'sandbox') result = await executeCodexInContainer(prompt, opts);
+				else throw new Error(`Unknown execution mode: ${mode}`);
 			} else if (agent === 'claude') {
 				if (mode === 'admin') result = await executeClaudeCommand(prompt, opts);
 				else if (mode === 'sandbox') result = await executeInContainer(prompt, opts);

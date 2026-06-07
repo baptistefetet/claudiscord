@@ -12,6 +12,7 @@ RUN curl -fsSL https://claude.ai/install.sh | bash \
     && cp /root/.local/share/claude/versions/$(ls -t /root/.local/share/claude/versions/ | head -1) /usr/local/bin/claude \
     && chmod 755 /usr/local/bin/claude \
     && rm -rf /root/.local/share/claude /root/.local/bin/claude
+RUN npm install -g @openai/codex@latest --no-fund --no-audit
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
     && cp /root/.local/bin/uv /usr/local/bin/uv \
     && cp /root/.local/bin/uvx /usr/local/bin/uvx \

@@ -7,9 +7,9 @@ Works in both DMs and private guild channels. Each channel is an independent con
 ## Features
 
 - **Per-channel conversations** — each Discord channel (DM included) keeps its own active-agent session
-- **Per-channel agent** — use Claude Code by default, or switch an admin channel to Codex with `/codex`
+- **Per-channel agent** — use Claude Code by default, or switch any channel to Codex with `/codex`
 - **Channel topic = mini CLAUDE.md** — renaming or rewriting the topic immediately changes the agent's context
-- **Two execution modes per channel** — `admin` runs the selected agent on the host, `sandbox` runs Claude in the Docker container
+- **Two execution modes per channel** — `admin` runs the selected agent on the host, `sandbox` runs it in the Docker container
 - **Per-channel Claude model** — pick `opus` or `sonnet` per channel with `/opus` / `/sonnet` (default `sonnet`); scheduled jobs snapshot the channel's agent and model at scheduling time
 - **Global queue** — one agent prompt at a time across every channel and scheduled job (keeps jobs files race-free)
 - **Single-user authorization** — only the Discord user whose ID is in `AUTHORIZED_USER_ID` can talk to the bot; everyone else is silently dropped
@@ -113,7 +113,8 @@ mode still works.
 - Invite the bot to any guild channel you want (private or not — the bot only talks back to the authorized user anyway).
 - Set the channel's **topic** to whatever you want the agent to keep in mind for this conversation — it's injected into the system prompt alongside the channel name.
 - The first message in a new channel defaults to **admin** mode. Switch with `/sandbox` if you'd rather keep that channel to a containerized workspace.
-- Claude Code is the default agent. `/codex` selects Codex for an admin channel; `/opus` or `/sonnet` selects Claude again.
+- Claude Code is the default agent. `/codex` selects Codex in either mode; `/opus` or `/sonnet` selects Claude again.
+- Codex reasoning effort is forced to `xhigh` for host and sandbox executions.
 
 ## File uploads
 
@@ -140,26 +141,32 @@ next message and the active agent reads them from disk.
 | `/sandbox` | Switch the current channel to sandbox mode (container) |
 | `/opus` | Use Claude Opus for this channel |
 | `/sonnet` | Use Claude Sonnet for this channel (default) |
-| `/codex` | Use Codex for this channel (admin mode only; optional) |
-| `/upgrade` | Sandbox only — update the container (apt + Claude Code) |
+| `/codex` | Use Codex for this channel |
+| `/upgrade` | Sandbox only — update the container (apt + Claude Code + Codex) |
 | `/restart` | Admin only — restart the claudiscord service |
 | `!<command>` | Run a shell command (host if the channel is admin, container if sandbox) |
 
 ## Sandbox authentication
 
-When sandbox storage is initialized, Claudiscord copies the host credentials
-from `~/.claude/.credentials.json` to
-`SANDBOX_HOME/.claude/.credentials.json`. Existing sandbox credentials are
-never overwritten, so token updates made inside the sandbox are preserved.
+When sandbox storage is initialized, Claudiscord copies the host credentials:
+
+- `~/.claude/.credentials.json` to `SANDBOX_HOME/.claude/.credentials.json`
+- `~/.codex/auth.json` to `SANDBOX_HOME/.codex/auth.json`
+
+Existing sandbox credentials are never overwritten, so token updates made
+inside the sandbox are preserved. Both files contain secrets and are written
+with mode `0600`.
 
 Authenticate Claude Code on the host before first use:
 
 ```
 claude auth login
+codex login
 ```
 
 If host credentials are missing or invalid, sandbox initialization continues
-but Claude reports an authentication error until the host is authenticated.
+but the corresponding agent reports an authentication error until the host is
+authenticated and the missing sandbox credential can be seeded.
 
 ## Configuration
 

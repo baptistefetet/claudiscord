@@ -162,9 +162,11 @@ client.on(Events.MessageCreate, async message => {
 		} else if (err.code === 'SANDBOX_REMOTE_ACTIVE') {
 			errMsg = '\u{1F6F0}️ A sandbox `/remote` session is active on another channel — sandbox prompts are paused until it stops.';
 		} else if (err.code === 'CODEX_NOT_AVAILABLE') {
-			errMsg = 'Codex is not installed or no longer available on this host.';
-		} else if (err.code === 'CODEX_ADMIN_ONLY') {
-			errMsg = 'Codex is only available in admin mode. Use `/admin` first.';
+			errMsg = `Codex is not installed or no longer available in **${mode}** mode.`;
+		} else if (err.code === 'CODEX_NOT_AUTHENTICATED') {
+			errMsg = mode === 'sandbox'
+				? 'Sandbox Codex authentication failed. Remove `~/.codex/auth.json` in the sandbox to copy fresh host credentials on the next run.'
+				: 'Codex authentication failed. Run `codex login` on the host.';
 		} else if (err.code === 'CHANNEL_CONTEXT_CHANGED') {
 			errMsg = 'Channel mode or agent changed while this message was waiting. Send it again.';
 		} else if (err.message === 'NOT_AUTHENTICATED') {

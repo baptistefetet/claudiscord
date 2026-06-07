@@ -84,8 +84,8 @@ async function executeJob(job) {
 	const { id, prompt, channelId, notify, notifyPattern } = job;
 	const key = jobKey(job);
 
-	// While a sandbox remote is live we cannot run another sandbox claude:
-	// `killClaudeInContainer` on timeout would also kill the remote
+	// While a sandbox remote is live we cannot run another sandbox agent:
+	// `killAgentProcessesInContainer` on timeout would also kill the remote
 	// daemon. Skip silently — the next cron tick will pick it back up.
 	if (job.mode === 'sandbox' && sessions.hasActiveSandboxRemote()) {
 		log.warn(`Job '${key}' skipped (sandbox remote active)`);

@@ -53,7 +53,7 @@ function load() {
 				const remoteId = typeof entry.remoteId === 'string' ? entry.remoteId : null;
 				let agent = VALID_AGENTS.includes(entry.agent) ? entry.agent : CHANNEL_DEFAULT_AGENT;
 				let sessionId = typeof entry.sessionId === 'string' ? entry.sessionId : null;
-				if (mode === 'sandbox' || remoteId) agent = 'claude';
+				if (remoteId) agent = 'claude';
 				// Legacy entries preallocated Claude UUIDs before spawn. A false
 				// bit means that UUID may never have been created on disk.
 				if (entry.sessionStarted === false) sessionId = null;
@@ -203,8 +203,8 @@ function listRemoteChannels() {
 
 /**
  * True when any channel currently has a sandbox-mode remote. Used to refuse
- * other sandbox claude executions (prompts, !shell, scheduled jobs) — those
- * would route through `killClaudeInContainer` on timeout, which
+ * other sandbox agent executions (prompts, !shell, scheduled jobs) — those
+ * would route through `killAgentProcessesInContainer` on timeout, which
  * pkills every non-essential PID in the container and would take the live
  * remote daemon with it.
  */

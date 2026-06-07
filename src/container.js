@@ -9,12 +9,12 @@ const {
 	JOBS_FILENAME,
 	CONTAINER_NAME,
 	DOCKER_IMAGE,
-	CONTAINER_MEMORY,
 	CONTAINER_CPUS,
 	PROMPT_TIMEOUT_MS,
 	DOCKER_CMD_TIMEOUT,
 	ALLOWED_TOOLS,
 	DISALLOWED_TOOLS,
+	CODEX_REASONING_EFFORT,
 } = require('./config');
 const { getDefaultClaudeMd } = require('./prompts');
 const {
@@ -23,9 +23,17 @@ const {
 	extractClaudeSessionId,
 	parseClaudeOutput,
 } = require('./claude');
+const {
+	buildCodexArgs,
+	parseCodexOutput,
+	isCodexAuthError,
+} = require('./codex');
 const log = require('./logger');
 
 const DOCKERFILE_DIR = path.resolve(__dirname, '..');
+const SANDBOX_CODEX_CONFIG = `cli_auth_credentials_store = "file"
+model_reasoning_effort = "${CODEX_REASONING_EFFORT}"
+`;
 
 // UID/GID of the 'claude' user inside the container. By convention the
 // container is built (via scripts/rebuild-sandbox.sh) with IDs that match
@@ -109,6 +117,19 @@ function writeSandboxCredentials(credentialsJson) {
 	}
 }
 
+function writeSandboxCodexAuth(authJson) {
+	const authPath = path.join(SANDBOX_HOST_HOME, '.codex', 'auth.json');
+	const tmp = `${authPath}.${process.pid}.${Date.now()}.tmp`;
+	try {
+		fs.writeFileSync(tmp, authJson, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+		fs.renameSync(tmp, authPath);
+		fs.chmodSync(authPath, 0o600);
+		execFileSync('chown', [`${SANDBOX_UID}:${SANDBOX_GID}`, authPath], { timeout: 5000 });
+	} finally {
+		fs.rmSync(tmp, { force: true });
+	}
+}
+
 function seedCredentialsFromHost() {
 	const sandboxCredPath = path.join(SANDBOX_HOST_HOME, '.claude', '.credentials.json');
 	if (fs.existsSync(sandboxCredPath)) return false;
@@ -134,6 +155,33 @@ function seedCredentialsFromHost() {
 	return true;
 }
 
+function seedCodexCredentialsFromHost() {
+	const sandboxAuthPath = path.join(SANDBOX_HOST_HOME, '.codex', 'auth.json');
+	if (fs.existsSync(sandboxAuthPath)) return false;
+
+	const hostAuthPath = path.join(ADMIN_USER_HOME, '.codex', 'auth.json');
+	let authJson;
+	try {
+		authJson = fs.readFileSync(hostAuthPath, 'utf8');
+		const parsed = JSON.parse(authJson);
+		const hasApiKey = typeof parsed.OPENAI_API_KEY === 'string' && parsed.OPENAI_API_KEY;
+		const hasAccessToken = typeof parsed.tokens?.access_token === 'string' && parsed.tokens.access_token;
+		if (!hasApiKey && !hasAccessToken) {
+			log.warn(`Host Codex credentials at ${hostAuthPath} contain no usable credential`);
+			return false;
+		}
+	} catch (err) {
+		if (err.code !== 'ENOENT') {
+			log.warn(`Could not read host Codex credentials at ${hostAuthPath}: ${err.message}`);
+		}
+		return false;
+	}
+
+	writeSandboxCodexAuth(authJson);
+	log.info('Seeded sandbox Codex credentials from host');
+	return true;
+}
+
 function ensureStorage() {
 	const home = SANDBOX_HOST_HOME;
 	const isNew = !fs.existsSync(home);
@@ -155,6 +203,16 @@ function ensureStorage() {
 	fs.mkdirSync(claudeDir, { recursive: true });
 	if (claudeDirIsNew) chownContainerUser(claudeDir);
 
+	const codexDir = path.join(home, '.codex');
+	const codexDirIsNew = !fs.existsSync(codexDir);
+	fs.mkdirSync(codexDir, { recursive: true });
+	if (codexDirIsNew) chownContainerUser(codexDir);
+	const codexConfig = path.join(codexDir, 'config.toml');
+	if (!fs.existsSync(codexConfig)) {
+		fs.writeFileSync(codexConfig, SANDBOX_CODEX_CONFIG, { encoding: 'utf8', mode: 0o600 });
+		chownContainerUser(codexConfig);
+	}
+
 	const claudiscordDir = path.join(home, STATE_DIR);
 	const claudiscordDirIsNew = !fs.existsSync(claudiscordDir);
 	fs.mkdirSync(claudiscordDir, { recursive: true });
@@ -166,6 +224,7 @@ function ensureStorage() {
 	}
 
 	seedCredentialsFromHost();
+	seedCodexCredentialsFromHost();
 }
 
 function ensureContainer() {
@@ -188,7 +247,6 @@ function ensureContainer() {
 		'create',
 		'--name', CONTAINER_NAME,
 		'--init',
-		'--memory', CONTAINER_MEMORY,
 		'--cpus', String(CONTAINER_CPUS),
 		'--restart', 'unless-stopped',
 		'-e', 'TZ=Europe/Paris',
@@ -204,7 +262,7 @@ function ensureContainer() {
  * Killing docker exec only kills the host-side pipe, not the container process.
  * With --init, PID 1 is tini; we also spare the 'sleep' process that keeps the container alive.
  */
-function killClaudeInContainer(label) {
+function killAgentProcessesInContainer(label) {
 	try {
 		execFileSync('docker', ['exec', CONTAINER_NAME, 'sh', '-c',
 			'for proc in /proc/[0-9]*; do pid=${proc#/proc/}; [ "$pid" = 1 ] && continue; [ "$pid" = "$$" ] && continue; comm=$(cat "$proc/comm" 2>/dev/null || true); [ "$comm" = "sleep" ] && continue; kill -9 "$pid" 2>/dev/null || true; done; true',
@@ -227,8 +285,8 @@ async function executeClaudeInContainer(prompt, claudeOptions, {
 		);
 	} catch (err) {
 		if (err.code === 124) {
-			// Timeout: docker exec was killed but claude may still run inside the container
-			killClaudeInContainer(label);
+			// Timeout: docker exec was killed but the agent may still run inside the container
+			killAgentProcessesInContainer(label);
 		}
 		throw err;
 	}
@@ -295,6 +353,93 @@ async function executeInContainer(prompt, {
 	return parseClaudeOutput(result.stdout, outputFormat, label);
 }
 
+function isCodexAvailableInContainer() {
+	if (!DOCKER_AVAILABLE) return false;
+	try {
+		ensureContainer();
+		execFileSync('docker', [
+			'exec',
+			'-e', `CODEX_HOME=${path.posix.join(SANDBOX_USER_HOME, '.codex')}`,
+			CONTAINER_NAME,
+			'codex',
+			'--version',
+		], { stdio: 'ignore', timeout: 10000 });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+async function executeCodexInContainer(prompt, {
+		sessionId = null,
+		systemPrompt = null,
+		timeoutMs = PROMPT_TIMEOUT_MS,
+	} = {}) {
+	ensureContainer();
+	if (!systemPrompt) {
+		throw new Error('executeCodexInContainer requires systemPrompt');
+	}
+
+	const label = `Codex container [${CONTAINER_NAME}]`;
+	const attach = sessionId ? `resume ${sessionId}` : 'new session';
+	log.info(`${label}: ${attach}, prompt length: ${prompt.length}`);
+
+	let execution;
+	try {
+		execution = await spawnWithTimeout(
+			'docker',
+			[
+				'exec',
+				'-i',
+				'-e', `CODEX_HOME=${path.posix.join(SANDBOX_USER_HOME, '.codex')}`,
+				'-w', SANDBOX_USER_HOME,
+				CONTAINER_NAME,
+				'codex',
+				...buildCodexArgs({ sessionId, systemPrompt }),
+			],
+			{
+				timeoutMs,
+				label,
+				input: prompt,
+			},
+		);
+	} catch (err) {
+		err.sessionId = parseCodexOutput(err.stdout).sessionId;
+		if (err.code === 124) killAgentProcessesInContainer(label);
+		throw err;
+	}
+
+	const parsed = parseCodexOutput(execution.stdout);
+	if (execution.code !== 0) {
+		const unavailable = execution.stderr.includes('executable file not found')
+			|| execution.stderr.includes('codex: not found');
+		if (unavailable) {
+			throw Object.assign(new Error('CODEX_NOT_AVAILABLE'), {
+				code: 'CODEX_NOT_AVAILABLE',
+				sessionId: parsed.sessionId,
+			});
+		}
+		if (isCodexAuthError(execution.stdout, execution.stderr)) {
+			throw Object.assign(new Error('CODEX_NOT_AUTHENTICATED'), {
+				code: 'CODEX_NOT_AUTHENTICATED',
+				sessionId: parsed.sessionId,
+			});
+		}
+		const errMsg = execution.stderr.slice(-500)
+			|| execution.stdout.slice(-500)
+			|| `exit code ${execution.code}`;
+		throw Object.assign(new Error(errMsg), {
+			code: execution.code,
+			sessionId: parsed.sessionId,
+		});
+	}
+	if (!parsed.sessionId) {
+		log.warn(`${label}: no thread.started event in JSON output`);
+	}
+
+	return parsed;
+}
+
 /**
  * Write an uploaded file into the sandbox volume's .claudiscord/files dir, then
  * chown it to the container's `claude` user so the non-root process can read it
@@ -315,5 +460,7 @@ module.exports = {
 	ensureImage,
 	ensureContainer,
 	executeInContainer,
+	isCodexAvailableInContainer,
+	executeCodexInContainer,
 	writeSandboxUpload,
 };

@@ -1,6 +1,7 @@
 const { execFileSync } = require('child_process');
 const {
 	CODEX_BIN,
+	CODEX_REASONING_EFFORT,
 	PROMPT_TIMEOUT_MS,
 	ADMIN_USER_HOME,
 } = require('./config');
@@ -28,6 +29,8 @@ function buildCodexArgs(options = {}) {
 		'--yolo',
 		'--skip-git-repo-check',
 		'--json',
+		'-c',
+		`model_reasoning_effort=${JSON.stringify(CODEX_REASONING_EFFORT)}`,
 	];
 	if (systemPrompt) {
 		executionArgs.push(
@@ -70,6 +73,14 @@ function parseCodexOutput(stdout) {
 	}
 
 	return { result, sessionId };
+}
+
+function isCodexAuthError(stdout = '', stderr = '') {
+	const output = `${stderr}\n${stdout}`.toLowerCase();
+	return output.includes('not logged in')
+		|| output.includes('login required')
+		|| output.includes('authentication required')
+		|| output.includes('please run codex login');
 }
 
 async function executeCodexCommand(prompt, options = {}) {
@@ -115,6 +126,12 @@ async function executeCodexCommand(prompt, options = {}) {
 
 	const parsed = parseCodexOutput(execution.stdout);
 	if (execution.code !== 0) {
+		if (isCodexAuthError(execution.stdout, execution.stderr)) {
+			throw Object.assign(new Error('CODEX_NOT_AUTHENTICATED'), {
+				code: 'CODEX_NOT_AUTHENTICATED',
+				sessionId: parsed.sessionId,
+			});
+		}
 		const errMsg = execution.stderr.slice(-500)
 			|| execution.stdout.slice(-500)
 			|| `exit code ${execution.code}`;
@@ -134,5 +151,6 @@ module.exports = {
 	CODEX_AVAILABLE,
 	buildCodexArgs,
 	parseCodexOutput,
+	isCodexAuthError,
 	executeCodexCommand,
 };
