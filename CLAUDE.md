@@ -57,8 +57,6 @@ src/
   uploads.js          # Save Discord file/photo attachments to .claudiscord/files
 scripts/
   rebuild-sandbox.sh  # Rebuild Docker sandbox image
-test/
-  codex.test.js       # Codex args, JSONL parsing and auth-error tests
 .env                  # AUTHORIZED_USER_ID, DISCORD_TOKEN, CLAUDE_BIN, CODEX_BIN, SANDBOX_HOME, GROQ_API_KEY
 ```
 
