@@ -56,4 +56,9 @@ echo "=== Pruning dangling images ==="
 docker image prune -f
 
 echo ""
+echo "=== Pruning build cache ==="
+# Builds always use --no-cache, so retained BuildKit cache only wastes disk.
+docker builder prune -af
+
+echo ""
 echo "Done. Containers will be recreated on next use."

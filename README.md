@@ -53,7 +53,8 @@ bash scripts/rebuild-sandbox.sh
 `rebuild-sandbox.sh` creates `SANDBOX_HOME` if needed and builds the
 image with the in-container `claude` user UID/GID matching the directory's
 owner, so bind-mounted files are read/write-able on both sides without
-manual chown setup.
+manual chown setup. After a successful rebuild, it removes dangling images
+and the unused Docker build cache.
 
 ## Systemd service
 
