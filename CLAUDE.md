@@ -222,7 +222,7 @@ bash scripts/rebuild-sandbox.sh
 
 ## Claude CLI usage
 
-- `claude -p` with `--output-format stream-json` for interactive messages, `text` for jobs
+- `claude -p` with `--output-format stream-json` for interactive messages, `json` for jobs (the `json` object carries `session_id`, recorded as the job's `lastSessionId`; `text` would not)
 - A first invocation omits session flags; Claude allocates an UUID and emits `session_id` in its JSON output. Subsequent invocations use `--resume <uuid>`.
 - `--dangerously-skip-permissions` in sandbox (the container IS the sandbox)
 - Model and effort follow the channel/job snapshot (`opus` → `xhigh`, `sonnet` → `high`)
@@ -262,6 +262,7 @@ bash scripts/rebuild-sandbox.sh
   "model": "sonnet",
   "created": "2026-02-21T10:00:00Z",
   "lastRun": null,
+  "lastSessionId": null,
   "description": "Daily health check at 7am"
 }
 ```
@@ -271,6 +272,7 @@ bash scripts/rebuild-sandbox.sh
 - `agent` is `"claude"` or `"codex"`. Snapshot of the channel's agent at scheduling time. Optional for backward compatibility — fallback is `"claude"`.
 - `model` is `"opus"` or `"sonnet"`. Snapshot of the channel's Claude model at scheduling time and ignored by Codex. Optional for backward compatibility — fallback is `"sonnet"`.
 - `remaining`: `0` = infinite, `>0` = decremented each run, job removed when it hits `0`.
+- `lastSessionId`: diagnostic-only. Scheduler writes the agent session UUID of the last run (set even on error/timeout via `err.sessionId`). Jobs always run with a fresh session (`sessionId: null`), so this is never resumed — it just locates the run's transcript on disk: Claude at `<home>/.claude/projects/<cwd-hash>/<uuid>.jsonl` (admin cwd `/root` → `-root`, sandbox `/home/claude` → `-home-claude`), Codex via `find <home>/.codex/sessions -name "*<uuid>*"`.
 - Unique key: `mode:id` (the mode is implicit from the file the job lives in).
 
 ### Storage
