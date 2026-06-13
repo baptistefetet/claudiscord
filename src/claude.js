@@ -28,7 +28,6 @@ function buildClaudeArgs(prompt, options = {}) {
 		disallowedTools = DISALLOWED_TOOLS,
 		model = null,
 		effort = null,
-		outputFormat = 'text',
 		extraArgs = [],
 	} = options;
 
@@ -41,8 +40,7 @@ function buildClaudeArgs(prompt, options = {}) {
 		args.push('--system-prompt', systemPrompt);
 	}
 
-	args.push('--output-format', outputFormat);
-	if (outputFormat === 'stream-json') args.push('--verbose');
+	args.push('--output-format', 'stream-json', '--verbose');
 	args.push('--allowedTools', allowedTools);
 	args.push('--disallowedTools', disallowedTools);
 	if (model) args.push('--model', model);
@@ -189,47 +187,31 @@ function collectStreamJsonText(stdout) {
 }
 
 /**
- * Parse Claude CLI output (stream-json or text).
+ * Parse Claude CLI stream-json output.
  */
-function parseClaudeOutput(stdout, outputFormat, label = 'Claude') {
-	if (outputFormat === 'stream-json') {
-		let resultEvent = null;
-		const lines = stdout.split('\n');
-		for (let i = lines.length - 1; i >= 0; i--) {
-			const trimmed = lines[i].trim();
-			if (!trimmed) continue;
-			try {
-				const event = JSON.parse(trimmed);
-				if (event.type === 'result') { resultEvent = event; break; }
-			} catch (_) {}
-		}
-		if (!resultEvent) {
-			log.warn(`${label}: no result event in stream-json output`);
-			return {
-				result: stdout.slice(-500),
-				sessionId: extractClaudeSessionId(stdout),
-			};
-		}
-		const allText = collectStreamJsonText(stdout);
+function parseClaudeOutput(stdout, label = 'Claude') {
+	let resultEvent = null;
+	const lines = stdout.split('\n');
+	for (let i = lines.length - 1; i >= 0; i--) {
+		const trimmed = lines[i].trim();
+		if (!trimmed) continue;
+		try {
+			const event = JSON.parse(trimmed);
+			if (event.type === 'result') { resultEvent = event; break; }
+		} catch (_) {}
+	}
+	if (!resultEvent) {
+		log.warn(`${label}: no result event in stream-json output`);
 		return {
-			result: allText || resultEvent.result || '',
+			result: stdout.slice(-500),
 			sessionId: extractClaudeSessionId(stdout),
 		};
 	}
-
-	if (outputFormat === 'json') {
-		try {
-			const event = JSON.parse(stdout);
-			return {
-				result: event.result || '',
-				sessionId: typeof event.session_id === 'string' ? event.session_id : null,
-			};
-		} catch {
-			log.warn(`${label}: invalid json output`);
-		}
-	}
-
-	return { result: stdout, sessionId: null };
+	const allText = collectStreamJsonText(stdout);
+	return {
+		result: allText || resultEvent.result || '',
+		sessionId: extractClaudeSessionId(stdout),
+	};
 }
 
 async function executeClaudeCommand(prompt, options = {}) {
@@ -240,7 +222,6 @@ async function executeClaudeCommand(prompt, options = {}) {
 		disallowedTools = DISALLOWED_TOOLS,
 		model = null,
 		effort = null,
-		outputFormat = 'text',
 		timeoutMs = PROMPT_TIMEOUT_MS,
 	} = options;
 
@@ -248,10 +229,10 @@ async function executeClaudeCommand(prompt, options = {}) {
 		throw new Error('executeClaudeCommand requires systemPrompt');
 	}
 
-	const spawnOpts = { sessionId, systemPrompt, allowedTools, disallowedTools, model, effort, outputFormat };
+	const spawnOpts = { sessionId, systemPrompt, allowedTools, disallowedTools, model, effort };
 
 	const attach = sessionId ? `resume ${sessionId}` : 'new session';
-	log.info(`Spawning claude: ${attach}, prompt length: ${prompt.length}, format: ${outputFormat}`);
+	log.info(`Spawning claude: ${attach}, prompt length: ${prompt.length}`);
 
 	let result;
 	try {
@@ -273,7 +254,7 @@ async function executeClaudeCommand(prompt, options = {}) {
 		});
 	}
 
-	return parseClaudeOutput(result.stdout, outputFormat, 'Claude');
+	return parseClaudeOutput(result.stdout, 'Claude');
 }
 
 module.exports = {

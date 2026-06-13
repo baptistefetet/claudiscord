@@ -128,7 +128,6 @@ client.on(Events.MessageCreate, async message => {
 		allowedTools: ALLOWED_TOOLS,
 		model,
 		effort: EFFORT_BY_MODEL[model],
-		outputFormat: 'stream-json',
 	};
 
 	// Surface the wait once per channel if another prompt is already running.

@@ -138,10 +138,6 @@ async function executeJob(job) {
 			allowedTools: ALLOWED_TOOLS,
 			model: jobModel,
 			effort: EFFORT_BY_MODEL[jobModel],
-			// 'json' (not 'text') so Claude emits session_id, captured into the
-			// job's lastSessionId for diagnostics. Same user-visible result text.
-			// Codex ignores this and always runs --json.
-			outputFormat: 'json',
 			timeoutMs: PROMPT_TIMEOUT_MS,
 		};
 		const { result: output, sessionId } = await executePrompt(jobAgent, job.mode, fullPrompt, jobOptions);

@@ -299,7 +299,6 @@ async function executeInContainer(prompt, {
 		disallowedTools = DISALLOWED_TOOLS,
 		model = null,
 		effort = null,
-		outputFormat = 'text',
 		timeoutMs = PROMPT_TIMEOUT_MS,
 	} = {}) {
 	ensureContainer();
@@ -310,7 +309,6 @@ async function executeInContainer(prompt, {
 		disallowedTools,
 		model,
 		effort,
-		outputFormat,
 		extraArgs: ['--dangerously-skip-permissions'],
 	};
 
@@ -350,7 +348,7 @@ async function executeInContainer(prompt, {
 		});
 	}
 
-	return parseClaudeOutput(result.stdout, outputFormat, label);
+	return parseClaudeOutput(result.stdout, label);
 }
 
 function isCodexAvailableInContainer() {
