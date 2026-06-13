@@ -89,7 +89,7 @@ function jobKey(job) {
  * matching file (admin or sandbox). If remaining reaches 0, removes the job.
  * Returns true if the job was removed.
  */
-function recordJobRun(job, { channelName = null } = {}) {
+function recordJobRun(job, { channelName = null, lastSessionId = null } = {}) {
 	const file = fileFor(job.mode);
 	const jobs = readJobsFile(file);
 	const idx = jobs.findIndex(j => j.id === job.id);
@@ -98,6 +98,12 @@ function recordJobRun(job, { channelName = null } = {}) {
 	jobs[idx].lastRun = new Date().toISOString();
 	if (channelName && jobs[idx].channelName !== channelName) {
 		jobs[idx].channelName = channelName;
+	}
+	// Diagnostic only: UUID of the agent session for this run (Claude/Codex
+	// transcript on disk). Jobs always start fresh, so this is never resumed
+	// automatically — it lets a later conversation inspect what happened.
+	if (lastSessionId) {
+		jobs[idx].lastSessionId = lastSessionId;
 	}
 
 	let removed = false;

@@ -128,6 +128,10 @@ Fields:
 {{/claude}}
 - created: ISO date
 - lastRun: null or ISO date, do not modify
+- lastSessionId: auto-managed, do not set or modify. The scheduler writes here the
+  agent session UUID of the job's last run (including failed/timed-out runs) so a later
+  conversation can inspect that run's transcript on disk to debug it. Jobs always start a
+  fresh session, so this is never resumed automatically.
 - description: free text description
 
 Remaining:

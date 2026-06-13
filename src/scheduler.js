@@ -110,6 +110,7 @@ async function executeJob(job) {
 	const fullPrompt = `Today's date: ${today}\n\n${prompt}`;
 	let resolvedChannelName = null;
 	let promptContext = null;
+	let lastSessionId = null;
 
 	try {
 		promptContext = await fetchJobPromptContext(channelId);
@@ -140,7 +141,8 @@ async function executeJob(job) {
 			outputFormat: 'text',
 			timeoutMs: PROMPT_TIMEOUT_MS,
 		};
-		const { result: output } = await executePrompt(jobAgent, job.mode, fullPrompt, jobOptions);
+		const { result: output, sessionId } = await executePrompt(jobAgent, job.mode, fullPrompt, jobOptions);
+		lastSessionId = sessionId || null;
 
 		log.info(`Job '${key}' completed (output: ${output.length} chars)`);
 
@@ -160,6 +162,7 @@ async function executeJob(job) {
 			await sendToChannel(channelId, `\u{1F4CB} **Job '${id}'**\n${output}`);
 		}
 	} catch (err) {
+		lastSessionId = err.sessionId || lastSessionId;
 		if (err.code === 124) {
 			log.error(`Job '${key}': TIMEOUT`);
 			if (notify && promptContext?.channelId) {
@@ -178,7 +181,7 @@ async function executeJob(job) {
 	} finally {
 		lastRunMinutes.set(key, nowMinute);
 		try {
-			recordJobRun(job, { channelName: resolvedChannelName });
+			recordJobRun(job, { channelName: resolvedChannelName, lastSessionId });
 		} catch (err) {
 			log.error(`Failed to update job '${key}':`, err.message);
 		}
