@@ -222,7 +222,7 @@ bash scripts/rebuild-sandbox.sh
 
 ## Claude CLI usage
 
-- `claude -p` with `--output-format stream-json` for interactive messages, `text` for jobs
+- `claude -p` with `--output-format stream-json` for interactive messages, `json` for jobs (the `json` object carries `session_id`, recorded as the job's `lastSessionId`; `text` would not)
 - A first invocation omits session flags; Claude allocates an UUID and emits `session_id` in its JSON output. Subsequent invocations use `--resume <uuid>`.
 - `--dangerously-skip-permissions` in sandbox (the container IS the sandbox)
 - Model and effort follow the channel/job snapshot (`opus` → `xhigh`, `sonnet` → `high`)
