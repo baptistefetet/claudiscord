@@ -138,6 +138,7 @@ next message and the active agent reads them from disk.
 | `/help` | Show available commands |
 | `/clear` | Reset the active agent session of the current channel |
 | `/status` | Show the channel's mode, agent and runtime status |
+| `/jobs` | List all scheduled jobs (admin first, then sandbox) |
 | `/admin` | Switch the current channel to admin mode (host) |
 | `/sandbox` | Switch the current channel to sandbox mode (container) |
 | `/opus` | Use Claude Opus for this channel |

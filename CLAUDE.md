@@ -51,7 +51,7 @@ src/
   jobs-store.js       # loadAllJobs (admin+sandbox), recordJobRun, jobKey
   sessions.js         # { channels: { channelId -> { mode, agent, sessionId, ... } } }
   scheduler.js        # node-cron, reloadJobs, executeJob, per-key lock
-  commands.js         # /help /clear /status /admin /sandbox /opus /sonnet /codex /remote /upgrade /restart !shell
+  commands.js         # /help /clear /status /jobs /admin /sandbox /opus /sonnet /codex /remote /upgrade /restart !shell
   remote.js           # /remote helpers: startRemote, stopRemote, reconcileRemotes
   stt.js              # Groq Whisper transcription for Discord voice messages
   uploads.js          # Save Discord file/photo attachments to .claudiscord/files

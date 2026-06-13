@@ -18,7 +18,8 @@ const {
 const { CODEX_AVAILABLE } = require('./codex');
 const { runQueued, isBusy } = require('./queue');
 const { startRemote, stopRemote } = require('./remote');
-const { resolveChannelName } = require('./discord');
+const { resolveChannelName, splitMessage } = require('./discord');
+const { loadAllJobs } = require('./jobs-store');
 const scheduler = require('./scheduler');
 const log = require('./logger');
 
@@ -99,6 +100,36 @@ function executeShell(command, { inContainer } = {}) {
 }
 
 /**
+ * Multi-line rendering of a scheduled job for the /jobs command.
+ * Header line with id, then one piece of information per line.
+ */
+function formatJobBlock(job) {
+	const status = job.enabled === false ? '⏸ disabled' : '✅ enabled';
+	const agent = job.agent === 'codex' ? 'codex' : `claude/${job.model || 'sonnet'}`;
+	const runs = (typeof job.remaining === 'number' && job.remaining > 0) ? `${job.remaining} left` : 'infinite';
+	const channel = job.channelName || job.channelId;
+	const last = job.lastRun ? `${String(job.lastRun).replace('T', ' ').slice(0, 16)} UTC` : 'never';
+	const lines = [
+		`**\`${job.id}\`**`,
+		`▫️ Status: ${status}`,
+		`⏰ Schedule: \`${job.cron}\``,
+		`🤖 Agent: ${agent}`,
+		`💬 Channel: ${channel}`,
+		`🔁 Runs: ${runs}`,
+		`🕘 Last run: ${last}`,
+	];
+	if (job.notify) {
+		lines.push(`🔔 Notify: ${job.notifyPattern ? `\`${job.notifyPattern}\`` : 'always'}`);
+	}
+	if (job.description) {
+		let d = String(job.description).replace(/\s+/g, ' ').trim();
+		if (d.length > 150) d = d.slice(0, 149) + '…';
+		lines.push(`📝 ${d}`);
+	}
+	return lines.join('\n');
+}
+
+/**
  * Handle special commands. Returns true if the message was a command.
  * The caller has already confirmed the message comes from the authorized user.
  */
@@ -118,7 +149,7 @@ async function handleCommand(message) {
 	// arriving while `/remote start` is still queued can't slip through.
 	const remoteId = sessions.getRemoteId(channelId);
 	const remoteTransitioning = remoteOpInFlight.has(channelId);
-	if ((remoteId || remoteTransitioning) && content !== '/remote' && content !== '/status' && content !== '/help') {
+	if ((remoteId || remoteTransitioning) && content !== '/remote' && content !== '/status' && content !== '/help' && content !== '/jobs') {
 		const hint = !remoteId && remoteTransitioning
 			? '⏳ A `/remote` toggle is in progress for this channel.'
 			: `\u{1F6F0}️ This channel is in remote mode (agent \`${remoteId}\`). Send \`/remote\` to return to Discord mode.`;
@@ -173,6 +204,7 @@ async function handleCommand(message) {
 \`/help\` — Show this help
 \`/clear\` — Reset session for this channel (new conversation)
 \`/status\` — Show current mode, agent and runtime status
+\`/jobs\` — List all scheduled jobs (admin + sandbox)
 \`/admin\` — Switch this channel to admin mode (host)
 \`/sandbox\` — Switch this channel to sandbox mode (container)
 \`/opus\` — Use Claude Opus for this channel
@@ -294,6 +326,26 @@ async function handleCommand(message) {
 			: isCodexAvailableInContainer();
 		const codexLine = codexAvailable ? '' : `\nCodex unavailable in **${mode}** mode.`;
 		await channel.send(`Channel mode: **${mode}**\nAgent: **${agent}**${modelLine}${reasoningLine}${remoteLine}${dockerNote}${codexLine}`);
+		return true;
+	}
+
+	if (content === '/jobs') {
+		const all = loadAllJobs();
+		const admin = all.filter(j => j.mode === 'admin');
+		const sandbox = all.filter(j => j.mode === 'sandbox');
+		if (admin.length === 0 && sandbox.length === 0) {
+			await channel.send('No scheduled jobs.');
+			return true;
+		}
+		const section = (title, jobs) =>
+			`${title} (${jobs.length})\n${jobs.length ? jobs.map(formatJobBlock).join('\n\n') : '_none_'}`;
+		const out = [
+			section('🖥️ **Admin jobs**', admin),
+			section('📦 **Sandbox jobs**', sandbox),
+		].join('\n\n');
+		for (const chunk of splitMessage(out, 1900)) {
+			await channel.send(chunk);
+		}
 		return true;
 	}
 
