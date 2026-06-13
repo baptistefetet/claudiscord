@@ -273,7 +273,7 @@ function killAgentProcessesInContainer(label) {
 	}
 }
 
-async function executeClaudeInContainer(prompt, claudeOptions, {
+async function spawnClaudeInContainer(prompt, claudeOptions, {
 		timeoutMs = PROMPT_TIMEOUT_MS,
 		label = `Container [${CONTAINER_NAME}]`,
 	} = {}) {
@@ -292,7 +292,7 @@ async function executeClaudeInContainer(prompt, claudeOptions, {
 	}
 }
 
-async function executeInContainer(prompt, {
+async function executeClaudeInContainer(prompt, {
 		sessionId = null,
 		systemPrompt = null,
 		allowedTools = ALLOWED_TOOLS,
@@ -318,7 +318,7 @@ async function executeInContainer(prompt, {
 
 	let result;
 	try {
-		result = await executeClaudeInContainer(prompt, claudeOptions, {
+		result = await spawnClaudeInContainer(prompt, claudeOptions, {
 			timeoutMs,
 			label,
 		});
@@ -457,7 +457,7 @@ module.exports = {
 	DOCKER_AVAILABLE,
 	ensureImage,
 	ensureContainer,
-	executeInContainer,
+	executeClaudeInContainer,
 	isCodexAvailableInContainer,
 	executeCodexInContainer,
 	writeSandboxUpload,

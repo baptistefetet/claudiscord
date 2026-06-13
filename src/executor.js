@@ -1,6 +1,6 @@
 const { executeClaudeCommand } = require('./claude');
 const { executeCodexCommand } = require('./codex');
-const { executeInContainer, executeCodexInContainer } = require('./container');
+const { executeClaudeInContainer, executeCodexInContainer } = require('./container');
 const { runQueued } = require('./queue');
 const sessions = require('./sessions');
 
@@ -50,7 +50,7 @@ function executePrompt(agent, mode, prompt, options = {}) {
 				else throw new Error(`Unknown execution mode: ${mode}`);
 			} else if (agent === 'claude') {
 				if (mode === 'admin') result = await executeClaudeCommand(prompt, opts);
-				else if (mode === 'sandbox') result = await executeInContainer(prompt, opts);
+				else if (mode === 'sandbox') result = await executeClaudeInContainer(prompt, opts);
 				else throw new Error(`Unknown execution mode: ${mode}`);
 			} else {
 				throw new Error(`Unknown agent: ${agent}`);
