@@ -31,11 +31,17 @@ const waitingNotice = new Set();
 
 client.on(Events.MessageCreate, async message => {
 	if (message.author.bot) return;
+	// Skip system messages. Creating a thread posts a `ThreadCreated` system
+	// message in the parent whose `content` is the thread NAME (not empty), so
+	// it would otherwise be treated as a prompt. Also covers the thread-starter
+	// crosspost and other notices. Real prompts are Default/Reply (not system).
+	if (message.system) return;
 
 	const channel = message.channel;
 	const isDM = channel.type === ChannelType.DM;
 	const isGuildText = channel.type === ChannelType.GuildText;
-	if (!isDM && !isGuildText) return;
+	const isPublicThread = channel.type === ChannelType.PublicThread;
+	if (!isDM && !isGuildText && !isPublicThread) return;
 
 	const content = message.content.trim();
 	const isVoice = message.flags?.has(MessageFlags.IsVoiceMessage) || false;
@@ -43,6 +49,11 @@ client.on(Events.MessageCreate, async message => {
 
 	// Strict authorization: silently ignore every other user.
 	if (message.author.id !== config.AUTHORIZED_USER_ID) return;
+
+	// First contact in a public thread snapshots the parent channel's
+	// mode/agent/model (not a live link); the thread keeps its own fresh session.
+	// Done before commands/uploads so they already see the inherited mode.
+	if (isPublicThread) sessions.ensureFromParent(channel.id, channel.parentId);
 
 	// If the channel is in remote mode (or transitioning), a voice message is
 	// just as invalid as a text prompt. Drop it BEFORE paying for Groq STT and
@@ -99,15 +110,32 @@ client.on(Events.MessageCreate, async message => {
 	if (await handleCommand(message)) return;
 
 	const channelId = channel.id;
-	const channelName = resolveChannelName(channel);
-	sessions.setLastName(channelId, channelName);
+	// In a public thread, show both the parent channel name and the thread name
+	// in the system prompt; the topic falls back to the parent's (threads have none).
+	// The parent is normally cached (Guilds intent), but fetch it by parentId as a
+	// fallback so an uncached parent doesn't degrade the name/topic to <unknown>.
+	let parentChannel = null;
+	if (isPublicThread) {
+		parentChannel = channel.parent;
+		if (!parentChannel && channel.parentId) {
+			try { parentChannel = await client.channels.fetch(channel.parentId); }
+			catch (err) { log.warn(`Failed to fetch thread parent ${channel.parentId}: ${err.message}`); }
+		}
+	}
+	const threadName = isPublicThread ? resolveChannelName(channel) : null;
+	const channelName = isPublicThread
+		? (parentChannel ? resolveChannelName(parentChannel) : '<unknown>')
+		: resolveChannelName(channel);
+	sessions.setLastName(channelId, threadName || channelName);
 
 	const mode = sessions.getMode(channelId);
 	const agent = sessions.getAgent(channelId);
 	const model = sessions.getModel(channelId);
 	const botName = client.user.displayName || client.user.username;
 	const userName = message.author.displayName || message.author.username;
-	const channelTopic = !isDM ? (channel.topic || null) : null;
+	const channelTopic = isPublicThread
+		? (parentChannel?.topic || null)
+		: (!isDM ? (channel.topic || null) : null);
 
 	// sessionId is resolved inside executor.executePrompt, inside the global
 	// queue, so back-to-back messages cannot race before the first generated
@@ -120,6 +148,7 @@ client.on(Events.MessageCreate, async message => {
 			mode,
 			channelId,
 			channelName,
+			threadName,
 			channelTopic,
 			isDM,
 			channelAgent: agent,

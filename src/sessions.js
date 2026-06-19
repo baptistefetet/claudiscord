@@ -85,6 +85,27 @@ function ensureChannel(channelId) {
 	return channels.get(channelId);
 }
 
+/**
+ * Lazily create a (thread) channel's session entry by snapshotting the parent
+ * channel's mode/agent/model. Idempotent: a no-op once the entry exists, so the
+ * inheritance happens once (at first contact) and is a snapshot, not a live
+ * link. The thread always starts with a fresh agent session (sessionId: null).
+ */
+function ensureFromParent(channelId, parentId) {
+	if (channels.has(channelId)) return;
+	const parent = parentId ? channels.get(parentId) : null;
+	channels.set(channelId, {
+		mode: parent?.mode === 'sandbox' ? 'sandbox' : 'admin',
+		agent: VALID_AGENTS.includes(parent?.agent) ? parent.agent : CHANNEL_DEFAULT_AGENT,
+		model: VALID_MODELS.includes(parent?.model) ? parent.model : CHANNEL_DEFAULT_MODEL,
+		sessionId: null,
+		remoteId: null,
+		lastName: null,
+	});
+	persist();
+	log.info(`Thread ${channelId} inherited config from parent ${parentId || '<none>'}`);
+}
+
 function getMode(channelId) {
 	const entry = channels.get(channelId);
 	return entry?.mode || 'admin';
@@ -217,6 +238,7 @@ function hasActiveSandboxRemote() {
 
 module.exports = {
 	load,
+	ensureFromParent,
 	getMode,
 	setMode,
 	getAgent,

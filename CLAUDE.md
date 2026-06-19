@@ -25,6 +25,7 @@ Scheduled jobs
 ```
 
 - Each Discord channel has its own mode (`admin` / `sandbox`), agent (`claude` / `codex`, default `claude`), Claude model (`opus` / `sonnet`, default `sonnet`) and active-agent session. A DM channel is treated exactly like any other channel.
+- Public threads are handled like any other channel (own `channelId` → own session). On first contact, a thread snapshots its parent channel's mode/agent/model (`sessions.ensureFromParent`, not a live link) but starts a fresh session. The system prompt shows both the parent channel name and the thread name (`prompts.js` `thread`/`threadName`); the topic falls back to the parent's. Jobs/uploads attach to the thread itself like any channel. System messages are dropped early (`if (message.system) return;`): creating a thread posts a `ThreadCreated` system message in the parent whose `content` is the thread NAME (not empty), which would otherwise be answered as a prompt.
 - The authorized user is stored in `.env` (`AUTHORIZED_USER_ID`) and is required at startup — without it the process refuses to boot.
 - Global queue (`src/queue.js`): every prompt (interactive or scheduled) goes through a single FIFO. `isBusy()` is used to show a one-time "⏳ waiting" hint per channel.
 - Jobs live in two separate files — never merged, never watched:

@@ -23,6 +23,9 @@ This is a direct message (DM).
 {{#channel}}
 This is the channel "{{channelName}}".
 {{/channel}}
+{{#thread}}
+This conversation is in a thread named "{{threadName}}" under that channel.
+{{/thread}}
 {{#channelId}}
 Channel ID: {{channelId}}
 {{/channelId}}
@@ -225,6 +228,7 @@ function getSystemPrompt(options = {}) {
 		mode = 'admin',
 		channelId = null,
 		channelName = null,
+		threadName = null,
 		channelTopic = null,
 		isDM = false,
 		jobId = null,
@@ -248,6 +252,7 @@ function getSystemPrompt(options = {}) {
 			jobId: jobId || '',
 			channelId: channelId || '',
 			channelName: channelName || '<unnamed>',
+			threadName: threadName || '',
 			channelTopic: channelTopic || '',
 			channelAgent: resolvedAgent,
 			channelModel: resolvedModel,
@@ -260,6 +265,7 @@ function getSystemPrompt(options = {}) {
 			sandbox: isSandbox,
 			dm: isDM,
 			channel: !isDM,
+			thread: Boolean(threadName),
 			channelId: Boolean(channelId),
 			channelTopic: Boolean(channelTopic),
 			claude: resolvedAgent === 'claude',
