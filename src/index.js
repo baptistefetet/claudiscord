@@ -29,6 +29,11 @@ const client = createClient();
 // avoid flooding a channel with multiple "⏳ waiting…" notices.
 const waitingNotice = new Set();
 
+// Threads whose first-turn starter-message fetch is in flight. Concurrent
+// messages await this promise so they cannot overtake the claimant when
+// enqueuing (executePrompt enqueues synchronously at call time).
+const starterGate = new Map();
+
 client.on(Events.MessageCreate, async message => {
 	if (message.author.bot) return;
 	// Skip system messages. Creating a thread posts a `ThreadCreated` system
@@ -136,6 +141,45 @@ client.on(Events.MessageCreate, async message => {
 	const channelTopic = isPublicThread
 		? (parentChannel?.topic || null)
 		: (!isDM ? (channel.topic || null) : null);
+
+	// On a thread's very first turn, if it was created FROM an existing message,
+	// prepend that anchor message as quoted context — otherwise the message the
+	// thread forks from is invisible (it lives in the parent and shows up in the
+	// thread only as a dropped system message). First turn only (sessionId still
+	// null), so it enters the conversation history and persists across --resume.
+	//
+	// Two guards make this race-safe against rapid concurrent first-turn messages
+	// (sessionId stays null until the first run completes):
+	//   - sessions.claimStarter() — synchronous atomic per-channel claim, so the
+	//     anchor is injected at most once.
+	//   - starterGate — while the claimant awaits fetchStarterMessage(), siblings
+	//     await the same promise instead of racing ahead, so they cannot enqueue
+	//     before it (executePrompt enqueues synchronously at call time).
+	if (isPublicThread) {
+		const pendingStarter = starterGate.get(channelId);
+		if (pendingStarter) {
+			await pendingStarter;
+		} else if (!sessions.getSession(channelId).sessionId && sessions.claimStarter(channelId)) {
+			let releaseStarter;
+			starterGate.set(channelId, new Promise(r => { releaseStarter = r; }));
+			try {
+				const starter = await channel.fetchStarterMessage();
+				const starterText = starter?.content?.trim();
+				if (starterText) {
+					const starterAuthor = starter.author?.id === client.user.id
+						? botName
+						: (starter.author?.displayName || starter.author?.username || 'someone');
+					prompt = `[This thread was created from the following message by ${starterAuthor}:]\n${starterText}\n\n[Message:]\n${prompt}`;
+				}
+			} catch (err) {
+				// Standalone thread (no anchor) or deleted anchor → Unknown Message (10008): ignore.
+				if (err.code !== 10008) log.warn(`fetchStarterMessage failed for thread ${channelId}: ${err.message}`);
+			} finally {
+				starterGate.delete(channelId);
+				releaseStarter();
+			}
+		}
+	}
 
 	// sessionId is resolved inside executor.executePrompt, inside the global
 	// queue, so back-to-back messages cannot race before the first generated

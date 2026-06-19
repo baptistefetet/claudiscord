@@ -42,6 +42,12 @@ const log = require('./logger');
 /** @type {Map<string, {mode?: string, agent?: string, model?: string, sessionId?: string, remoteId?: string|null, lastName?: string}>} */
 const channels = new Map();
 
+// Channels whose one-time thread-starter injection has been claimed this process.
+// In-memory only (never persisted); released once a sessionId exists, on clear,
+// or on removal. Used to atomically gate the starter injection against the race
+// where concurrent first-turn messages all see a null sessionId.
+const starterClaimed = new Set();
+
 function load() {
 	try {
 		const raw = fs.readFileSync(ADMIN_SESSIONS_FILE, 'utf8');
@@ -106,6 +112,18 @@ function ensureFromParent(channelId, parentId) {
 	log.info(`Thread ${channelId} inherited config from parent ${parentId || '<none>'}`);
 }
 
+/**
+ * Atomically claim the one-time thread-starter injection for a channel. Returns
+ * true exactly once per process (until released), false afterwards. Synchronous,
+ * so it can gate the injection before any `await` and prevent concurrent
+ * first-turn messages from each injecting the anchor.
+ */
+function claimStarter(channelId) {
+	if (starterClaimed.has(channelId)) return false;
+	starterClaimed.add(channelId);
+	return true;
+}
+
 function getMode(channelId) {
 	const entry = channels.get(channelId);
 	return entry?.mode || 'admin';
@@ -164,6 +182,7 @@ function setSessionId(channelId, sessionId) {
 	const entry = ensureChannel(channelId);
 	if (entry.sessionId === sessionId) return;
 	entry.sessionId = sessionId;
+	starterClaimed.delete(channelId);
 	persist();
 	log.info(`Channel ${channelId} session set to: ${sessionId}`);
 }
@@ -179,6 +198,7 @@ function clearChannel(channelId) {
 	const entry = channels.get(channelId);
 	if (!entry) return;
 	entry.sessionId = null;
+	starterClaimed.delete(channelId);
 	persist();
 }
 
@@ -188,6 +208,7 @@ function listChannelIds() {
 
 function removeChannel(channelId) {
 	if (!channels.delete(channelId)) return false;
+	starterClaimed.delete(channelId);
 	persist();
 	return true;
 }
@@ -239,6 +260,7 @@ function hasActiveSandboxRemote() {
 module.exports = {
 	load,
 	ensureFromParent,
+	claimStarter,
 	getMode,
 	setMode,
 	getAgent,
