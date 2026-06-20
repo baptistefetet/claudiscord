@@ -236,9 +236,7 @@ client.on(Events.MessageCreate, async message => {
 		} else if (err.code === 'CODEX_NOT_AVAILABLE') {
 			errMsg = `Codex is not installed or no longer available in **${mode}** mode.`;
 		} else if (err.code === 'CODEX_NOT_AUTHENTICATED') {
-			errMsg = mode === 'sandbox'
-				? 'Sandbox Codex authentication failed. Remove `~/.codex/auth.json` in the sandbox to copy fresh host credentials on the next run.'
-				: 'Codex authentication failed. Run `codex login` on the host.';
+			errMsg = 'Codex authentication failed. Run `codex login` on the host.';
 		} else if (err.code === 'CHANNEL_CONTEXT_CHANGED') {
 			errMsg = 'Channel mode or agent changed while this message was waiting. Send it again.';
 		} else if (err.message === 'Docker is not installed on this host') {

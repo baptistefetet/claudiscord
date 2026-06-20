@@ -26,7 +26,6 @@ const {
 const {
 	buildCodexArgs,
 	parseCodexOutput,
-	isCodexAuthError,
 } = require('./codex');
 const log = require('./logger');
 
@@ -292,18 +291,18 @@ async function spawnClaudeInContainer(prompt, claudeOptions, {
 	}
 }
 
-// Delete the sandbox Claude credentials so the next run re-seeds them from the
-// host (seedCredentialsFromHost seeds when the file is absent). Called after a
-// failed run: if the token expired and the in-container CLI could not refresh
-// it, this self-heals on the next run; for any other failure it is a harmless
-// one-time re-seed.
-function dropSandboxCredentials() {
-	const credPath = path.join(SANDBOX_HOST_HOME, '.claude', '.credentials.json');
+// Delete a sandbox agent's credentials file so the next run re-seeds it from the
+// host (the seed* functions seed when the file is absent). Called after a failed
+// run: if the token expired and the in-container CLI could not refresh it, this
+// self-heals on the next run; for any other failure it is a harmless one-time
+// re-seed.
+function dropSandboxAuthFile(relPath, label) {
+	const target = path.join(SANDBOX_HOST_HOME, relPath);
 	try {
-		fs.rmSync(credPath, { force: true });
-		log.warn('Removed sandbox credentials after a failed run; they will be re-seeded from the host on the next run');
+		fs.rmSync(target, { force: true });
+		log.warn(`Removed sandbox ${label} after a failed run; it will be re-seeded from the host on the next run`);
 	} catch (err) {
-		log.warn(`Failed to remove sandbox credentials: ${err.message}`);
+		log.warn(`Failed to remove sandbox ${label}: ${err.message}`);
 	}
 }
 
@@ -343,7 +342,7 @@ async function executeClaudeInContainer(prompt, {
 		// A non-zero exit is most often an expired sandbox token the in-container
 		// CLI can no longer refresh. Drop the credentials so the next run re-seeds
 		// them from the host; the current run still surfaces its error.
-		dropSandboxCredentials();
+		dropSandboxAuthFile(path.join('.claude', '.credentials.json'), 'Claude credentials');
 		const errMsg = result.stdout.slice(-500) || `exit code ${result.code}`;
 		throw Object.assign(new Error(errMsg), {
 			code: result.code,
@@ -420,12 +419,10 @@ async function executeCodexInContainer(prompt, {
 				sessionId: parsed.sessionId,
 			});
 		}
-		if (isCodexAuthError(execution.stdout, execution.stderr)) {
-			throw Object.assign(new Error('CODEX_NOT_AUTHENTICATED'), {
-				code: 'CODEX_NOT_AUTHENTICATED',
-				sessionId: parsed.sessionId,
-			});
-		}
+		// Mirror the Claude path: a non-zero exit is most often an expired sandbox
+		// token the CLI can no longer refresh. Drop the Codex auth so the next run
+		// re-seeds it from the host; the current run still surfaces its error.
+		dropSandboxAuthFile(path.join('.codex', 'auth.json'), 'Codex auth');
 		const errMsg = execution.stderr.slice(-500)
 			|| execution.stdout.slice(-500)
 			|| `exit code ${execution.code}`;
