@@ -306,6 +306,57 @@ function dropSandboxAuthFile(relPath, label) {
 	}
 }
 
+// Atomically write `buf` to `target`, then set mode 0600 and ownership.
+function writeFileAtomicOwned(target, buf, uid, gid) {
+	const tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
+	try {
+		fs.writeFileSync(tmp, buf, { mode: 0o600, flag: 'wx' });
+		fs.renameSync(tmp, target);
+		fs.chmodSync(target, 0o600);
+		fs.chownSync(target, uid, gid);
+	} finally {
+		fs.rmSync(tmp, { force: true });
+	}
+}
+
+// Keep an agent's host and sandbox credentials in sync. Both share one account,
+// and the provider rotates the refresh token on use, so whichever side refreshed
+// last holds the only valid token and the other copy goes stale. Called after a
+// SUCCESSFUL run (so the credentials used were valid): if that run refreshed its
+// token, propagate the file to the other side, so the next run — host or sandbox
+// — starts with the current token. Executions are serialized through the global
+// queue, so there is never a concurrent refresh. The mtime only decides the
+// direction; the copy is skipped when the contents already match, so it never
+// loops.
+function syncAgentCredentials(agent) {
+	try {
+		if (!SANDBOX_HOST_HOME) return;
+		const rel = agent === 'codex'
+			? path.join('.codex', 'auth.json')
+			: path.join('.claude', '.credentials.json');
+		const hostPath = path.join(ADMIN_USER_HOME, rel);
+		const sandboxPath = path.join(SANDBOX_HOST_HOME, rel);
+
+		let hostStat, sandboxStat;
+		try { hostStat = fs.statSync(hostPath); } catch { return; }
+		try { sandboxStat = fs.statSync(sandboxPath); } catch { return; }
+
+		const hostBuf = fs.readFileSync(hostPath);
+		const sandboxBuf = fs.readFileSync(sandboxPath);
+		if (hostBuf.equals(sandboxBuf)) return;
+
+		if (sandboxStat.mtimeMs > hostStat.mtimeMs) {
+			writeFileAtomicOwned(hostPath, sandboxBuf, 0, 0);
+			log.info(`Synced ${agent} credentials: sandbox -> host`);
+		} else {
+			writeFileAtomicOwned(sandboxPath, hostBuf, SANDBOX_UID, SANDBOX_GID);
+			log.info(`Synced ${agent} credentials: host -> sandbox`);
+		}
+	} catch (err) {
+		log.warn(`syncAgentCredentials(${agent}) failed: ${err.message}`);
+	}
+}
+
 async function executeClaudeInContainer(prompt, {
 		sessionId = null,
 		systemPrompt = null,
@@ -461,4 +512,5 @@ module.exports = {
 	isCodexAvailableInContainer,
 	executeCodexInContainer,
 	writeSandboxUpload,
+	syncAgentCredentials,
 };

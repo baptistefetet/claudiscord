@@ -1,6 +1,6 @@
 const { executeClaudeCommand } = require('./claude');
 const { executeCodexCommand } = require('./codex');
-const { executeClaudeInContainer, executeCodexInContainer } = require('./container');
+const { executeClaudeInContainer, executeCodexInContainer, syncAgentCredentials } = require('./container');
 const { runQueued } = require('./queue');
 const sessions = require('./sessions');
 
@@ -59,6 +59,10 @@ function executePrompt(agent, mode, prompt, options = {}) {
 			if (channelId && result.sessionId && sessionContextIsCurrent()) {
 				sessions.setSessionId(channelId, result.sessionId);
 			}
+			// The run authenticated successfully; if it refreshed its rotating
+			// token, propagate the new credentials between host and sandbox so the
+			// shared account doesn't strand the other side with a stale token.
+			syncAgentCredentials(agent);
 			return result;
 		} catch (err) {
 			if (channelId && err.sessionId && sessionContextIsCurrent()) {
