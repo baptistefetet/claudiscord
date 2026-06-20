@@ -1,7 +1,11 @@
 const { spawn } = require('child_process');
+const fs = require('fs');
 const path = require('path');
 const { CLAUDE_BIN, PROMPT_TIMEOUT_MS, ALLOWED_TOOLS, DISALLOWED_TOOLS, ADMIN_USER_HOME } = require('./config');
 const log = require('./logger');
+
+// OAuth account usage (5h window + weekly), same endpoint Claude Code's /usage hits.
+const OAUTH_USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
 
 // systemd's inherited PATH usually omits ~/.local/bin, where `claude` itself
 // lives. Without this, Bash tool calls like `claude --version` fail with
@@ -260,6 +264,58 @@ async function executeClaudeCommand(prompt, options = {}) {
 	return parseClaudeOutput(result.stdout, 'Claude');
 }
 
+/**
+ * Read the OAuth account usage from Anthropic (5h window + weekly).
+ * Token comes from the host credentials file — usage is account-wide, so it is
+ * identical whether the channel is admin or sandbox. Never throws: returns a
+ * tagged result the caller renders into a friendly Discord message.
+ */
+async function getClaudeUsage() {
+	let token;
+	try {
+		const raw = await fs.promises.readFile(
+			path.join(ADMIN_USER_HOME, '.claude', '.credentials.json'),
+			'utf8',
+		);
+		token = JSON.parse(raw)?.claudeAiOauth?.accessToken;
+	} catch {
+		return { available: false, reason: 'no-oauth' };
+	}
+	if (!token) return { available: false, reason: 'no-oauth' };
+
+	let res;
+	try {
+		res = await fetch(OAUTH_USAGE_URL, {
+			headers: {
+				Authorization: `Bearer ${token}`,
+				'anthropic-beta': 'oauth-2025-04-20',
+			},
+			signal: AbortSignal.timeout(10000),
+		});
+	} catch (err) {
+		log.warn('getClaudeUsage fetch error:', err.message);
+		return { available: false, reason: 'error' };
+	}
+
+	if (res.status === 401) return { available: false, reason: 'expired' };
+	if (!res.ok) {
+		log.warn(`getClaudeUsage HTTP ${res.status}`);
+		return { available: false, reason: 'error' };
+	}
+
+	const data = await res.json().catch(() => null);
+	if (!data?.five_hour || !data?.seven_day) {
+		return { available: false, reason: 'error' };
+	}
+	return {
+		available: true,
+		fiveHour: data.five_hour.utilization,
+		weekly: data.seven_day.utilization,
+		fiveHourResetAt: data.five_hour.resets_at || null,
+		weeklyResetAt: data.seven_day.resets_at || null,
+	};
+}
+
 module.exports = {
 	ADMIN_ENV,
 	buildClaudeArgs,
@@ -267,4 +323,5 @@ module.exports = {
 	extractClaudeSessionId,
 	parseClaudeOutput,
 	executeClaudeCommand,
+	getClaudeUsage,
 };

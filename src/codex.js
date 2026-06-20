@@ -151,6 +151,5 @@ module.exports = {
 	CODEX_AVAILABLE,
 	buildCodexArgs,
 	parseCodexOutput,
-	isCodexAuthError,
 	executeCodexCommand,
 };

@@ -16,6 +16,7 @@ const {
 	isCodexAvailableInContainer,
 } = require('./container');
 const { CODEX_AVAILABLE } = require('./codex');
+const { getClaudeUsage } = require('./claude');
 const { runQueued, isBusy } = require('./queue');
 const { startRemote, stopRemote } = require('./remote');
 const { resolveChannelName, splitMessage } = require('./discord');
@@ -149,7 +150,7 @@ async function handleCommand(message) {
 	// arriving while `/remote start` is still queued can't slip through.
 	const remoteId = sessions.getRemoteId(channelId);
 	const remoteTransitioning = remoteOpInFlight.has(channelId);
-	if ((remoteId || remoteTransitioning) && content !== '/remote' && content !== '/status' && content !== '/help' && content !== '/jobs') {
+	if ((remoteId || remoteTransitioning) && content !== '/remote' && content !== '/status' && content !== '/help' && content !== '/jobs' && content !== '/usage') {
 		const hint = !remoteId && remoteTransitioning
 			? '⏳ A `/remote` toggle is in progress for this channel.'
 			: `\u{1F6F0}️ This channel is in remote mode (agent \`${remoteId}\`). Send \`/remote\` to return to Discord mode.`;
@@ -204,6 +205,7 @@ async function handleCommand(message) {
 \`/help\` — Show this help
 \`/clear\` — Reset session for this channel (new conversation)
 \`/status\` — Show current mode, agent and runtime status
+\`/usage\` — Show Claude usage (5h window + weekly)
 \`/jobs\` — List all scheduled jobs (admin + sandbox)
 \`/admin\` — Switch this channel to admin mode (host)
 \`/sandbox\` — Switch this channel to sandbox mode (container)
@@ -326,6 +328,41 @@ async function handleCommand(message) {
 			: isCodexAvailableInContainer();
 		const codexLine = codexAvailable ? '' : `\nCodex unavailable in **${mode}** mode.`;
 		await channel.send(`Channel mode: **${mode}**\nAgent: **${agent}**${modelLine}${reasoningLine}${remoteLine}${dockerNote}${codexLine}`);
+		return true;
+	}
+
+	if (content === '/usage') {
+		if (agent !== 'claude') {
+			await channel.send('`/usage` is only available with the **claude** agent. Use `/opus` or `/sonnet` first.');
+			return true;
+		}
+		const usage = await getClaudeUsage();
+		if (!usage.available) {
+			const reasons = {
+				'no-oauth': 'Claude usage is not available (API-key auth, no subscription window).',
+				expired: 'Claude usage unavailable: the auth token is expired. Run any Claude prompt then retry.',
+				error: 'Claude usage is unavailable right now.',
+			};
+			await channel.send(reasons[usage.reason] || reasons.error);
+			return true;
+		}
+		// Relative reset hint: "resets in 1h47" or "resets in 4d 6h" for the weekly window.
+		const fmtReset = (iso) => {
+			if (!iso) return '';
+			const ms = new Date(iso).getTime() - Date.now();
+			if (!Number.isFinite(ms) || ms <= 0) return '';
+			const totalMin = Math.floor(ms / 60000);
+			const d = Math.floor(totalMin / 1440);
+			const h = Math.floor((totalMin % 1440) / 60);
+			const m = totalMin % 60;
+			const span = d ? `${d}d ${h}h` : `${h}h${String(m).padStart(2, '0')}`;
+			return ` (resets in ${span})`;
+		};
+		await channel.send(
+			'📊 **Claude usage**\n'
+			+ `▫️ 5h window: **${Math.round(usage.fiveHour)}%**${fmtReset(usage.fiveHourResetAt)}\n`
+			+ `▫️ Weekly: **${Math.round(usage.weekly)}%**${fmtReset(usage.weeklyResetAt)}`,
+		);
 		return true;
 	}
 
