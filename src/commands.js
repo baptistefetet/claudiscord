@@ -131,6 +131,198 @@ function formatJobBlock(job) {
 }
 
 /**
+ * /remote — toggle the channel between Discord mode and Claude-mobile remote mode.
+ * Claude-only. Holds a per-channel lock for the whole toggle (see remoteOpInFlight).
+ */
+async function handleRemote(channel, channelId, mode, agent, remoteId) {
+	if (agent !== 'claude') {
+		await channel.send('`/remote` is only available with the **claude** agent. Use `/opus` or `/sonnet` first.');
+		return true;
+	}
+	// Hold the per-channel lock for the entire toggle. The gating above
+	// honours it, so the channel stays inert until the transition settles.
+	if (remoteOpInFlight.has(channelId)) {
+		await channel.send('⏳ A `/remote` toggle is already in progress for this channel.');
+		return true;
+	}
+	remoteOpInFlight.add(channelId);
+	try {
+		const existing = remoteId;
+		if (existing) {
+			if (isBusy()) await channel.send('⏳ Waiting for previous prompt...');
+			let stoppedCleanly = false;
+			try {
+				stoppedCleanly = await runQueued(() => stopRemote({ mode, remoteId: existing }));
+			} catch (err) {
+				log.error('remote stop error:', err.message);
+			}
+			sessions.setRemoteId(channelId, null);
+			// Claude may have edited a jobs file during the mobile session — and
+			// we did NOT go through executor.js, so reload jobs here.
+			scheduler.reloadJobs();
+			const suffix = stoppedCleanly ? '' : ' (stop reported an error, state cleared)';
+			await channel.send(`Back to Discord mode. The next message starts a fresh conversation${suffix}.`);
+			return true;
+		}
+
+		if (mode === 'sandbox' && !DOCKER_AVAILABLE) {
+			await channel.send('Sandbox is not available — `/remote` requires either admin mode or a working sandbox.');
+			return true;
+		}
+
+		const channelName = resolveChannelName(channel);
+		if (isBusy()) await channel.send('⏳ Waiting for previous prompt...');
+		try {
+			const agentId = await runQueued(async () => {
+				if (mode === 'sandbox') ensureContainer();
+				// Hand the existing Discord session to `claude --bg --resume`
+				// so the mobile user starts with the channel's history. Read
+				// BEFORE setRemoteId, which wipes the sessionId.
+				const { sessionId } = sessions.getSession(channelId);
+				const id = await startRemote({ mode, sessionId, channelName });
+				sessions.setRemoteId(channelId, id);
+				return id;
+			});
+			await channel.send(`\u{1F6F0}️ Remote control enabled for **${channelName}** (agent \`${agentId}\`). Open the Claude mobile app to continue. Send \`/remote\` again to return to Discord mode.`);
+		} catch (err) {
+			log.error('remote start error:', err.message);
+			await channel.send(`Remote start failed: ${err.message.slice(0, 300)}`);
+		}
+		return true;
+	} finally {
+		remoteOpInFlight.delete(channelId);
+	}
+}
+
+/**
+ * /usage — Claude-only OAuth usage (current 5h window + weekly). Read-only.
+ */
+async function handleUsage(channel, agent) {
+	if (agent !== 'claude') {
+		await channel.send('`/usage` is only available with the **claude** agent. Use `/opus` or `/sonnet` first.');
+		return true;
+	}
+	const usage = await getClaudeUsage();
+	if (!usage.available) {
+		const reasons = {
+			'no-oauth': 'Claude usage is not available (API-key auth, no subscription window).',
+			expired: 'Claude usage unavailable: the auth token is expired. Run any Claude prompt then retry.',
+			error: 'Claude usage is unavailable right now.',
+		};
+		await channel.send(reasons[usage.reason] || reasons.error);
+		return true;
+	}
+	// Relative reset hint: "resets in 1h47" or "resets in 4d 6h" for the weekly window.
+	const fmtReset = (iso) => {
+		if (!iso) return '';
+		const ms = new Date(iso).getTime() - Date.now();
+		if (!Number.isFinite(ms) || ms <= 0) return '';
+		const totalMin = Math.floor(ms / 60000);
+		const d = Math.floor(totalMin / 1440);
+		const h = Math.floor((totalMin % 1440) / 60);
+		const m = totalMin % 60;
+		const span = d ? `${d}d ${h}h` : `${h}h${String(m).padStart(2, '0')}`;
+		return ` (resets in ${span})`;
+	};
+	await channel.send(
+		'📊 **Claude usage**\n'
+		+ `▫️ 5h window: **${Math.round(usage.fiveHour)}%**${fmtReset(usage.fiveHourResetAt)}\n`
+		+ `▫️ Weekly: **${Math.round(usage.weekly)}%**${fmtReset(usage.weeklyResetAt)}`,
+	);
+	return true;
+}
+
+/**
+ * /jobs — list all scheduled jobs (admin first, then sandbox).
+ */
+async function handleJobs(channel) {
+	const all = loadAllJobs();
+	const admin = all.filter(j => j.mode === 'admin');
+	const sandbox = all.filter(j => j.mode === 'sandbox');
+	if (admin.length === 0 && sandbox.length === 0) {
+		await channel.send('No scheduled jobs.');
+		return true;
+	}
+	const section = (title, jobs) =>
+		`${title} (${jobs.length})\n${jobs.length ? jobs.map(formatJobBlock).join('\n\n') : '_none_'}`;
+	const out = [
+		section('🖥️ **Admin jobs**', admin),
+		section('📦 **Sandbox jobs**', sandbox),
+	].join('\n\n');
+	for (const chunk of splitMessage(out, 1900)) {
+		await channel.send(chunk);
+	}
+	return true;
+}
+
+/**
+ * /upgrade — sandbox only. Update container packages + Claude Code + Codex.
+ * Routed through the global queue so it never overwrites a binary mid-prompt.
+ */
+async function handleUpgrade(channel, mode) {
+	if (mode !== 'sandbox') {
+		await channel.send('`/upgrade` is only available in sandbox mode.');
+		return true;
+	}
+	if (!DOCKER_AVAILABLE) {
+		await channel.send('Docker is not installed — cannot upgrade.');
+		return true;
+	}
+	// Overwriting /usr/local/bin/claude while another prompt is running
+	// inside the container would crash that prompt. Go through the global
+	// queue so we wait for any in-flight prompt (and warn the user).
+	if (isBusy()) {
+		await channel.send('⏳ A prompt is currently running, upgrade will start after.');
+	}
+	await runQueued(async () => {
+		try {
+			ensureContainer();
+			await channel.send('Updating container packages...');
+			await execFileAsync('docker', [
+				'exec', '-u', 'root', CONTAINER_NAME, 'bash', '-c',
+				'DEBIAN_FRONTEND=noninteractive apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" 2>&1 | tail -10',
+			], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
+			await channel.send('Updating Claude Code...');
+			await execFileAsync('docker', [
+				'exec', CONTAINER_NAME, 'bash', '-c',
+				'curl -fsSL https://claude.ai/install.sh -o /tmp/claude-install.sh',
+			], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
+			await execFileAsync('docker', [
+				'exec', CONTAINER_NAME, 'bash', '-c',
+				'bash /tmp/claude-install.sh 2>&1 | tail -5 ; rm -f /tmp/claude-install.sh',
+			], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
+			await execFileAsync('docker', [
+				'exec', '-u', 'root', CONTAINER_NAME, 'bash', '-c',
+				'cp /home/claude/.local/share/claude/versions/$(ls -t /home/claude/.local/share/claude/versions/ | head -1) /usr/local/bin/claude && chmod 755 /usr/local/bin/claude',
+			], { encoding: 'utf8', timeout: 10000 });
+			await channel.send('Updating Codex...');
+			await execFileAsync('docker', [
+				'exec', '-u', 'root', CONTAINER_NAME,
+				'npm', 'install', '-g', '--prefix', '/usr/local',
+				'@openai/codex@latest', '--no-fund', '--no-audit',
+			], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
+			let claudeVersion = '';
+			let codexVersion = '';
+			try {
+				claudeVersion = (await execFileAsync('docker', ['exec', CONTAINER_NAME, 'claude', '--version'], { encoding: 'utf8', timeout: 10000 })).stdout.trim();
+			} catch {}
+			try {
+				codexVersion = (await execFileAsync('docker', ['exec', CONTAINER_NAME, 'codex', '--version'], { encoding: 'utf8', timeout: 10000 })).stdout.trim();
+			} catch {}
+			const versions = [
+				claudeVersion ? `Claude: \`${claudeVersion}\`` : null,
+				codexVersion ? `Codex: \`${codexVersion}\`` : null,
+			].filter(Boolean);
+			await channel.send(`Container updated.${versions.length ? `\n${versions.join('\n')}` : ''}`);
+		} catch (err) {
+			log.error('Upgrade error:', err.message);
+			await channel.send(`Upgrade error: ${err.message.slice(0, 300)}`);
+		}
+	}).catch(err => log.error('Queued upgrade error:', err.message));
+	return true;
+}
+
+/**
  * Handle special commands. Returns true if the message was a command.
  * The caller has already confirmed the message comes from the authorized user.
  */
@@ -258,65 +450,7 @@ async function handleCommand(message) {
 		return true;
 	}
 
-	if (content === '/remote') {
-		if (agent !== 'claude') {
-			await channel.send('`/remote` is only available with the **claude** agent. Use `/opus` or `/sonnet` first.');
-			return true;
-		}
-		// Hold the per-channel lock for the entire toggle. The gating above
-		// honours it, so the channel stays inert until the transition settles.
-		if (remoteOpInFlight.has(channelId)) {
-			await channel.send('⏳ A `/remote` toggle is already in progress for this channel.');
-			return true;
-		}
-		remoteOpInFlight.add(channelId);
-		try {
-			const existing = remoteId;
-			if (existing) {
-				if (isBusy()) await channel.send('⏳ Waiting for previous prompt...');
-				let stoppedCleanly = false;
-				try {
-					stoppedCleanly = await runQueued(() => stopRemote({ mode, remoteId: existing }));
-				} catch (err) {
-					log.error('remote stop error:', err.message);
-				}
-				sessions.setRemoteId(channelId, null);
-				// Claude may have edited a jobs file during the mobile session — and
-				// we did NOT go through executor.js, so reload jobs here.
-				scheduler.reloadJobs();
-				const suffix = stoppedCleanly ? '' : ' (stop reported an error, state cleared)';
-				await channel.send(`Back to Discord mode. The next message starts a fresh conversation${suffix}.`);
-				return true;
-			}
-
-			if (mode === 'sandbox' && !DOCKER_AVAILABLE) {
-				await channel.send('Sandbox is not available — `/remote` requires either admin mode or a working sandbox.');
-				return true;
-			}
-
-			const channelName = resolveChannelName(channel);
-			if (isBusy()) await channel.send('⏳ Waiting for previous prompt...');
-			try {
-				const agentId = await runQueued(async () => {
-					if (mode === 'sandbox') ensureContainer();
-					// Hand the existing Discord session to `claude --bg --resume`
-					// so the mobile user starts with the channel's history. Read
-					// BEFORE setRemoteId, which wipes the sessionId.
-					const { sessionId } = sessions.getSession(channelId);
-					const id = await startRemote({ mode, sessionId, channelName });
-					sessions.setRemoteId(channelId, id);
-					return id;
-				});
-				await channel.send(`\u{1F6F0}️ Remote control enabled for **${channelName}** (agent \`${agentId}\`). Open the Claude mobile app to continue. Send \`/remote\` again to return to Discord mode.`);
-			} catch (err) {
-				log.error('remote start error:', err.message);
-				await channel.send(`Remote start failed: ${err.message.slice(0, 300)}`);
-			}
-			return true;
-		} finally {
-			remoteOpInFlight.delete(channelId);
-		}
-	}
+	if (content === '/remote') return handleRemote(channel, channelId, mode, agent, remoteId);
 
 	if (content === '/status') {
 		const dockerNote = DOCKER_AVAILABLE ? '' : '\nSandbox unavailable on this host.';
@@ -331,60 +465,9 @@ async function handleCommand(message) {
 		return true;
 	}
 
-	if (content === '/usage') {
-		if (agent !== 'claude') {
-			await channel.send('`/usage` is only available with the **claude** agent. Use `/opus` or `/sonnet` first.');
-			return true;
-		}
-		const usage = await getClaudeUsage();
-		if (!usage.available) {
-			const reasons = {
-				'no-oauth': 'Claude usage is not available (API-key auth, no subscription window).',
-				expired: 'Claude usage unavailable: the auth token is expired. Run any Claude prompt then retry.',
-				error: 'Claude usage is unavailable right now.',
-			};
-			await channel.send(reasons[usage.reason] || reasons.error);
-			return true;
-		}
-		// Relative reset hint: "resets in 1h47" or "resets in 4d 6h" for the weekly window.
-		const fmtReset = (iso) => {
-			if (!iso) return '';
-			const ms = new Date(iso).getTime() - Date.now();
-			if (!Number.isFinite(ms) || ms <= 0) return '';
-			const totalMin = Math.floor(ms / 60000);
-			const d = Math.floor(totalMin / 1440);
-			const h = Math.floor((totalMin % 1440) / 60);
-			const m = totalMin % 60;
-			const span = d ? `${d}d ${h}h` : `${h}h${String(m).padStart(2, '0')}`;
-			return ` (resets in ${span})`;
-		};
-		await channel.send(
-			'📊 **Claude usage**\n'
-			+ `▫️ 5h window: **${Math.round(usage.fiveHour)}%**${fmtReset(usage.fiveHourResetAt)}\n`
-			+ `▫️ Weekly: **${Math.round(usage.weekly)}%**${fmtReset(usage.weeklyResetAt)}`,
-		);
-		return true;
-	}
+	if (content === '/usage') return handleUsage(channel, agent);
 
-	if (content === '/jobs') {
-		const all = loadAllJobs();
-		const admin = all.filter(j => j.mode === 'admin');
-		const sandbox = all.filter(j => j.mode === 'sandbox');
-		if (admin.length === 0 && sandbox.length === 0) {
-			await channel.send('No scheduled jobs.');
-			return true;
-		}
-		const section = (title, jobs) =>
-			`${title} (${jobs.length})\n${jobs.length ? jobs.map(formatJobBlock).join('\n\n') : '_none_'}`;
-		const out = [
-			section('🖥️ **Admin jobs**', admin),
-			section('📦 **Sandbox jobs**', sandbox),
-		].join('\n\n');
-		for (const chunk of splitMessage(out, 1900)) {
-			await channel.send(chunk);
-		}
-		return true;
-	}
+	if (content === '/jobs') return handleJobs(channel);
 
 	if (content === '/opus' || content === '/sonnet') {
 		const target = content.slice(1);
@@ -431,68 +514,7 @@ async function handleCommand(message) {
 		return true;
 	}
 
-	if (content === '/upgrade') {
-		if (mode !== 'sandbox') {
-			await channel.send('`/upgrade` is only available in sandbox mode.');
-			return true;
-		}
-		if (!DOCKER_AVAILABLE) {
-			await channel.send('Docker is not installed — cannot upgrade.');
-			return true;
-		}
-		// Overwriting /usr/local/bin/claude while another prompt is running
-		// inside the container would crash that prompt. Go through the global
-		// queue so we wait for any in-flight prompt (and warn the user).
-		if (isBusy()) {
-			await channel.send('\u23F3 A prompt is currently running, upgrade will start after.');
-		}
-		await runQueued(async () => {
-			try {
-				ensureContainer();
-				await channel.send('Updating container packages...');
-				await execFileAsync('docker', [
-					'exec', '-u', 'root', CONTAINER_NAME, 'bash', '-c',
-					'DEBIAN_FRONTEND=noninteractive apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" 2>&1 | tail -10',
-				], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
-				await channel.send('Updating Claude Code...');
-				await execFileAsync('docker', [
-					'exec', CONTAINER_NAME, 'bash', '-c',
-					'curl -fsSL https://claude.ai/install.sh -o /tmp/claude-install.sh',
-				], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
-				await execFileAsync('docker', [
-					'exec', CONTAINER_NAME, 'bash', '-c',
-					'bash /tmp/claude-install.sh 2>&1 | tail -5 ; rm -f /tmp/claude-install.sh',
-				], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
-				await execFileAsync('docker', [
-					'exec', '-u', 'root', CONTAINER_NAME, 'bash', '-c',
-					'cp /home/claude/.local/share/claude/versions/$(ls -t /home/claude/.local/share/claude/versions/ | head -1) /usr/local/bin/claude && chmod 755 /usr/local/bin/claude',
-				], { encoding: 'utf8', timeout: 10000 });
-				await channel.send('Updating Codex...');
-				await execFileAsync('docker', [
-					'exec', '-u', 'root', CONTAINER_NAME,
-					'npm', 'install', '-g', '--prefix', '/usr/local',
-					'@openai/codex@latest', '--no-fund', '--no-audit',
-				], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
-				let claudeVersion = '';
-				let codexVersion = '';
-				try {
-					claudeVersion = (await execFileAsync('docker', ['exec', CONTAINER_NAME, 'claude', '--version'], { encoding: 'utf8', timeout: 10000 })).stdout.trim();
-				} catch {}
-				try {
-					codexVersion = (await execFileAsync('docker', ['exec', CONTAINER_NAME, 'codex', '--version'], { encoding: 'utf8', timeout: 10000 })).stdout.trim();
-				} catch {}
-				const versions = [
-					claudeVersion ? `Claude: \`${claudeVersion}\`` : null,
-					codexVersion ? `Codex: \`${codexVersion}\`` : null,
-				].filter(Boolean);
-				await channel.send(`Container updated.${versions.length ? `\n${versions.join('\n')}` : ''}`);
-			} catch (err) {
-				log.error('Upgrade error:', err.message);
-				await channel.send(`Upgrade error: ${err.message.slice(0, 300)}`);
-			}
-		}).catch(err => log.error('Queued upgrade error:', err.message));
-		return true;
-	}
+	if (content === '/upgrade') return handleUpgrade(channel, mode);
 
 	return false;
 }
