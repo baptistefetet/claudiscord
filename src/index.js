@@ -241,8 +241,6 @@ client.on(Events.MessageCreate, async message => {
 				: 'Codex authentication failed. Run `codex login` on the host.';
 		} else if (err.code === 'CHANNEL_CONTEXT_CHANGED') {
 			errMsg = 'Channel mode or agent changed while this message was waiting. Send it again.';
-		} else if (err.message === 'NOT_AUTHENTICATED') {
-			errMsg = 'Sandbox authentication failed. Run `claude auth login` on the host, then try again.';
 		} else if (err.message === 'Docker is not installed on this host') {
 			errMsg = 'Docker is not installed — switch this channel to admin mode with `/admin`.';
 		} else {

@@ -130,9 +130,9 @@ function writeSandboxCodexAuth(authJson) {
 	}
 }
 
-function seedCredentialsFromHost({ force = false } = {}) {
+function seedCredentialsFromHost() {
 	const sandboxCredPath = path.join(SANDBOX_HOST_HOME, '.claude', '.credentials.json');
-	if (!force && fs.existsSync(sandboxCredPath)) return false;
+	if (fs.existsSync(sandboxCredPath)) return false;
 
 	const hostCredPath = path.join(ADMIN_USER_HOME, '.claude', '.credentials.json');
 	let credentialsJson;
@@ -151,7 +151,7 @@ function seedCredentialsFromHost({ force = false } = {}) {
 	}
 
 	writeSandboxCredentials(credentialsJson);
-	log.info(force ? 'Re-seeded sandbox credentials from host' : 'Seeded sandbox credentials from host');
+	log.info('Seeded sandbox credentials from host');
 	return true;
 }
 
@@ -292,51 +292,19 @@ async function spawnClaudeInContainer(prompt, claudeOptions, {
 	}
 }
 
-// Find the last stream-json `result` event in stdout (carries is_error /
-// api_error_status / num_turns), or null if absent.
-function findResultEvent(stdout) {
-	const lines = (stdout || '').split('\n');
-	for (let i = lines.length - 1; i >= 0; i--) {
-		const trimmed = lines[i].trim();
-		if (!trimmed) continue;
-		try {
-			const event = JSON.parse(trimmed);
-			if (event.type === 'result') return event;
-		} catch {}
+// Delete the sandbox Claude credentials so the next run re-seeds them from the
+// host (seedCredentialsFromHost seeds when the file is absent). Called after a
+// failed run: if the token expired and the in-container CLI could not refresh
+// it, this self-heals on the next run; for any other failure it is a harmless
+// one-time re-seed.
+function dropSandboxCredentials() {
+	const credPath = path.join(SANDBOX_HOST_HOME, '.claude', '.credentials.json');
+	try {
+		fs.rmSync(credPath, { force: true });
+		log.warn('Removed sandbox credentials after a failed run; they will be re-seeded from the host on the next run');
+	} catch (err) {
+		log.warn(`Failed to remove sandbox credentials: ${err.message}`);
 	}
-	return null;
-}
-
-// Whether a failed container run failed on sandbox authentication. When the CLI
-// emitted a result event, trust its structured `api_error_status` ONLY — never
-// fall back to string matching, which would false-positive on conversation text
-// mentioning auth/login. The string checks cover only the CLI pre-flight case
-// where no result event is emitted (e.g. missing credentials file): stderr is
-// safe to scan broadly (tool output goes to stdout), stdout is matched narrowly.
-function isContainerAuthFailure(result) {
-	if (!result || result.code === 0) return false;
-	const event = findResultEvent(result.stdout);
-	if (event) return event.api_error_status === 401;
-	const stderr = (result.stderr || '').toLowerCase();
-	return stderr.includes('not authenticated')
-		|| stderr.includes('authentication')
-		|| stderr.includes('api key')
-		|| (result.stdout || '').toLowerCase().includes('not logged in');
-}
-
-// Whether any assistant turn invoked a tool, i.e. the run may have caused side
-// effects. Used to gate the credential-reseed retry: replay only when no tool
-// ran, so the retry cannot duplicate side effects.
-function hasToolUse(stdout) {
-	for (const line of (stdout || '').split('\n')) {
-		const trimmed = line.trim();
-		if (!trimmed) continue;
-		try {
-			const content = JSON.parse(trimmed).message?.content;
-			if (Array.isArray(content) && content.some(b => b && b.type === 'tool_use')) return true;
-		} catch {}
-	}
-	return false;
 }
 
 async function executeClaudeInContainer(prompt, {
@@ -363,31 +331,19 @@ async function executeClaudeInContainer(prompt, {
 	const attach = sessionId ? `resume ${sessionId}` : 'new session';
 	log.info(`${label}: ${attach}, prompt length: ${prompt.length}`);
 
-	const runOnce = async () => {
-		try {
-			return await spawnClaudeInContainer(prompt, claudeOptions, { timeoutMs, label });
-		} catch (err) {
-			err.sessionId = extractClaudeSessionId(err.stdout);
-			throw err;
-		}
-	};
-
-	let result = await runOnce();
-
-	// Sandbox auth failure: the in-container OAuth token can expire and lose its
-	// refresh token (the host and sandbox share the same account), after which
-	// the CLI can no longer refresh it on its own. Re-seed credentials from the
-	// host and retry once — but only when no tool ran (a 401 rejects the API call,
-	// so no work was done), so the retry cannot duplicate side effects.
-	if (isContainerAuthFailure(result) && !hasToolUse(result.stdout) && seedCredentialsFromHost({ force: true })) {
-		log.warn(`${label}: sandbox auth failed before any tool ran, re-seeded credentials from host, retrying`);
-		result = await runOnce();
+	let result;
+	try {
+		result = await spawnClaudeInContainer(prompt, claudeOptions, { timeoutMs, label });
+	} catch (err) {
+		err.sessionId = extractClaudeSessionId(err.stdout);
+		throw err;
 	}
 
 	if (result.code !== 0) {
-		if (isContainerAuthFailure(result)) {
-			throw Object.assign(new Error('NOT_AUTHENTICATED'), { code: result.code });
-		}
+		// A non-zero exit is most often an expired sandbox token the in-container
+		// CLI can no longer refresh. Drop the credentials so the next run re-seeds
+		// them from the host; the current run still surfaces its error.
+		dropSandboxCredentials();
 		const errMsg = result.stdout.slice(-500) || `exit code ${result.code}`;
 		throw Object.assign(new Error(errMsg), {
 			code: result.code,
