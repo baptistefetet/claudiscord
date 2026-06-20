@@ -457,16 +457,6 @@ async function handleCommand(message) {
 		return true;
 	}
 
-	// Unknown slash command: reject here instead of letting it fall through to the
-	// agent. Claude Code interprets a leading-slash prompt as one of its own slash
-	// commands — it returns "Unknown command" and still allocates a degenerate
-	// 0-turn session that later fails on --resume. Handling it here avoids both.
-	if (content.startsWith('/')) {
-		const attempted = content.split('\n', 1)[0].replace(/`/g, '').slice(0, 50);
-		await channel.send(`Unknown command: \`${attempted}\`. Type \`/help\` for the list of commands.`);
-		return true;
-	}
-
 	return false;
 }
 

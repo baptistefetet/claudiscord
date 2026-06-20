@@ -210,7 +210,10 @@ function parseClaudeOutput(stdout, label = 'Claude') {
 	const allText = collectStreamJsonText(stdout);
 	return {
 		result: allText || resultEvent.result || '',
-		sessionId: extractClaudeSessionId(stdout),
+		// A 0-turn result (e.g. an unrecognized slash command) still returns a
+		// session_id but writes no conversation to disk, so a later --resume fails
+		// with "No conversation found". Don't surface it for persistence.
+		sessionId: resultEvent.num_turns === 0 ? null : extractClaudeSessionId(stdout),
 	};
 }
 
