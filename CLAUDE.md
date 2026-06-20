@@ -204,8 +204,10 @@ SANDBOX_HOST_HOME/
 `ADMIN_USER_HOME/.claude/.credentials.json` when the sandbox file is absent.
 It likewise seeds `SANDBOX_HOST_HOME/.codex/auth.json` from
 `ADMIN_USER_HOME/.codex/auth.json`. Copies are atomic, mode `0600`, and chowned
-to the sandbox UID/GID. Existing sandbox credentials are never overwritten so
-each CLI can refresh its tokens in place. If host credentials are missing or
+to the sandbox UID/GID. Host and sandbox share one rotating-token account, so
+after a successful run their credentials are kept in sync (newer mtime wins,
+`syncAgentCredentials`); a failed sandbox run drops its credentials to re-seed
+from the host next run (`dropSandboxAuthFile`). If host credentials are missing or
 invalid, sandbox creation continues but the corresponding agent reports an
 authentication error.
 

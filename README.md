@@ -7,6 +7,7 @@ Works in both DMs and private guild channels. Each channel is an independent con
 ## Features
 
 - **Per-channel conversations** — each Discord channel (DM included) keeps its own active-agent session
+- **Threads** — a public thread is its own fresh session (inheriting the parent channel's mode/agent/model), so you can branch into a side conversation without disturbing the main channel
 - **Per-channel agent** — use Claude Code by default, or switch any channel to Codex with `/codex`
 - **Channel topic = mini CLAUDE.md** — renaming or rewriting the topic immediately changes the agent's context
 - **Two execution modes per channel** — `admin` runs the selected agent on the host, `sandbox` runs it in the Docker container
@@ -155,9 +156,10 @@ When sandbox storage is initialized, Claudiscord copies the host credentials:
 - `~/.claude/.credentials.json` to `SANDBOX_HOME/.claude/.credentials.json`
 - `~/.codex/auth.json` to `SANDBOX_HOME/.codex/auth.json`
 
-Existing sandbox credentials are never overwritten, so token updates made
-inside the sandbox are preserved. Both files contain secrets and are written
-with mode `0600`.
+At runtime, host and sandbox share one rotating-token account, so after a
+successful run their credentials are synced (newer copy wins) and a failed
+sandbox run drops its own to re-seed from the host on the next run. Both files
+contain secrets and are written with mode `0600`.
 
 Authenticate Claude Code on the host before first use:
 
