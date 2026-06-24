@@ -96,17 +96,27 @@ async function executeJob(job) {
 		return;
 	}
 
+	const nowMinute = new Date().toISOString().slice(0, 16);
+
 	if (!acquireJobLock(key)) {
-		log.warn(`Job '${key}' skipped (already running)`);
+		// A second sub-minute tick (TICK_MS < 60s) racing the run we just started:
+		// collapse it silently. Only a run still held from an EARLIER minute is a
+		// real overlap worth warning about.
+		if (lastRunMinutes.get(key) !== nowMinute) {
+			log.warn(`Job '${key}' skipped (already running)`);
+		}
 		return;
 	}
 
-	// Avoid double-run inside the same wall-clock minute (cron edge case)
-	const nowMinute = new Date().toISOString().slice(0, 16);
+	// A quick run earlier this same minute already finished and released the lock.
 	if (lastRunMinutes.get(key) === nowMinute) {
 		releaseJobLock(key);
 		return;
 	}
+
+	// Record the minute at START (not in finally) so a concurrent same-minute tick
+	// can tell this run apart from a cross-minute overlap.
+	lastRunMinutes.set(key, nowMinute);
 
 	log.info(`Job '${key}' starting`);
 
@@ -182,7 +192,6 @@ async function executeJob(job) {
 			}
 		}
 	} finally {
-		lastRunMinutes.set(key, nowMinute);
 		try {
 			recordJobRun(job, { channelName: resolvedChannelName, lastSessionId });
 		} catch (err) {
