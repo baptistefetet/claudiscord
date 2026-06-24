@@ -21,6 +21,7 @@ const {
 	buildClaudeArgs,
 	spawnWithTimeout,
 	extractClaudeSessionId,
+	hasResultEvent,
 	parseClaudeOutput,
 } = require('./claude');
 const {
@@ -292,10 +293,11 @@ async function spawnClaudeInContainer(prompt, claudeOptions, {
 }
 
 // Delete a sandbox agent's credentials file so the next run re-seeds it from the
-// host (the seed* functions seed when the file is absent). Called after a failed
-// run: if the token expired and the in-container CLI could not refresh it, this
-// self-heals on the next run; for any other failure it is a harmless one-time
-// re-seed.
+// host (the seed* functions seed when the file is absent). Called only after an
+// AUTHENTICATION failure (the run never reached the API): the token expired and
+// the in-container CLI could not refresh it, so re-seeding from the host self-heals
+// on the next run. A run that authenticated but errored afterwards (e.g. a usage
+// limit) must NOT come here — its credentials are valid.
 function dropSandboxAuthFile(relPath, label) {
 	const target = path.join(SANDBOX_HOST_HOME, relPath);
 	try {
@@ -390,10 +392,18 @@ async function executeClaudeInContainer(prompt, {
 	}
 
 	if (result.code !== 0) {
-		// A non-zero exit is most often an expired sandbox token the in-container
-		// CLI can no longer refresh. Drop the credentials so the next run re-seeds
-		// them from the host; the current run still surfaces its error.
-		dropSandboxAuthFile(path.join('.claude', '.credentials.json'), 'Claude credentials');
+		if (hasResultEvent(result.stdout)) {
+			// Authenticated but the turn errored (e.g. a usage/credit limit). The
+			// credentials are valid — keep them and propagate any token rotation to
+			// the host so the shared account is never stranded with a spent refresh
+			// token. Dropping here was the bug that forced a host re-login.
+			syncAgentCredentials('claude');
+		} else {
+			// No completed turn: most likely an expired sandbox token the in-container
+			// CLI can no longer refresh. Drop the credentials so the next run re-seeds
+			// them from the host.
+			dropSandboxAuthFile(path.join('.claude', '.credentials.json'), 'Claude credentials');
+		}
 		const errMsg = result.stdout.slice(-500) || `exit code ${result.code}`;
 		throw Object.assign(new Error(errMsg), {
 			code: result.code,
@@ -470,10 +480,15 @@ async function executeCodexInContainer(prompt, {
 				sessionId: parsed.sessionId,
 			});
 		}
-		// Mirror the Claude path: a non-zero exit is most often an expired sandbox
-		// token the CLI can no longer refresh. Drop the Codex auth so the next run
-		// re-seeds it from the host; the current run still surfaces its error.
-		dropSandboxAuthFile(path.join('.codex', 'auth.json'), 'Codex auth');
+		// Mirror the Claude path. A thread id means Codex authenticated and the run
+		// reached the API (e.g. a usage/credit limit) — keep the auth and sync any
+		// rotated token. Its absence points at an unrefreshable token, so drop the
+		// auth to re-seed from the host on the next run.
+		if (parsed.sessionId) {
+			syncAgentCredentials('codex');
+		} else {
+			dropSandboxAuthFile(path.join('.codex', 'auth.json'), 'Codex auth');
+		}
 		const errMsg = execution.stderr.slice(-500)
 			|| execution.stdout.slice(-500)
 			|| `exit code ${execution.code}`;
