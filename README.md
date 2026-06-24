@@ -164,6 +164,11 @@ on the next run; an authenticated failure such as a usage limit keeps them, sinc
 the token is still valid. Both files contain secrets and are written with mode
 `0600`.
 
+For unattended use, prefer a long-lived token: set `CLAUDE_CODE_OAUTH_TOKEN`
+(from `claude setup-token`) and Claude on both host and sandbox authenticates
+from it directly, skipping the file copy/sync above and the single-use
+refresh-token rotation it is exposed to. Codex still uses `~/.codex/auth.json`.
+
 Authenticate Claude Code on the host before first use:
 
 ```
@@ -182,6 +187,7 @@ authenticated and the missing sandbox credential can be seeded.
 | `AUTHORIZED_USER_ID` | Discord user ID of the only user allowed to talk to the bot | Yes |
 | `DISCORD_TOKEN` | Discord bot token | Yes |
 | `CLAUDE_BIN` | Path to Claude Code binary on the host | Optional (defaults to `~/.local/bin/claude`) |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Long-lived Claude token from `claude setup-token`; used by host and sandbox instead of the rotating credentials file | Optional (recommended for automation) |
 | `CODEX_BIN` | Path or command name for Codex CLI on the host | Optional (defaults to `codex`) |
 | `SANDBOX_HOME` | Directory bind-mounted into the container as `/home/claude` | Optional (required only for sandbox mode) |
 | `GROQ_API_KEY` | Groq API key for transcribing Discord voice messages via Whisper | Optional (voice messages ignored if unset) |

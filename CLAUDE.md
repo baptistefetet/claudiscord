@@ -58,7 +58,7 @@ src/
   uploads.js          # Save Discord file/photo attachments to .claudiscord/files
 scripts/
   rebuild-sandbox.sh  # Rebuild Docker sandbox image
-.env                  # AUTHORIZED_USER_ID, DISCORD_TOKEN, CLAUDE_BIN, CODEX_BIN, SANDBOX_HOME, GROQ_API_KEY
+.env                  # AUTHORIZED_USER_ID, DISCORD_TOKEN, CLAUDE_BIN, CLAUDE_CODE_OAUTH_TOKEN, CODEX_BIN, SANDBOX_HOME, GROQ_API_KEY
 ```
 
 ## Service
@@ -204,7 +204,12 @@ SANDBOX_HOST_HOME/
 `ADMIN_USER_HOME/.claude/.credentials.json` when the sandbox file is absent.
 It likewise seeds `SANDBOX_HOST_HOME/.codex/auth.json` from
 `ADMIN_USER_HOME/.codex/auth.json`. Copies are atomic, mode `0600`, and chowned
-to the sandbox UID/GID. Host and sandbox share one rotating-token account, so
+to the sandbox UID/GID. If `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`)
+is set, Claude on both host and sandbox authenticates from it (passed to the
+container via `docker exec -e`) and the Claude seeding/syncing below is skipped —
+recommended, it removes the single-use refresh-token race between the two
+`.credentials.json` copies that can otherwise force a `/login`. Codex still uses
+its `auth.json`. Otherwise host and sandbox share one rotating-token account, so
 after a successful run their credentials are kept in sync (newer mtime wins,
 `syncAgentCredentials`). Only a sandbox run that fails to *authenticate* (non-zero
 exit with no `result`/thread event) drops its credentials to re-seed from the host
