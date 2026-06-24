@@ -158,11 +158,9 @@ When sandbox storage is initialized, Claudiscord copies the host credentials:
 - `~/.codex/auth.json` to `SANDBOX_HOME/.codex/auth.json`
 
 At runtime, host and sandbox share one rotating-token account, so after a
-successful run their credentials are synced (newer copy wins). Only a sandbox
-run that fails to authenticate drops its own credentials to re-seed from the host
-on the next run; an authenticated failure such as a usage limit keeps them, since
-the token is still valid. Both files contain secrets and are written with mode
-`0600`.
+successful run their credentials are synced (newer copy wins) and a failed
+sandbox run drops its own to re-seed from the host on the next run. Both files
+contain secrets and are written with mode `0600`.
 
 Authenticate Claude Code on the host before first use:
 

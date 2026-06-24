@@ -206,13 +206,10 @@ It likewise seeds `SANDBOX_HOST_HOME/.codex/auth.json` from
 `ADMIN_USER_HOME/.codex/auth.json`. Copies are atomic, mode `0600`, and chowned
 to the sandbox UID/GID. Host and sandbox share one rotating-token account, so
 after a successful run their credentials are kept in sync (newer mtime wins,
-`syncAgentCredentials`). Only a sandbox run that fails to *authenticate* (non-zero
-exit with no `result`/thread event) drops its credentials to re-seed from the host
-next run (`dropSandboxAuthFile`); an authenticated failure such as a usage/credit
-limit keeps them, since the token is still valid — dropping a valid credential
-could strand the shared host copy. If host credentials are missing or invalid,
-sandbox creation continues but the corresponding agent reports an authentication
-error.
+`syncAgentCredentials`); a failed sandbox run drops its credentials to re-seed
+from the host next run (`dropSandboxAuthFile`). If host credentials are missing or
+invalid, sandbox creation continues but the corresponding agent reports an
+authentication error.
 
 ### Background tasks
 

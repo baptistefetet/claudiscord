@@ -21,7 +21,6 @@ const {
 	buildClaudeArgs,
 	spawnWithTimeout,
 	extractClaudeSessionId,
-	hasResultEvent,
 	parseClaudeOutput,
 } = require('./claude');
 const {
@@ -293,11 +292,10 @@ async function spawnClaudeInContainer(prompt, claudeOptions, {
 }
 
 // Delete a sandbox agent's credentials file so the next run re-seeds it from the
-// host (the seed* functions seed when the file is absent). Called only after an
-// AUTHENTICATION failure (the run never reached the API): the token expired and
-// the in-container CLI could not refresh it, so re-seeding from the host self-heals
-// on the next run. A run that authenticated but errored afterwards (e.g. a usage
-// limit) must NOT come here — its credentials are valid.
+// host (the seed* functions seed when the file is absent). Called after a failed
+// run: if the token expired and the in-container CLI could not refresh it, this
+// self-heals on the next run; for any other failure it is a harmless one-time
+// re-seed.
 function dropSandboxAuthFile(relPath, label) {
 	const target = path.join(SANDBOX_HOST_HOME, relPath);
 	try {
@@ -392,13 +390,10 @@ async function executeClaudeInContainer(prompt, {
 	}
 
 	if (result.code !== 0) {
-		// Only a genuine auth failure drops the credentials to re-seed from the
-		// host. A usage/credit limit still authenticated (it emits a `result`
-		// event), so its credentials are valid and must be kept — dropping them
-		// could strand the shared host copy and force a re-login.
-		if (!hasResultEvent(result.stdout)) {
-			dropSandboxAuthFile(path.join('.claude', '.credentials.json'), 'Claude credentials');
-		}
+		// A non-zero exit is most often an expired sandbox token the in-container
+		// CLI can no longer refresh. Drop the credentials so the next run re-seeds
+		// them from the host; the current run still surfaces its error.
+		dropSandboxAuthFile(path.join('.claude', '.credentials.json'), 'Claude credentials');
 		const errMsg = result.stdout.slice(-500) || `exit code ${result.code}`;
 		throw Object.assign(new Error(errMsg), {
 			code: result.code,
@@ -475,12 +470,10 @@ async function executeCodexInContainer(prompt, {
 				sessionId: parsed.sessionId,
 			});
 		}
-		// Mirror the Claude path: only a genuine auth failure drops the auth. A
-		// thread id means Codex authenticated (e.g. a usage/credit limit), so its
-		// auth is valid and must be kept.
-		if (!parsed.sessionId) {
-			dropSandboxAuthFile(path.join('.codex', 'auth.json'), 'Codex auth');
-		}
+		// Mirror the Claude path: a non-zero exit is most often an expired sandbox
+		// token the CLI can no longer refresh. Drop the Codex auth so the next run
+		// re-seeds it from the host; the current run still surfaces its error.
+		dropSandboxAuthFile(path.join('.codex', 'auth.json'), 'Codex auth');
 		const errMsg = execution.stderr.slice(-500)
 			|| execution.stdout.slice(-500)
 			|| `exit code ${execution.code}`;

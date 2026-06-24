@@ -119,24 +119,6 @@ function spawnWithTimeout(cmd, args, options = {}) {
 	});
 }
 
-/**
- * True if the stream-json output contains a final `result` event — i.e. the CLI
- * authenticated and completed a turn, even one that errored (a usage/credit
- * limit still emits a `result`). Its ABSENCE on a non-zero exit points at a
- * failure that never reached the API, the typical shape of an unrefreshable
- * token. Used to avoid discarding valid credentials on a non-auth failure.
- */
-function hasResultEvent(stdout) {
-	for (const line of (stdout || '').split('\n')) {
-		const trimmed = line.trim();
-		if (!trimmed) continue;
-		try {
-			if (JSON.parse(trimmed).type === 'result') return true;
-		} catch {}
-	}
-	return false;
-}
-
 function extractClaudeSessionId(stdout) {
 	for (const line of (stdout || '').split('\n')) {
 		const trimmed = line.trim();
@@ -339,7 +321,6 @@ module.exports = {
 	buildClaudeArgs,
 	spawnWithTimeout,
 	extractClaudeSessionId,
-	hasResultEvent,
 	parseClaudeOutput,
 	executeClaudeCommand,
 	getClaudeUsage,
