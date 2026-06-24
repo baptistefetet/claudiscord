@@ -103,10 +103,12 @@ references them by name in a later message.
 - Naming: original Discord `attachment.name` (basename), de-duplicated within a single
   batch (`image.png`, `image-2.png`). Across messages the same name is overwritten — no
   automatic cleanup.
-- Text wins: a message carrying both a caption and attachments is treated as a normal
-  prompt (attachments ignored), mirroring voice messages. The detection in
-  `src/index.js` runs before `handleCommand`, so uploads also work in `/remote` mode
-  (they don't spawn `claude -p`).
+- Text + attachments: the files are saved and echoed first (same as an upload-only
+  message), then the text is processed as a normal prompt so the agent can reference
+  them. With no text, the upload does not spawn the agent. Voice messages are excluded
+  (their lone attachment is the audio, handled by STT). The detection in `src/index.js`
+  runs before `handleCommand`, so uploads also work in `/remote` mode (files are saved,
+  the text still gets the remote-mode rejection without spawning `claude -p`).
 - The system prompt (`src/prompts.js`, "Uploaded files" section, `{{filesPath}}`) tells
   the agent the files dir and that a mentioned name *may* be an upload (re-read from disk
   each time, content can change) but could just as well be any other file in the
