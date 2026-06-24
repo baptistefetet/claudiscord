@@ -173,21 +173,6 @@ If host credentials are missing or invalid, sandbox initialization continues
 but the corresponding agent reports an authentication error until the host is
 authenticated and the missing sandbox credential can be seeded.
 
-## Host maintenance (optional)
-
-Claudiscord maintains the sandbox image (`scripts/rebuild-sandbox.sh`), but the
-host's APT packages, Claude Code and Codex CLIs are the operator's
-responsibility — they predate claudiscord. `scripts/upgrade_host.sh` updates all
-three. The bot never runs it; wire it into root's cron yourself, e.g. daily at
-04:00:
-
-```
-0 4 * * * /path/to/claudiscord/scripts/upgrade_host.sh >> /var/log/claudiscord-upgrade.log 2>&1
-```
-
-Run it with privileges that allow `apt-get` and `npm install -g` (root, like the
-service).
-
 ## Configuration
 
 | Variable | Description | Required |
