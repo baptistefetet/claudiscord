@@ -5,7 +5,6 @@ const {
 	ADMIN_USER_HOME,
 	SANDBOX_HOST_HOME,
 	SANDBOX_USER_HOME,
-	CLAUDE_CODE_OAUTH_TOKEN,
 	STATE_DIR,
 	JOBS_FILENAME,
 	CONTAINER_NAME,
@@ -224,9 +223,7 @@ function ensureStorage() {
 		chownContainerUser(jobsFile);
 	}
 
-	// With a long-lived token, Claude authenticates from the env var, so there is
-	// no .credentials.json to seed or keep in sync. Codex always uses its file.
-	if (!CLAUDE_CODE_OAUTH_TOKEN) seedCredentialsFromHost();
+	seedCredentialsFromHost();
 	seedCodexCredentialsFromHost();
 }
 
@@ -281,14 +278,9 @@ async function spawnClaudeInContainer(prompt, claudeOptions, {
 		label = `Container [${CONTAINER_NAME}]`,
 	} = {}) {
 	const claudeArgs = buildClaudeArgs(prompt, claudeOptions);
-	// Pass the long-lived token into the container when configured; the CLI then
-	// authenticates from it instead of the seeded .credentials.json file.
-	const tokenEnv = CLAUDE_CODE_OAUTH_TOKEN
-		? ['-e', `CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}`]
-		: [];
 	try {
 		return await spawnWithTimeout(
-			'docker', ['exec', '-i', ...tokenEnv, CONTAINER_NAME, 'claude', ...claudeArgs],
+			'docker', ['exec', '-i', CONTAINER_NAME, 'claude', ...claudeArgs],
 			{ timeoutMs, label },
 		);
 	} catch (err) {
@@ -341,8 +333,6 @@ function writeFileAtomicOwned(target, buf, uid, gid) {
 function syncAgentCredentials(agent) {
 	try {
 		if (!SANDBOX_HOST_HOME) return;
-		// Claude uses the env token as its single source of truth — no file to sync.
-		if (agent === 'claude' && CLAUDE_CODE_OAUTH_TOKEN) return;
 		const rel = agent === 'codex'
 			? path.join('.codex', 'auth.json')
 			: path.join('.claude', '.credentials.json');

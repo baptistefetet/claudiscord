@@ -16,12 +16,6 @@ const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 // binary for the user running the service. Override via .env if you have
 // it elsewhere.
 const CLAUDE_BIN = process.env.CLAUDE_BIN || path.join(os.homedir(), '.local/bin/claude');
-// Optional: a long-lived OAuth token from `claude setup-token` (Claude
-// subscription). When set, both host and sandbox Claude use it directly instead
-// of the rotating ~/.claude/.credentials.json. This sidesteps the single-use
-// refresh-token race between the two credential copies (and the forced /login it
-// caused), so sandbox credential seeding/syncing for Claude is skipped.
-const CLAUDE_CODE_OAUTH_TOKEN = process.env.CLAUDE_CODE_OAUTH_TOKEN || null;
 // Optional. Keep PATH lookup as the default because Codex installation paths
 // vary between package managers. Availability is detected in src/codex.js.
 const CODEX_BIN = process.env.CODEX_BIN || 'codex';
@@ -77,7 +71,6 @@ module.exports = {
 	AUTHORIZED_USER_ID,
 	DISCORD_TOKEN,
 	CLAUDE_BIN,
-	CLAUDE_CODE_OAUTH_TOKEN,
 	CODEX_BIN,
 	SANDBOX_HOST_HOME,
 	GROQ_API_KEY,
