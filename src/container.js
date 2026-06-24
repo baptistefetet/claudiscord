@@ -392,16 +392,11 @@ async function executeClaudeInContainer(prompt, {
 	}
 
 	if (result.code !== 0) {
-		if (hasResultEvent(result.stdout)) {
-			// Authenticated but the turn errored (e.g. a usage/credit limit). The
-			// credentials are valid — keep them and propagate any token rotation to
-			// the host so the shared account is never stranded with a spent refresh
-			// token. Dropping here was the bug that forced a host re-login.
-			syncAgentCredentials('claude');
-		} else {
-			// No completed turn: most likely an expired sandbox token the in-container
-			// CLI can no longer refresh. Drop the credentials so the next run re-seeds
-			// them from the host.
+		// Only a genuine auth failure drops the credentials to re-seed from the
+		// host. A usage/credit limit still authenticated (it emits a `result`
+		// event), so its credentials are valid and must be kept — dropping them
+		// could strand the shared host copy and force a re-login.
+		if (!hasResultEvent(result.stdout)) {
 			dropSandboxAuthFile(path.join('.claude', '.credentials.json'), 'Claude credentials');
 		}
 		const errMsg = result.stdout.slice(-500) || `exit code ${result.code}`;
@@ -480,13 +475,10 @@ async function executeCodexInContainer(prompt, {
 				sessionId: parsed.sessionId,
 			});
 		}
-		// Mirror the Claude path. A thread id means Codex authenticated and the run
-		// reached the API (e.g. a usage/credit limit) — keep the auth and sync any
-		// rotated token. Its absence points at an unrefreshable token, so drop the
-		// auth to re-seed from the host on the next run.
-		if (parsed.sessionId) {
-			syncAgentCredentials('codex');
-		} else {
+		// Mirror the Claude path: only a genuine auth failure drops the auth. A
+		// thread id means Codex authenticated (e.g. a usage/credit limit), so its
+		// auth is valid and must be kept.
+		if (!parsed.sessionId) {
 			dropSandboxAuthFile(path.join('.codex', 'auth.json'), 'Codex auth');
 		}
 		const errMsg = execution.stderr.slice(-500)
