@@ -46,7 +46,7 @@ src/
   discord.js          # Client, sendToChannel, splitMessage, typing indicator
   queue.js            # Single global FIFO (runQueued, isBusy)
   claude.js           # Host Claude CLI execution + shared spawn helper + OAuth usage (getClaudeUsage)
-  codex.js            # Host Codex CLI execution, shared args and JSONL parser
+  codex.js            # Host Codex CLI execution, JSONL parser and account usage (getCodexUsage)
   container.js        # Docker: image/container, Claude/Codex execution, creds
   executor.js         # executePrompt(agent, mode, prompt, opts) — dispatch + queue
   jobs-store.js       # loadAllJobs (admin+sandbox), recordJobRun, jobKey

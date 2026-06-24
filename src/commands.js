@@ -15,7 +15,7 @@ const {
 	DOCKER_AVAILABLE,
 	isCodexAvailableInContainer,
 } = require('./container');
-const { CODEX_AVAILABLE } = require('./codex');
+const { CODEX_AVAILABLE, getCodexUsage } = require('./codex');
 const { getClaudeUsage } = require('./claude');
 const { runQueued, isBusy } = require('./queue');
 const { startRemote, stopRemote } = require('./remote');
@@ -195,23 +195,13 @@ async function handleRemote(channel, channelId, mode, agent, remoteId) {
 }
 
 /**
- * /usage — Claude-only OAuth usage (current 5h window + weekly). Read-only.
+ * /usage — Claude and Codex account usage (current 5h window + weekly).
  */
-async function handleUsage(channel, agent) {
-	if (agent !== 'claude') {
-		await channel.send('`/usage` is only available with the **claude** agent. Use `/opus` or `/sonnet` first.');
-		return true;
-	}
-	const usage = await getClaudeUsage();
-	if (!usage.available) {
-		const reasons = {
-			'no-oauth': 'Claude usage is not available (API-key auth, no subscription window).',
-			expired: 'Claude usage unavailable: the auth token is expired. Run any Claude prompt then retry.',
-			error: 'Claude usage is unavailable right now.',
-		};
-		await channel.send(reasons[usage.reason] || reasons.error);
-		return true;
-	}
+async function handleUsage(channel) {
+	const [claudeUsage, codexUsage] = await Promise.all([
+		getClaudeUsage(),
+		getCodexUsage(),
+	]);
 	// Relative reset hint: "resets in 1h47" or "resets in 4d 6h" for the weekly window.
 	const fmtReset = (iso) => {
 		if (!iso) return '';
@@ -224,11 +214,29 @@ async function handleUsage(channel, agent) {
 		const span = d ? `${d}d ${h}h` : `${h}h${String(m).padStart(2, '0')}`;
 		return ` (resets in ${span})`;
 	};
-	await channel.send(
-		'📊 **Claude usage**\n'
-		+ `▫️ 5h window: **${Math.round(usage.fiveHour)}%**${fmtReset(usage.fiveHourResetAt)}\n`
-		+ `▫️ Weekly: **${Math.round(usage.weekly)}%**${fmtReset(usage.weeklyResetAt)}`,
-	);
+	const formatUsage = (label, usage, reasons) => {
+		if (!usage.available) {
+			return `📊 **${label} usage**\n▫️ ${reasons[usage.reason] || reasons.error}`;
+		}
+		return `📊 **${label} usage**\n`
+			+ `▫️ 5h window: **${Math.round(usage.fiveHour)}%**${fmtReset(usage.fiveHourResetAt)}\n`
+			+ `▫️ Weekly: **${Math.round(usage.weekly)}%**${fmtReset(usage.weeklyResetAt)}`;
+	};
+	const claudeReasons = {
+		'no-oauth': 'Not available (API-key auth, no subscription window).',
+		expired: 'Authentication expired. Run any Claude prompt then retry.',
+		error: 'Unavailable right now.',
+	};
+	const codexReasons = {
+		'no-cli': 'The Codex CLI is not installed.',
+		'no-subscription': 'Not available (API-key auth, no subscription window).',
+		expired: 'Authentication expired. Run `codex login` on the host.',
+		error: 'Unavailable right now.',
+	};
+	await channel.send([
+		formatUsage('Claude', claudeUsage, claudeReasons),
+		formatUsage('Codex', codexUsage, codexReasons),
+	].join('\n\n'));
 	return true;
 }
 
@@ -397,7 +405,7 @@ async function handleCommand(message) {
 \`/help\` — Show this help
 \`/clear\` — Reset session for this channel (new conversation)
 \`/status\` — Show current mode, agent and runtime status
-\`/usage\` — Show Claude usage (5h window + weekly)
+\`/usage\` — Show Claude and Codex usage (5h window + weekly)
 \`/jobs\` — List all scheduled jobs (admin + sandbox)
 \`/admin\` — Switch this channel to admin mode (host)
 \`/sandbox\` — Switch this channel to sandbox mode (container)
@@ -465,7 +473,7 @@ async function handleCommand(message) {
 		return true;
 	}
 
-	if (content === '/usage') return handleUsage(channel, agent);
+	if (content === '/usage') return handleUsage(channel);
 
 	if (content === '/jobs') return handleJobs(channel);
 
