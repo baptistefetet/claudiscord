@@ -16,8 +16,12 @@ const { sendToChannel, getClient } = require('./discord');
 const sessions = require('./sessions');
 const log = require('./logger');
 
-/** @type {Map<string, import('node-cron').ScheduledTask>} */
-const tasks = new Map();
+/** @type {Map<string, {matcher: object, job: object}>} jobKey -> matcher + job */
+const scheduled = new Map();
+
+/** Single minute-resolution ticker driving all jobs (see tick()) */
+let ticker = null;
+const TICK_MS = 30 * 1000;
 
 /** @type {Map<string, string>} jobKey -> lastRun minute string */
 const lastRunMinutes = new Map();
@@ -184,15 +188,29 @@ async function executeJob(job) {
 		} catch (err) {
 			log.error(`Failed to update job '${key}':`, err.message);
 		}
-		// Reload tasks in case remaining reached 0 (job removed from file)
+		// Rebuild the schedule in case remaining reached 0 (job removed from file)
 		reloadJobs();
 		releaseJobLock(key);
 	}
 }
 
+/**
+ * Build a job's time matcher without arming node-cron's own timer. We drive
+ * execution from a single minute-resolution ticker (see tick()) instead of
+ * node-cron's per-job setTimeout, which aimed at an exact second and silently
+ * dropped a run when the first heartbeat fired off that second (e.g. clock not
+ * yet NTP-synced right after a reboot). createTask() only parses the expression;
+ * destroy() discards the throwaway task and unregisters it (no leak).
+ */
+function buildMatcher(cronExpr) {
+	const task = cron.createTask(cronExpr, () => {});
+	const matcher = task.timeMatcher;
+	try { task.destroy(); } catch { /* ignore */ }
+	return matcher;
+}
+
 function reloadJobs() {
-	for (const task of tasks.values()) task.stop();
-	tasks.clear();
+	scheduled.clear();
 
 	const jobs = loadAllJobs();
 	for (const job of jobs) {
@@ -202,21 +220,53 @@ function reloadJobs() {
 			log.error(`Job '${key}': invalid cron expression '${job.cron}'`);
 			continue;
 		}
-		const task = cron.schedule(job.cron, () => {
-			executeJob(job).catch(err => log.error(`Job '${key}' unhandled error:`, err));
-		});
-		tasks.set(key, task);
+		const matcher = buildMatcher(job.cron);
+		if (!matcher || typeof matcher.match !== 'function') {
+			log.error(`Job '${key}': could not build time matcher`);
+			continue;
+		}
+		scheduled.set(key, { matcher, job });
 	}
-	log.info(`Scheduler reloaded: ${tasks.size} active job(s)`);
+	log.info(`Scheduler reloaded: ${scheduled.size} active job(s)`);
+}
+
+/**
+ * Fire every job whose cron matches the current minute. Runs a few times per
+ * minute (TICK_MS) so a slightly late/drifting tick still lands inside the right
+ * minute; the per-job minute lock in executeJob collapses those to a single run.
+ * Missed minutes are never replayed later.
+ */
+function tick() {
+	const minute = new Date();
+	minute.setSeconds(0, 0);
+	for (const { matcher, job } of scheduled.values()) {
+		let matched = false;
+		try {
+			matched = matcher.match(minute);
+		} catch (err) {
+			log.error(`Job '${jobKey(job)}': match error:`, err.message);
+			continue;
+		}
+		if (matched) {
+			executeJob(job).catch(err => log.error(`Job '${jobKey(job)}' unhandled error:`, err));
+		}
+	}
 }
 
 function start() {
 	reloadJobs();
+	if (!ticker) {
+		ticker = setInterval(tick, TICK_MS);
+		tick(); // evaluate the current minute now; setInterval's first call is one TICK_MS away
+	}
 }
 
 function stop() {
-	for (const task of tasks.values()) task.stop();
-	tasks.clear();
+	if (ticker) {
+		clearInterval(ticker);
+		ticker = null;
+	}
+	scheduled.clear();
 	log.info('Scheduler stopped');
 }
 

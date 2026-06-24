@@ -18,7 +18,7 @@ Discord message (DM or guild text channel)
        codex  + sandbox -> single container
 
 Scheduled jobs
-  -> node-cron
+  -> minute-resolution ticker
   -> executeJob(job)
   -> executePrompt(job.agent, job.mode, …) [same global queue]
   -> notification sent back to job.channelId
@@ -51,7 +51,7 @@ src/
   executor.js         # executePrompt(agent, mode, prompt, opts) — dispatch + queue
   jobs-store.js       # loadAllJobs (admin+sandbox), recordJobRun, jobKey
   sessions.js         # { channels: { channelId -> { mode, agent, sessionId, ... } } }
-  scheduler.js        # node-cron, reloadJobs, executeJob, per-key lock
+  scheduler.js        # minute-resolution ticker, reloadJobs, executeJob, per-key lock
   commands.js         # /help /clear /status /usage /jobs /admin /sandbox /opus /sonnet /codex /remote /upgrade /restart !shell
   remote.js           # /remote helpers: startRemote, stopRemote, reconcileRemotes
   stt.js              # Groq Whisper transcription for Discord voice messages
@@ -287,10 +287,11 @@ bash scripts/rebuild-sandbox.sh
 
 ### Execution & reload
 
-- `src/scheduler.js::reloadJobs()` rebuilds the `node-cron` tasks from both files.
+- A single minute-resolution ticker (`setInterval`, `TICK_MS`) fires every job whose cron matches the current minute, using node-cron only to parse/validate the expression and build its time matcher. This tolerates sub-minute timer/clock drift and never replays a missed minute — unlike node-cron's per-job `setTimeout`, which aimed at an exact second and silently dropped a run when the first heartbeat after a (re)start landed off that second.
+- `src/scheduler.js::reloadJobs()` rebuilds the in-memory schedule (one matcher per job) from both files.
 - Called at startup, after every interactive prompt, and at the end of every scheduled job — so any change to the jobs files is picked up within one prompt.
 - No `fs.watch` — only claudiscord writes to these files (directly via the active agent), so polling after each prompt is enough.
-- In-memory lock per job key prevents duplicate runs (including the "same wall-clock minute" edge case).
+- In-memory lock per job key (plus a per-minute guard) prevents duplicate runs (including the "same wall-clock minute" edge case).
 
 ### Notifications
 
