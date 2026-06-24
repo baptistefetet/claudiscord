@@ -1,26 +1,26 @@
 [
   {
-    "id": "check-system",
+    "id": "daily-health-check",
     "channelId": "<discord-channel-id>",
     "channelName": "ops-admin",
-    "prompt": "Verifie que tous les services tournent (systemctl is-active), l'espace disque (df -BG), et les erreurs recentes (journalctl --since yesterday -p err). Resume structure, termine par STATUT: OK ou STATUT: PROBLEME.",
+    "prompt": "Check that every systemd service is active (systemctl is-active), disk usage (df -BG) and recent errors (journalctl --since yesterday -p err). Give a short structured summary and end your reply with exactly 'STATUS: OK' or 'STATUS: PROBLEM'.",
     "cron": "0 7 * * *",
     "enabled": true,
     "notify": true,
-    "notifyPattern": "STATUT: PROBLEME",
+    "notifyPattern": "STATUS: PROBLEM",
     "remaining": 0,
     "agent": "claude",
     "model": "sonnet",
     "created": "2026-01-01T00:00:00Z",
     "lastRun": null,
-    "description": "Check sante quotidien a 7h (remaining: 0 = infini)"
+    "description": "Daily 7am health check. Only pings the channel when the output matches notifyPattern (remaining: 0 = runs forever)."
   },
   {
-    "id": "one-shot-example",
+    "id": "cert-expiry-reminder",
     "channelId": "<discord-channel-id>",
     "channelName": "ops-admin",
-    "prompt": "Dis bonjour.",
-    "cron": "30 12 * * *",
+    "prompt": "Report the expiry date of every Let's Encrypt certificate (certbot certificates) and tell me if any renews in less than 20 days.",
+    "cron": "0 9 25 * *",
     "enabled": true,
     "notify": true,
     "remaining": 1,
@@ -28,6 +28,6 @@
     "model": "sonnet",
     "created": "2026-01-01T00:00:00Z",
     "lastRun": null,
-    "description": "Exemple one-shot (remaining: 1 = supprime apres execution)"
+    "description": "One-shot reminder on the 25th at 9am. Runs once then deletes itself (remaining: 1). No notifyPattern means it always notifies."
   }
 ]
