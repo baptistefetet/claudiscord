@@ -285,7 +285,6 @@ async function getClaudeUsage() {
 
 module.exports = {
 	ADMIN_ENV,
-	buildClaudeArgs,
 	executeClaude,
 	hostClaudeEnv,
 	getClaudeUsage,

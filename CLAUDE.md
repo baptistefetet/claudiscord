@@ -46,14 +46,14 @@ src/
   discord.js          # Client, sendToChannel, splitMessage, typing indicator
   queue.js            # Single global FIFO (runQueued, isBusy)
   spawn.js            # spawnWithTimeout: generic subprocess runner (timeout, SIGTERM→SIGKILL)
-  claude.js           # Host Claude CLI execution + stream-json parse + OAuth usage (getClaudeUsage)
-  codex.js            # Host Codex CLI execution, JSONL parser and account usage (getCodexUsage)
-  container.js        # Docker: image/container, Claude/Codex execution, creds
-  executor.js         # executePrompt(agent, mode, prompt, opts) — dispatch + queue
+  claude.js           # Host Claude exec (executeClaude + hostClaudeEnv), stream-json parse, OAuth usage (getClaudeUsage)
+  codex.js            # Host Codex exec (executeCodex + hostCodexEnv), JSONL parse, account usage (getCodexUsage)
+  container.js        # Docker: image/container, sandbox env factories (sandboxClaudeEnv/sandboxCodexEnv), creds
+  executor.js         # executePrompt(agent, mode) → pick env (host const / sandbox factory) → executeClaude|executeCodex; queue
   jobs-store.js       # loadAllJobs (admin+sandbox), recordJobRun, jobKey
   sessions.js         # { channels: { channelId -> { mode, agent, sessionId, ... } } }
   scheduler.js        # minute-resolution ticker, reloadJobs, executeJob, per-key lock
-  commands.js         # /help /clear /status /usage /jobs /admin /sandbox /opus /sonnet /codex /remote /upgrade /restart !shell
+  commands.js         # COMMANDS registry → dispatch + auto-generated /help; /clear /status /usage /jobs /admin /sandbox /opus /sonnet /codex /remote /upgrade /restart !shell
   remote.js           # /remote helpers: startRemote, stopRemote, reconcileRemotes
   stt.js              # Groq Whisper transcription for Discord voice messages
   uploads.js          # Save Discord file/photo attachments to .claudiscord/files
@@ -142,7 +142,7 @@ references them by name in a later message.
 
 ## Channel context injection
 
-`src/prompts.js` builds the system prompt from `{ channelAgent, mode, channelName, channelTopic, isDM, botName, userName }`. The shared prompt always includes channel context, uploads, scheduling and Discord response rules. Claude-specific CLI and skill-filtering instructions live inside `{{#claude}}...{{/claude}}` and are omitted for Codex.
+`src/prompts.js` builds the system prompt from `{ channelAgent, channelModel, mode, channelName, threadName, channelTopic, isDM, botName, userName }`. The shared prompt always includes channel context, uploads, scheduling and Discord response rules. Claude-specific CLI and skill-filtering instructions live inside `{{#claude}}...{{/claude}}` and are omitted for Codex.
 
 ## Global queue
 
