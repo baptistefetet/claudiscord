@@ -330,6 +330,135 @@ async function handleUpgrade(channel, mode) {
 	return true;
 }
 
+// Codex availability for the channel's mode: the host startup probe in admin, a
+// live container probe in sandbox (which already returns false without Docker).
+function isCodexAvailable(mode) {
+	return mode === 'admin' ? CODEX_AVAILABLE : isCodexAvailableInContainer();
+}
+
+async function handleHelp({ channel, mode, agent, model }) {
+	const modelLabel = agent === 'claude' ? `, model: **${model}**` : '';
+	const lines = COMMANDS
+		.filter(c => !c.modes || c.modes.includes(mode))
+		.map(c => `\`${c.name}\` — ${c.help}`);
+	await channel.send(
+		`**Available commands** (current mode: **${mode}**, agent: **${agent}**${modelLabel})\n\n`
+		+ lines.join('\n'),
+	);
+	return true;
+}
+
+async function handleClear({ channel, channelId }) {
+	sessions.clearChannel(channelId);
+	await channel.send('Session reset for this channel.');
+	return true;
+}
+
+async function handleAdmin({ channel, channelId, mode }) {
+	if (mode === 'admin') {
+		await channel.send('This channel is already in **admin** mode.');
+		return true;
+	}
+	sessions.setMode(channelId, 'admin');
+	sessions.clearChannel(channelId);
+	await channel.send('Channel switched to **admin** mode. Session reset.');
+	return true;
+}
+
+async function handleSandbox({ channel, channelId, mode }) {
+	if (!DOCKER_AVAILABLE) {
+		await channel.send('Sandbox is not available on this host — only admin mode is available.');
+		return true;
+	}
+	if (mode === 'sandbox') {
+		await channel.send('This channel is already in **sandbox** mode.');
+		return true;
+	}
+	sessions.setMode(channelId, 'sandbox');
+	sessions.clearChannel(channelId);
+	await channel.send('Channel switched to **sandbox** mode. Session reset.');
+	return true;
+}
+
+async function handleStatus({ channel, mode, agent, model, remoteId }) {
+	const dockerNote = DOCKER_AVAILABLE ? '' : '\nSandbox unavailable on this host.';
+	const remoteLine = remoteId ? `\nRemote: \`${remoteId}\`` : '';
+	const modelLine = agent === 'claude' ? `\nModel: **${model}**` : '';
+	const reasoningLine = agent === 'codex' ? `\nReasoning: **${CODEX_REASONING_EFFORT}**` : '';
+	const codexLine = isCodexAvailable(mode) ? '' : `\nCodex unavailable in **${mode}** mode.`;
+	await channel.send(`Channel mode: **${mode}**\nAgent: **${agent}**${modelLine}${reasoningLine}${remoteLine}${dockerNote}${codexLine}`);
+	return true;
+}
+
+// Shared by /opus and /sonnet — the target model is the command name sans slash.
+async function handleModel({ channel, channelId, content, agent, model }) {
+	const target = content.slice(1);
+	if (agent === 'claude' && model === target) {
+		await channel.send(`This channel is already using **${target}**.`);
+		return true;
+	}
+	sessions.setModel(channelId, target);
+	if (agent !== 'claude') {
+		sessions.setAgent(channelId, 'claude');
+		await channel.send(`Channel switched to **claude ${target}**. Session reset.`);
+	} else {
+		await channel.send(`Channel switched to **${target}**.`);
+	}
+	return true;
+}
+
+async function handleCodex({ channel, channelId, mode, agent }) {
+	if (!isCodexAvailable(mode)) {
+		await channel.send(`Codex is not installed or not available in **${mode}** mode.`);
+		return true;
+	}
+	if (agent === 'codex') {
+		await channel.send('This channel is already using **codex**.');
+		return true;
+	}
+	sessions.setAgent(channelId, 'codex');
+	await channel.send(`Channel switched to **codex** with **${CODEX_REASONING_EFFORT}** reasoning. Session reset.`);
+	return true;
+}
+
+async function handleRestart({ channel }) {
+	await channel.send('Restarting claudiscord service...');
+	execFile('systemctl', ['restart', 'claudiscord'], (err) => {
+		if (err) log.error('Restart error:', err.message);
+	});
+	return true;
+}
+
+/**
+ * Single source of truth for slash commands, in /help display order. Fields:
+ *   - modes:         allowed channel modes (omit = all). Typing it in another
+ *                    mode replies `modeError` instead of falling through.
+ *   - remoteAllowed: accepted while the channel is in /remote mode.
+ *   - helpOnly:      listed in /help but never dispatched (e.g. the `!` shell,
+ *                    matched by prefix before the registry).
+ *   - handler:       ({ message, channel, channelId, content, mode, agent,
+ *                    model, remoteId }) => Promise<boolean>.
+ */
+const COMMANDS = [
+	{ name: '/help', help: 'Show this help', remoteAllowed: true, handler: handleHelp },
+	{ name: '/clear', help: 'Reset session for this channel (new conversation)', handler: handleClear },
+	{ name: '/status', help: 'Show current mode, agent and runtime status', remoteAllowed: true, handler: handleStatus },
+	{ name: '/usage', help: 'Show Claude and Codex usage (5h window + weekly)', remoteAllowed: true, handler: ({ channel }) => handleUsage(channel) },
+	{ name: '/jobs', help: 'List all scheduled jobs (admin + sandbox)', remoteAllowed: true, handler: ({ channel }) => handleJobs(channel) },
+	{ name: '/admin', help: 'Switch this channel to admin mode (host)', handler: handleAdmin },
+	{ name: '/sandbox', help: 'Switch this channel to sandbox mode (container)', handler: handleSandbox },
+	{ name: '/opus', help: 'Use Claude Opus for this channel', handler: handleModel },
+	{ name: '/sonnet', help: 'Use Claude Sonnet for this channel', handler: handleModel },
+	{ name: '/codex', help: 'Use Codex for this channel', handler: handleCodex },
+	{ name: '/remote', help: 'Toggle this channel between Discord mode and remote mode (Claude mobile app)', remoteAllowed: true, handler: ({ channel, channelId, mode, agent, remoteId }) => handleRemote(channel, channelId, mode, agent, remoteId) },
+	{ name: '!<command>', help: 'Execute a shell command (host if admin, container if sandbox)', helpOnly: true },
+	{ name: '/upgrade', help: 'Update sandbox container (apt + Claude Code + Codex)', modes: ['sandbox'], modeError: '`/upgrade` is only available in sandbox mode.', handler: ({ channel, mode }) => handleUpgrade(channel, mode) },
+	{ name: '/restart', help: 'Restart the claudiscord service', modes: ['admin'], modeError: '`/restart` is only available in admin mode.', handler: handleRestart },
+];
+
+// Commands accepted while a channel is driven by the Claude mobile app.
+const REMOTE_ALLOWED = new Set(COMMANDS.filter(c => c.remoteAllowed).map(c => c.name));
+
 /**
  * Handle special commands. Returns true if the message was a command.
  * The caller has already confirmed the message comes from the authorized user.
@@ -350,7 +479,7 @@ async function handleCommand(message) {
 	// arriving while `/remote start` is still queued can't slip through.
 	const remoteId = sessions.getRemoteId(channelId);
 	const remoteTransitioning = remoteOpInFlight.has(channelId);
-	if ((remoteId || remoteTransitioning) && content !== '/remote' && content !== '/status' && content !== '/help' && content !== '/jobs' && content !== '/usage') {
+	if ((remoteId || remoteTransitioning) && !REMOTE_ALLOWED.has(content)) {
 		const hint = !remoteId && remoteTransitioning
 			? '⏳ A `/remote` toggle is in progress for this channel.'
 			: `\u{1F6F0}️ This channel is in remote mode (agent \`${remoteId}\`). Send \`/remote\` to return to Discord mode.`;
@@ -398,133 +527,16 @@ async function handleCommand(message) {
 		return true;
 	}
 
-	if (content === '/help') {
-		const modelLabel = agent === 'claude' ? `, model: **${model}**` : '';
-		let help = `**Available commands** (current mode: **${mode}**, agent: **${agent}**${modelLabel})
-
-\`/help\` — Show this help
-\`/clear\` — Reset session for this channel (new conversation)
-\`/status\` — Show current mode, agent and runtime status
-\`/usage\` — Show Claude and Codex usage (5h window + weekly)
-\`/jobs\` — List all scheduled jobs (admin + sandbox)
-\`/admin\` — Switch this channel to admin mode (host)
-\`/sandbox\` — Switch this channel to sandbox mode (container)
-\`/opus\` — Use Claude Opus for this channel
-\`/sonnet\` — Use Claude Sonnet for this channel
-\`/codex\` — Use Codex for this channel
-\`/remote\` — Toggle this channel between Discord mode and remote mode (Claude mobile app)
-\`!<command>\` — Execute a shell command (host if admin, container if sandbox)`;
-		if (mode === 'sandbox') {
-			help += `
-\`/upgrade\` — Update sandbox container (apt + Claude Code + Codex)`;
-		}
-		if (mode === 'admin') {
-			help += `
-\`/restart\` — Restart the claudiscord service`;
-		}
-		await channel.send(help);
+	// Slash commands dispatched via the registry (single source of truth — also
+	// drives /help and the remote whitelist). An unknown command falls through
+	// (return false) so it is handled as a normal prompt.
+	const cmd = COMMANDS.find(c => !c.helpOnly && c.name === content);
+	if (!cmd) return false;
+	if (cmd.modes && !cmd.modes.includes(mode)) {
+		await channel.send(cmd.modeError);
 		return true;
 	}
-
-	if (content === '/clear') {
-		sessions.clearChannel(channelId);
-		await channel.send('Session reset for this channel.');
-		return true;
-	}
-
-	if (content === '/admin') {
-		if (mode === 'admin') {
-			await channel.send('This channel is already in **admin** mode.');
-			return true;
-		}
-		sessions.setMode(channelId, 'admin');
-		sessions.clearChannel(channelId);
-		await channel.send('Channel switched to **admin** mode. Session reset.');
-		return true;
-	}
-
-	if (content === '/sandbox') {
-		if (!DOCKER_AVAILABLE) {
-			await channel.send('Sandbox is not available on this host — only admin mode is available.');
-			return true;
-		}
-		if (mode === 'sandbox') {
-			await channel.send('This channel is already in **sandbox** mode.');
-			return true;
-		}
-		sessions.setMode(channelId, 'sandbox');
-		sessions.clearChannel(channelId);
-		await channel.send('Channel switched to **sandbox** mode. Session reset.');
-		return true;
-	}
-
-	if (content === '/remote') return handleRemote(channel, channelId, mode, agent, remoteId);
-
-	if (content === '/status') {
-		const dockerNote = DOCKER_AVAILABLE ? '' : '\nSandbox unavailable on this host.';
-		const remoteLine = remoteId ? `\nRemote: \`${remoteId}\`` : '';
-		const modelLine = agent === 'claude' ? `\nModel: **${model}**` : '';
-		const reasoningLine = agent === 'codex' ? `\nReasoning: **${CODEX_REASONING_EFFORT}**` : '';
-		const codexAvailable = mode === 'admin'
-			? CODEX_AVAILABLE
-			: isCodexAvailableInContainer();
-		const codexLine = codexAvailable ? '' : `\nCodex unavailable in **${mode}** mode.`;
-		await channel.send(`Channel mode: **${mode}**\nAgent: **${agent}**${modelLine}${reasoningLine}${remoteLine}${dockerNote}${codexLine}`);
-		return true;
-	}
-
-	if (content === '/usage') return handleUsage(channel);
-
-	if (content === '/jobs') return handleJobs(channel);
-
-	if (content === '/opus' || content === '/sonnet') {
-		const target = content.slice(1);
-		if (agent === 'claude' && model === target) {
-			await channel.send(`This channel is already using **${target}**.`);
-			return true;
-		}
-		sessions.setModel(channelId, target);
-		if (agent !== 'claude') {
-			sessions.setAgent(channelId, 'claude');
-			await channel.send(`Channel switched to **claude ${target}**. Session reset.`);
-		} else {
-			await channel.send(`Channel switched to **${target}**.`);
-		}
-		return true;
-	}
-
-	if (content === '/codex') {
-		const codexAvailable = mode === 'admin'
-			? CODEX_AVAILABLE
-			: (DOCKER_AVAILABLE && isCodexAvailableInContainer());
-		if (!codexAvailable) {
-			await channel.send(`Codex is not installed or not available in **${mode}** mode.`);
-			return true;
-		}
-		if (agent === 'codex') {
-			await channel.send('This channel is already using **codex**.');
-			return true;
-		}
-		sessions.setAgent(channelId, 'codex');
-		await channel.send(`Channel switched to **codex** with **${CODEX_REASONING_EFFORT}** reasoning. Session reset.`);
-		return true;
-	}
-
-	if (content === '/restart') {
-		if (mode !== 'admin') {
-			await channel.send('`/restart` is only available in admin mode.');
-			return true;
-		}
-		await channel.send('Restarting claudiscord service...');
-		execFile('systemctl', ['restart', 'claudiscord'], (err) => {
-			if (err) log.error('Restart error:', err.message);
-		});
-		return true;
-	}
-
-	if (content === '/upgrade') return handleUpgrade(channel, mode);
-
-	return false;
+	return cmd.handler({ message, channel, channelId, content, mode, agent, model, remoteId });
 }
 
 module.exports = { handleCommand };
