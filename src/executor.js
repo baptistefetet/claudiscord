@@ -1,6 +1,6 @@
 const { executeClaudeCommand } = require('./claude');
 const { executeCodexCommand } = require('./codex');
-const { executeClaudeInContainer, executeCodexInContainer, syncAgentCredentials } = require('./container');
+const { executeClaudeInContainer, executeCodexInContainer, reconcileAgentCredentials } = require('./container');
 const { runQueued } = require('./queue');
 const sessions = require('./sessions');
 
@@ -42,6 +42,11 @@ function executePrompt(agent, mode, prompt, options = {}) {
 			|| (sessions.getAgent(channelId) === agent && sessions.getMode(channelId) === mode)
 		);
 
+		// Align this agent's host/sandbox credentials before the run so it starts
+		// with the freshest rotating token (the other copy goes stale when one side
+		// refreshes). Inside the serialized queue, so there is no concurrent refresh.
+		reconcileAgentCredentials(agent);
+
 		try {
 			let result;
 			if (agent === 'codex') {
@@ -59,10 +64,6 @@ function executePrompt(agent, mode, prompt, options = {}) {
 			if (channelId && result.sessionId && sessionContextIsCurrent()) {
 				sessions.setSessionId(channelId, result.sessionId);
 			}
-			// The run authenticated successfully; if it refreshed its rotating
-			// token, propagate the new credentials between host and sandbox so the
-			// shared account doesn't strand the other side with a stale token.
-			syncAgentCredentials(agent);
 			return result;
 		} catch (err) {
 			if (channelId && err.sessionId && sessionContextIsCurrent()) {

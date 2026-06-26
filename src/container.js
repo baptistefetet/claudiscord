@@ -103,82 +103,62 @@ function chownContainerUser(target) {
 	}
 }
 
-function writeSandboxCredentials(credentialsJson) {
-	const credPath = path.join(SANDBOX_HOST_HOME, '.claude', '.credentials.json');
-	const tmp = `${credPath}.${process.pid}.${Date.now()}.tmp`;
+// Numeric "freshness" of an agent's credentials file: higher means more
+// recently refreshed, so it holds the live rotating token (the provider rotates
+// it on use, stranding the older copy). Missing, unreadable, unparsable, or
+// credential-less files return -Infinity so they always lose and get repaired.
+function credentialFreshness(agent, filePath) {
 	try {
-		fs.writeFileSync(tmp, credentialsJson, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
-		fs.renameSync(tmp, credPath);
-		fs.chmodSync(credPath, 0o600);
-		execFileSync('chown', [`${SANDBOX_UID}:${SANDBOX_GID}`, credPath], { timeout: 5000 });
-	} finally {
-		fs.rmSync(tmp, { force: true });
-	}
-}
-
-function writeSandboxCodexAuth(authJson) {
-	const authPath = path.join(SANDBOX_HOST_HOME, '.codex', 'auth.json');
-	const tmp = `${authPath}.${process.pid}.${Date.now()}.tmp`;
-	try {
-		fs.writeFileSync(tmp, authJson, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
-		fs.renameSync(tmp, authPath);
-		fs.chmodSync(authPath, 0o600);
-		execFileSync('chown', [`${SANDBOX_UID}:${SANDBOX_GID}`, authPath], { timeout: 5000 });
-	} finally {
-		fs.rmSync(tmp, { force: true });
-	}
-}
-
-function seedCredentialsFromHost() {
-	const sandboxCredPath = path.join(SANDBOX_HOST_HOME, '.claude', '.credentials.json');
-	if (fs.existsSync(sandboxCredPath)) return false;
-
-	const hostCredPath = path.join(ADMIN_USER_HOME, '.claude', '.credentials.json');
-	let credentialsJson;
-	try {
-		credentialsJson = fs.readFileSync(hostCredPath, 'utf8');
-		const parsed = JSON.parse(credentialsJson);
-		if (!parsed.claudeAiOauth?.accessToken) {
-			log.warn(`Host credentials at ${hostCredPath} are missing claudeAiOauth.accessToken`);
-			return false;
+		const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+		if (agent === 'codex') {
+			if (!parsed.tokens?.access_token && !parsed.OPENAI_API_KEY) return -Infinity;
+			const t = Date.parse(parsed.last_refresh);
+			return Number.isNaN(t) ? 0 : t; // static API key / no timestamp: present but unrotated
 		}
+		const oauth = parsed.claudeAiOauth;
+		if (!oauth?.accessToken || typeof oauth.expiresAt !== 'number') return -Infinity;
+		return oauth.expiresAt;
+	} catch {
+		return -Infinity;
+	}
+}
+
+// Align an agent's host and sandbox credentials before a run so it starts with
+// the freshest copy. Both share one account, and only the most recently
+// refreshed file holds a live token, so we overwrite the staler side (a missing
+// or corrupt file is -Infinity and is repaired here — this subsumes seeding).
+// Executions are serialized through the global queue, so there is no concurrent
+// refresh; the copy is skipped when contents already match, so it never loops. A
+// destination whose parent dir is absent (environment not provisioned yet) is
+// left untouched.
+function reconcileAgentCredentials(agent) {
+	try {
+		if (!SANDBOX_HOST_HOME) return;
+		const rel = agent === 'codex'
+			? path.join('.codex', 'auth.json')
+			: path.join('.claude', '.credentials.json');
+		const hostPath = path.join(ADMIN_USER_HOME, rel);
+		const sandboxPath = path.join(SANDBOX_HOST_HOME, rel);
+
+		const hostFresh = credentialFreshness(agent, hostPath);
+		const sandboxFresh = credentialFreshness(agent, sandboxPath);
+		if (hostFresh === -Infinity && sandboxFresh === -Infinity) return;
+
+		const [from, to, uid, gid] = sandboxFresh > hostFresh
+			? [sandboxPath, hostPath, 0, 0]
+			: [hostPath, sandboxPath, SANDBOX_UID, SANDBOX_GID];
+		if (!fs.existsSync(path.dirname(to))) return;
+
+		const fromBuf = fs.readFileSync(from);
+		let toBuf = null;
+		try { toBuf = fs.readFileSync(to); } catch { /* absent: created below */ }
+		if (toBuf && fromBuf.equals(toBuf)) return;
+
+		writeFileAtomicOwned(to, fromBuf, uid, gid);
+		log.info(`Reconciled ${agent} credentials: ${from === hostPath ? 'host -> sandbox' : 'sandbox -> host'}`);
 	} catch (err) {
-		if (err.code !== 'ENOENT') {
-			log.warn(`Could not read host credentials at ${hostCredPath}: ${err.message}`);
-		}
-		return false;
+		log.warn(`reconcileAgentCredentials(${agent}) failed: ${err.message}`);
 	}
-
-	writeSandboxCredentials(credentialsJson);
-	log.info('Seeded sandbox credentials from host');
-	return true;
-}
-
-function seedCodexCredentialsFromHost() {
-	const sandboxAuthPath = path.join(SANDBOX_HOST_HOME, '.codex', 'auth.json');
-	if (fs.existsSync(sandboxAuthPath)) return false;
-
-	const hostAuthPath = path.join(ADMIN_USER_HOME, '.codex', 'auth.json');
-	let authJson;
-	try {
-		authJson = fs.readFileSync(hostAuthPath, 'utf8');
-		const parsed = JSON.parse(authJson);
-		const hasApiKey = typeof parsed.OPENAI_API_KEY === 'string' && parsed.OPENAI_API_KEY;
-		const hasAccessToken = typeof parsed.tokens?.access_token === 'string' && parsed.tokens.access_token;
-		if (!hasApiKey && !hasAccessToken) {
-			log.warn(`Host Codex credentials at ${hostAuthPath} contain no usable credential`);
-			return false;
-		}
-	} catch (err) {
-		if (err.code !== 'ENOENT') {
-			log.warn(`Could not read host Codex credentials at ${hostAuthPath}: ${err.message}`);
-		}
-		return false;
-	}
-
-	writeSandboxCodexAuth(authJson);
-	log.info('Seeded sandbox Codex credentials from host');
-	return true;
 }
 
 function ensureStorage() {
@@ -222,8 +202,8 @@ function ensureStorage() {
 		chownContainerUser(jobsFile);
 	}
 
-	seedCredentialsFromHost();
-	seedCodexCredentialsFromHost();
+	reconcileAgentCredentials('claude');
+	reconcileAgentCredentials('codex');
 }
 
 function ensureContainer() {
@@ -291,21 +271,6 @@ async function spawnClaudeInContainer(prompt, claudeOptions, {
 	}
 }
 
-// Delete a sandbox agent's credentials file so the next run re-seeds it from the
-// host (the seed* functions seed when the file is absent). Called after a failed
-// run: if the token expired and the in-container CLI could not refresh it, this
-// self-heals on the next run; for any other failure it is a harmless one-time
-// re-seed.
-function dropSandboxAuthFile(relPath, label) {
-	const target = path.join(SANDBOX_HOST_HOME, relPath);
-	try {
-		fs.rmSync(target, { force: true });
-		log.warn(`Removed sandbox ${label} after a failed run; it will be re-seeded from the host on the next run`);
-	} catch (err) {
-		log.warn(`Failed to remove sandbox ${label}: ${err.message}`);
-	}
-}
-
 // Atomically write `buf` to `target`, then set mode 0600 and ownership.
 function writeFileAtomicOwned(target, buf, uid, gid) {
 	const tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
@@ -316,44 +281,6 @@ function writeFileAtomicOwned(target, buf, uid, gid) {
 		fs.chownSync(target, uid, gid);
 	} finally {
 		fs.rmSync(tmp, { force: true });
-	}
-}
-
-// Keep an agent's host and sandbox credentials in sync. Both share one account,
-// and the provider rotates the refresh token on use, so whichever side refreshed
-// last holds the only valid token and the other copy goes stale. Called after a
-// SUCCESSFUL run (so the credentials used were valid): if that run refreshed its
-// token, propagate the file to the other side, so the next run — host or sandbox
-// — starts with the current token. Executions are serialized through the global
-// queue, so there is never a concurrent refresh. The mtime only decides the
-// direction; the copy is skipped when the contents already match, so it never
-// loops.
-function syncAgentCredentials(agent) {
-	try {
-		if (!SANDBOX_HOST_HOME) return;
-		const rel = agent === 'codex'
-			? path.join('.codex', 'auth.json')
-			: path.join('.claude', '.credentials.json');
-		const hostPath = path.join(ADMIN_USER_HOME, rel);
-		const sandboxPath = path.join(SANDBOX_HOST_HOME, rel);
-
-		let hostStat, sandboxStat;
-		try { hostStat = fs.statSync(hostPath); } catch { return; }
-		try { sandboxStat = fs.statSync(sandboxPath); } catch { return; }
-
-		const hostBuf = fs.readFileSync(hostPath);
-		const sandboxBuf = fs.readFileSync(sandboxPath);
-		if (hostBuf.equals(sandboxBuf)) return;
-
-		if (sandboxStat.mtimeMs > hostStat.mtimeMs) {
-			writeFileAtomicOwned(hostPath, sandboxBuf, 0, 0);
-			log.info(`Synced ${agent} credentials: sandbox -> host`);
-		} else {
-			writeFileAtomicOwned(sandboxPath, hostBuf, SANDBOX_UID, SANDBOX_GID);
-			log.info(`Synced ${agent} credentials: host -> sandbox`);
-		}
-	} catch (err) {
-		log.warn(`syncAgentCredentials(${agent}) failed: ${err.message}`);
 	}
 }
 
@@ -390,10 +317,6 @@ async function executeClaudeInContainer(prompt, {
 	}
 
 	if (result.code !== 0) {
-		// A non-zero exit is most often an expired sandbox token the in-container
-		// CLI can no longer refresh. Drop the credentials so the next run re-seeds
-		// them from the host; the current run still surfaces its error.
-		dropSandboxAuthFile(path.join('.claude', '.credentials.json'), 'Claude credentials');
 		const errMsg = result.stdout.slice(-500) || `exit code ${result.code}`;
 		throw Object.assign(new Error(errMsg), {
 			code: result.code,
@@ -470,10 +393,6 @@ async function executeCodexInContainer(prompt, {
 				sessionId: parsed.sessionId,
 			});
 		}
-		// Mirror the Claude path: a non-zero exit is most often an expired sandbox
-		// token the CLI can no longer refresh. Drop the Codex auth so the next run
-		// re-seeds it from the host; the current run still surfaces its error.
-		dropSandboxAuthFile(path.join('.codex', 'auth.json'), 'Codex auth');
 		const errMsg = execution.stderr.slice(-500)
 			|| execution.stdout.slice(-500)
 			|| `exit code ${execution.code}`;
@@ -512,5 +431,5 @@ module.exports = {
 	isCodexAvailableInContainer,
 	executeCodexInContainer,
 	writeSandboxUpload,
-	syncAgentCredentials,
+	reconcileAgentCredentials,
 };
