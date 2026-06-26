@@ -5,7 +5,7 @@ const {
 	PROMPT_TIMEOUT_MS,
 	ADMIN_USER_HOME,
 } = require('./config');
-const { spawnWithTimeout } = require('./claude');
+const { spawnWithTimeout } = require('./spawn');
 const log = require('./logger');
 
 const CODEX_USAGE_TIMEOUT_MS = 10000;

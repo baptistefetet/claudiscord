@@ -45,7 +45,8 @@ src/
   logger.js           # stdout/stderr logging (journald-friendly)
   discord.js          # Client, sendToChannel, splitMessage, typing indicator
   queue.js            # Single global FIFO (runQueued, isBusy)
-  claude.js           # Host Claude CLI execution + shared spawn helper + OAuth usage (getClaudeUsage)
+  spawn.js            # spawnWithTimeout: generic subprocess runner (timeout, SIGTERM→SIGKILL)
+  claude.js           # Host Claude CLI execution + stream-json parse + OAuth usage (getClaudeUsage)
   codex.js            # Host Codex CLI execution, JSONL parser and account usage (getCodexUsage)
   container.js        # Docker: image/container, Claude/Codex execution, creds
   executor.js         # executePrompt(agent, mode, prompt, opts) — dispatch + queue
@@ -215,7 +216,7 @@ authentication error.
 
 ### Background tasks
 
-`spawnWithTimeout` (`src/claude.js`) waits for the active CLI to exit naturally.
+`spawnWithTimeout` (`src/spawn.js`) waits for the active CLI to exit naturally.
 After 20 minutes, the process is killed and the user receives a timeout error;
 partial output is not recovered. The channel session remains resumable.
 

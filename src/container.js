@@ -14,7 +14,7 @@ const {
 	CODEX_REASONING_EFFORT,
 } = require('./config');
 const { getDefaultClaudeMd } = require('./prompts');
-const { spawnWithTimeout } = require('./claude');
+const { spawnWithTimeout } = require('./spawn');
 const log = require('./logger');
 
 const DOCKERFILE_DIR = path.resolve(__dirname, '..');

@@ -1,7 +1,7 @@
-const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { CLAUDE_BIN, PROMPT_TIMEOUT_MS, ALLOWED_TOOLS, DISALLOWED_TOOLS, ADMIN_USER_HOME } = require('./config');
+const { spawnWithTimeout } = require('./spawn');
 const log = require('./logger');
 
 // OAuth account usage (5h window + weekly), same endpoint Claude Code's /usage hits.
@@ -52,71 +52,6 @@ function buildClaudeArgs(prompt, options = {}) {
 	args.push('--', prompt);
 
 	return args;
-}
-
-/**
- * Spawn a command with timeout, stdout/stderr collection, and SIGTERM→SIGKILL.
- * Returns { stdout, stderr, code }. Waits for the process to exit naturally —
- * if Claude launches a background task (e.g. forced by the harness when a
- * `sleep` is too long), we wait for it to complete rather than killing early.
- * The trade-off is that truly interactive commands (`gws auth login`, ssh to
- * an unknown host, `apt install` without `-y`) will hang until PROMPT_TIMEOUT_MS.
- */
-function spawnWithTimeout(cmd, args, options = {}) {
-	const {
-		timeoutMs = PROMPT_TIMEOUT_MS,
-		cwd,
-		env,
-		label = 'process',
-		input = null,
-	} = options;
-
-	return new Promise((resolve, reject) => {
-		const child = spawn(cmd, args, {
-			cwd,
-			env,
-			stdio: ['pipe', 'pipe', 'pipe'],
-		});
-
-		child.stdin.on('error', () => {});
-		child.stdin.end(input === null ? undefined : input);
-
-		let stdout = '';
-		let stderr = '';
-
-		child.stdout.on('data', chunk => { stdout += chunk; });
-		child.stderr.on('data', chunk => { stderr += chunk; });
-
-		let killed = false;
-		let killTimer = null;
-		const timer = setTimeout(() => {
-			killed = true;
-			log.warn(`${label} timeout after ${timeoutMs}ms, sending SIGTERM`);
-			child.kill('SIGTERM');
-			killTimer = setTimeout(() => {
-				try { child.kill('SIGKILL'); } catch (_) {}
-			}, 5000);
-		}, timeoutMs);
-
-		child.on('close', (code) => {
-			clearTimeout(timer);
-			if (killTimer) clearTimeout(killTimer);
-			if (killed) {
-				reject(Object.assign(new Error('timeout'), { code: 124, stdout, stderr }));
-				return;
-			}
-			if (stderr) log.warn(`${label} stderr:`, stderr.slice(0, 500));
-			resolve({ stdout, stderr, code });
-		});
-
-		child.on('error', (err) => {
-			clearTimeout(timer);
-			if (killTimer) clearTimeout(killTimer);
-			err.stdout = stdout;
-			err.stderr = stderr;
-			reject(err);
-		});
-	});
 }
 
 // Split a stream-json stdout into its per-line JSON events. This is the single
@@ -351,7 +286,6 @@ async function getClaudeUsage() {
 module.exports = {
 	ADMIN_ENV,
 	buildClaudeArgs,
-	spawnWithTimeout,
 	executeClaude,
 	hostClaudeEnv,
 	getClaudeUsage,
