@@ -248,7 +248,7 @@ client.on(Events.MessageCreate, async message => {
 			errMsg = 'Docker is not installed — switch this channel to admin mode with `/admin`.';
 		} else {
 			const agentLabel = agent === 'codex' ? 'Codex' : 'Claude Code';
-			errMsg = `${agentLabel} error: ${err.message?.slice(0, 300) || 'unknown'}\n(if this keeps happening, send \`/clear\` to reset the session)`;
+			errMsg = `${agentLabel} error: ${err.message?.slice(0, 300) || 'unknown'}`;
 		}
 		await channel.send(errMsg).catch(e => log.error('Failed to send error message:', e));
 	} finally {

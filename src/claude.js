@@ -134,6 +134,31 @@ function extractClaudeSessionId(stdout) {
 }
 
 /**
+ * Extract the human-readable error text from a stream-json stdout: the last
+ * `result` event's `result` field, falling back to its `subtype`. On a failed
+ * run (e.g. usage limit, credit balance) this text lives near the START of the
+ * result event's JSON, so a naive stdout.slice(-500) returns the metadata tail
+ * (usage stats) instead. Returns null when no usable text is found — the caller
+ * then falls back to stderr or the exit code.
+ */
+function extractClaudeResultText(stdout) {
+	const lines = (stdout || '').split('\n');
+	for (let i = lines.length - 1; i >= 0; i--) {
+		const trimmed = lines[i].trim();
+		if (!trimmed) continue;
+		try {
+			const event = JSON.parse(trimmed);
+			if (event.type === 'result') {
+				return (typeof event.result === 'string' && event.result.trim())
+					? event.result.trim()
+					: (event.subtype || null);
+			}
+		} catch (_) {}
+	}
+	return null;
+}
+
+/**
  * Collect the user-visible text from a stream-json stdout.
  *
  * The `result` event only carries the final text block, so a naive read
@@ -254,7 +279,9 @@ async function executeClaudeCommand(prompt, options = {}) {
 	}
 
 	if (result.code !== 0) {
-		const errMsg = result.stdout.slice(-500) || `exit code ${result.code}`;
+		const errMsg = extractClaudeResultText(result.stdout)
+			|| result.stderr?.slice(-500)
+			|| `exit code ${result.code}`;
 		throw Object.assign(new Error(errMsg), {
 			code: result.code,
 			sessionId: extractClaudeSessionId(result.stdout),
@@ -321,6 +348,7 @@ module.exports = {
 	buildClaudeArgs,
 	spawnWithTimeout,
 	extractClaudeSessionId,
+	extractClaudeResultText,
 	parseClaudeOutput,
 	executeClaudeCommand,
 	getClaudeUsage,

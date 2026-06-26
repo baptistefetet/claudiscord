@@ -21,6 +21,7 @@ const {
 	buildClaudeArgs,
 	spawnWithTimeout,
 	extractClaudeSessionId,
+	extractClaudeResultText,
 	parseClaudeOutput,
 } = require('./claude');
 const {
@@ -317,7 +318,9 @@ async function executeClaudeInContainer(prompt, {
 	}
 
 	if (result.code !== 0) {
-		const errMsg = result.stdout.slice(-500) || `exit code ${result.code}`;
+		const errMsg = extractClaudeResultText(result.stdout)
+			|| result.stderr?.slice(-500)
+			|| `exit code ${result.code}`;
 		throw Object.assign(new Error(errMsg), {
 			code: result.code,
 			sessionId: extractClaudeSessionId(result.stdout),
