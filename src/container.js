@@ -20,9 +20,7 @@ const { getDefaultClaudeMd } = require('./prompts');
 const {
 	buildClaudeArgs,
 	spawnWithTimeout,
-	extractClaudeSessionId,
-	extractClaudeResultText,
-	parseClaudeOutput,
+	runClaude,
 } = require('./claude');
 const {
 	buildCodexArgs,
@@ -309,25 +307,10 @@ async function executeClaudeInContainer(prompt, {
 	const attach = sessionId ? `resume ${sessionId}` : 'new session';
 	log.info(`${label}: ${attach}, prompt length: ${prompt.length}`);
 
-	let result;
-	try {
-		result = await spawnClaudeInContainer(prompt, claudeOptions, { timeoutMs, label });
-	} catch (err) {
-		err.sessionId = extractClaudeSessionId(err.stdout);
-		throw err;
-	}
-
-	if (result.code !== 0) {
-		const errMsg = extractClaudeResultText(result.stdout)
-			|| result.stderr?.slice(-500)
-			|| `exit code ${result.code}`;
-		throw Object.assign(new Error(errMsg), {
-			code: result.code,
-			sessionId: extractClaudeSessionId(result.stdout),
-		});
-	}
-
-	return parseClaudeOutput(result.stdout, label);
+	return runClaude(
+		() => spawnClaudeInContainer(prompt, claudeOptions, { timeoutMs, label }),
+		label,
+	);
 }
 
 function isCodexAvailableInContainer() {

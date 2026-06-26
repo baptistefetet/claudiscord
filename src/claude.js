@@ -119,47 +119,53 @@ function spawnWithTimeout(cmd, args, options = {}) {
 	});
 }
 
-function extractClaudeSessionId(stdout) {
+// Split a stream-json stdout into its per-line JSON events. This is the single
+// JSON.parse pass; every extractor below operates on the resulting array.
+function parseStreamJsonEvents(stdout) {
+	const events = [];
 	for (const line of (stdout || '').split('\n')) {
 		const trimmed = line.trim();
 		if (!trimmed) continue;
 		try {
+			// Keep only objects: a bare JSON primitive (e.g. `null`) parses
+			// without throwing but would break the extractors' property access.
 			const event = JSON.parse(trimmed);
-			if (typeof event.session_id === 'string' && event.session_id) {
-				return event.session_id;
-			}
-		} catch {}
-	}
-	return null;
-}
-
-/**
- * Extract the human-readable error text from a stream-json stdout: the last
- * `result` event's `result` field, falling back to its `subtype`. On a failed
- * run (e.g. usage limit, credit balance) this text lives near the START of the
- * result event's JSON, so a naive stdout.slice(-500) returns the metadata tail
- * (usage stats) instead. Returns null when no usable text is found — the caller
- * then falls back to stderr or the exit code.
- */
-function extractClaudeResultText(stdout) {
-	const lines = (stdout || '').split('\n');
-	for (let i = lines.length - 1; i >= 0; i--) {
-		const trimmed = lines[i].trim();
-		if (!trimmed) continue;
-		try {
-			const event = JSON.parse(trimmed);
-			if (event.type === 'result') {
-				return (typeof event.result === 'string' && event.result.trim())
-					? event.result.trim()
-					: (event.subtype || null);
-			}
+			if (event && typeof event === 'object') events.push(event);
 		} catch (_) {}
 	}
+	return events;
+}
+
+// First session_id seen in the event stream, or null.
+function sessionIdFromEvents(events) {
+	for (const e of events) {
+		if (typeof e.session_id === 'string' && e.session_id) return e.session_id;
+	}
 	return null;
 }
 
+// Last `result` event in the stream, or null.
+function lastResultEvent(events) {
+	for (let i = events.length - 1; i >= 0; i--) {
+		if (events[i].type === 'result') return events[i];
+	}
+	return null;
+}
+
+// Human-readable error text from a result event: its `result` field, falling
+// back to `subtype`. On a failed run (e.g. usage limit, credit balance) this
+// text lives near the START of the result event's JSON, so a naive
+// stdout.slice(-500) returns the metadata tail (usage stats) instead. Returns
+// null when nothing usable is found — the caller falls back to stderr/exit code.
+function errorTextFromResultEvent(resultEvent) {
+	if (!resultEvent) return null;
+	return (typeof resultEvent.result === 'string' && resultEvent.result.trim())
+		? resultEvent.result.trim()
+		: (resultEvent.subtype || null);
+}
+
 /**
- * Collect the user-visible text from a stream-json stdout.
+ * Collect the user-visible final answer from the event stream.
  *
  * The `result` event only carries the final text block, so a naive read
  * loses intermediate text when the conversation interleaves text with
@@ -179,14 +185,7 @@ function extractClaudeResultText(stdout) {
  * text), there is no text after the last tool boundary and this returns ''.
  * The caller falls back to `resultEvent.result`.
  */
-function collectStreamJsonText(stdout) {
-	const events = [];
-	for (const line of stdout.split('\n')) {
-		const trimmed = line.trim();
-		if (!trimmed) continue;
-		try { events.push(JSON.parse(trimmed)); } catch {}
-	}
-
+function finalTextFromEvents(events) {
 	// Walk back to the last tool boundary — the last event carrying a
 	// tool_result (user) OR a tool_use (assistant). The final answer is the
 	// assistant text after it. Considering tool_use too (not only tool_result)
@@ -216,34 +215,49 @@ function collectStreamJsonText(stdout) {
 }
 
 /**
- * Parse Claude CLI stream-json output.
+ * Turn a finished spawn result ({ stdout, stderr, code }) into the parsed
+ * { result, sessionId }, or throw a tagged error. Parses the stream-json
+ * stdout once and derives session id, final text and error text from it.
  */
-function parseClaudeOutput(stdout, label = 'Claude') {
-	let resultEvent = null;
-	const lines = stdout.split('\n');
-	for (let i = lines.length - 1; i >= 0; i--) {
-		const trimmed = lines[i].trim();
-		if (!trimmed) continue;
-		try {
-			const event = JSON.parse(trimmed);
-			if (event.type === 'result') { resultEvent = event; break; }
-		} catch (_) {}
+function finalizeClaudeResult(result, label) {
+	const events = parseStreamJsonEvents(result.stdout);
+	const sessionId = sessionIdFromEvents(events);
+	const resultEvent = lastResultEvent(events);
+
+	if (result.code !== 0) {
+		const errMsg = errorTextFromResultEvent(resultEvent)
+			|| result.stderr?.slice(-500)
+			|| `exit code ${result.code}`;
+		throw Object.assign(new Error(errMsg), { code: result.code, sessionId });
 	}
+
 	if (!resultEvent) {
 		log.warn(`${label}: no result event in stream-json output`);
-		return {
-			result: stdout.slice(-500),
-			sessionId: extractClaudeSessionId(stdout),
-		};
+		return { result: result.stdout.slice(-500), sessionId };
 	}
-	const allText = collectStreamJsonText(stdout);
 	return {
-		result: allText || resultEvent.result || '',
+		result: finalTextFromEvents(events) || resultEvent.result || '',
 		// A 0-turn result (e.g. an unrecognized slash command) still returns a
 		// session_id but writes no conversation to disk, so a later --resume fails
 		// with "No conversation found". Don't surface it for persistence.
-		sessionId: resultEvent.num_turns === 0 ? null : extractClaudeSessionId(stdout),
+		sessionId: resultEvent.num_turns === 0 ? null : sessionId,
 	};
+}
+
+/**
+ * Spawn Claude via `spawnFn` and finalize its output. Centralizes the error
+ * handling shared by the host and sandbox executors: on spawn rejection,
+ * attach the partial session id; otherwise parse the result (or throw).
+ */
+async function runClaude(spawnFn, label) {
+	let result;
+	try {
+		result = await spawnFn();
+	} catch (err) {
+		err.sessionId = sessionIdFromEvents(parseStreamJsonEvents(err.stdout));
+		throw err;
+	}
+	return finalizeClaudeResult(result, label);
 }
 
 async function executeClaudeCommand(prompt, options = {}) {
@@ -266,29 +280,14 @@ async function executeClaudeCommand(prompt, options = {}) {
 	const attach = sessionId ? `resume ${sessionId}` : 'new session';
 	log.info(`Spawning claude: ${attach}, prompt length: ${prompt.length}`);
 
-	let result;
-	try {
-		result = await spawnWithTimeout(
+	return runClaude(
+		() => spawnWithTimeout(
 			CLAUDE_BIN,
 			buildClaudeArgs(prompt, spawnOpts),
 			{ timeoutMs, cwd: ADMIN_USER_HOME, env: ADMIN_ENV, label: 'Claude' },
-		);
-	} catch (err) {
-		err.sessionId = extractClaudeSessionId(err.stdout);
-		throw err;
-	}
-
-	if (result.code !== 0) {
-		const errMsg = extractClaudeResultText(result.stdout)
-			|| result.stderr?.slice(-500)
-			|| `exit code ${result.code}`;
-		throw Object.assign(new Error(errMsg), {
-			code: result.code,
-			sessionId: extractClaudeSessionId(result.stdout),
-		});
-	}
-
-	return parseClaudeOutput(result.stdout, 'Claude');
+		),
+		'Claude',
+	);
 }
 
 /**
@@ -347,9 +346,7 @@ module.exports = {
 	ADMIN_ENV,
 	buildClaudeArgs,
 	spawnWithTimeout,
-	extractClaudeSessionId,
-	extractClaudeResultText,
-	parseClaudeOutput,
+	runClaude,
 	executeClaudeCommand,
 	getClaudeUsage,
 };
