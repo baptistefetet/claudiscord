@@ -10,22 +10,11 @@ const {
 	CONTAINER_NAME,
 	DOCKER_IMAGE,
 	CONTAINER_CPUS,
-	PROMPT_TIMEOUT_MS,
 	DOCKER_CMD_TIMEOUT,
-	ALLOWED_TOOLS,
-	DISALLOWED_TOOLS,
 	CODEX_REASONING_EFFORT,
 } = require('./config');
 const { getDefaultClaudeMd } = require('./prompts');
-const {
-	buildClaudeArgs,
-	spawnWithTimeout,
-	runClaude,
-} = require('./claude');
-const {
-	buildCodexArgs,
-	parseCodexOutput,
-} = require('./codex');
+const { spawnWithTimeout } = require('./claude');
 const log = require('./logger');
 
 const DOCKERFILE_DIR = path.resolve(__dirname, '..');
@@ -251,23 +240,15 @@ function killAgentProcessesInContainer(label) {
 	}
 }
 
-async function spawnClaudeInContainer(prompt, claudeOptions, {
-		timeoutMs = PROMPT_TIMEOUT_MS,
-		label = `Container [${CONTAINER_NAME}]`,
-	} = {}) {
-	const claudeArgs = buildClaudeArgs(prompt, claudeOptions);
-	try {
-		return await spawnWithTimeout(
-			'docker', ['exec', '-i', CONTAINER_NAME, 'claude', ...claudeArgs],
-			{ timeoutMs, label },
-		);
-	} catch (err) {
-		if (err.code === 124) {
-			// Timeout: docker exec was killed but the agent may still run inside the container
-			killAgentProcessesInContainer(label);
-		}
-		throw err;
-	}
+// docker exec wrapper shared by both sandbox agents: on a timeout (code 124)
+// kill the orphaned in-container processes — killing docker exec only severs the
+// host-side pipe, not the process still running inside the container.
+function spawnInContainer(argv, { timeoutMs, label, input = null }) {
+	return spawnWithTimeout('docker', argv, { timeoutMs, label, input })
+		.catch((err) => {
+			if (err.code === 124) killAgentProcessesInContainer(label);
+			throw err;
+		});
 }
 
 // Atomically write `buf` to `target`, then set mode 0600 and ownership.
@@ -283,34 +264,20 @@ function writeFileAtomicOwned(target, buf, uid, gid) {
 	}
 }
 
-async function executeClaudeInContainer(prompt, {
-		sessionId = null,
-		systemPrompt = null,
-		allowedTools = ALLOWED_TOOLS,
-		disallowedTools = DISALLOWED_TOOLS,
-		model = null,
-		effort = null,
-		timeoutMs = PROMPT_TIMEOUT_MS,
-	} = {}) {
+// Sandbox environment for Claude: run `claude` inside the container with
+// permissions skipped (the container IS the sandbox boundary). A factory because
+// ensureContainer() must run before each use.
+function sandboxClaudeEnv() {
 	ensureContainer();
-	const claudeOptions = {
-		sessionId,
-		systemPrompt,
-		allowedTools,
-		disallowedTools,
-		model,
-		effort,
-		extraArgs: ['--dangerously-skip-permissions'],
-	};
-
 	const label = `Container [${CONTAINER_NAME}]`;
-	const attach = sessionId ? `resume ${sessionId}` : 'new session';
-	log.info(`${label}: ${attach}, prompt length: ${prompt.length}`);
-
-	return runClaude(
-		() => spawnClaudeInContainer(prompt, claudeOptions, { timeoutMs, label }),
+	return {
 		label,
-	);
+		extraArgs: ['--dangerously-skip-permissions'],
+		spawn: (args, { timeoutMs }) => spawnInContainer(
+			['exec', '-i', CONTAINER_NAME, 'claude', ...args],
+			{ timeoutMs, label },
+		),
+	};
 }
 
 function isCodexAvailableInContainer() {
@@ -330,68 +297,24 @@ function isCodexAvailableInContainer() {
 	}
 }
 
-async function executeCodexInContainer(prompt, {
-		sessionId = null,
-		systemPrompt = null,
-		timeoutMs = PROMPT_TIMEOUT_MS,
-	} = {}) {
+// Sandbox environment for Codex: run `codex` inside the container with CODEX_HOME
+// pointing at the sandbox user's config. Missing-binary detection is env-specific
+// (docker exec exits non-zero with a "not found" stderr rather than ENOENT); the
+// timeout-kill is handled by spawnInContainer.
+function sandboxCodexEnv() {
 	ensureContainer();
-	if (!systemPrompt) {
-		throw new Error('executeCodexInContainer requires systemPrompt');
-	}
-
 	const label = `Codex container [${CONTAINER_NAME}]`;
-	const attach = sessionId ? `resume ${sessionId}` : 'new session';
-	log.info(`${label}: ${attach}, prompt length: ${prompt.length}`);
-
-	let execution;
-	try {
-		execution = await spawnWithTimeout(
-			'docker',
-			[
-				'exec',
-				'-i',
-				'-e', `CODEX_HOME=${path.posix.join(SANDBOX_USER_HOME, '.codex')}`,
-				'-w', SANDBOX_USER_HOME,
-				CONTAINER_NAME,
-				'codex',
-				...buildCodexArgs({ sessionId, systemPrompt }),
-			],
-			{
-				timeoutMs,
-				label,
-				input: prompt,
-			},
-		);
-	} catch (err) {
-		err.sessionId = parseCodexOutput(err.stdout).sessionId;
-		if (err.code === 124) killAgentProcessesInContainer(label);
-		throw err;
-	}
-
-	const parsed = parseCodexOutput(execution.stdout);
-	if (execution.code !== 0) {
-		const unavailable = execution.stderr.includes('executable file not found')
-			|| execution.stderr.includes('codex: not found');
-		if (unavailable) {
-			throw Object.assign(new Error('CODEX_NOT_AVAILABLE'), {
-				code: 'CODEX_NOT_AVAILABLE',
-				sessionId: parsed.sessionId,
-			});
-		}
-		const errMsg = execution.stderr.slice(-500)
-			|| execution.stdout.slice(-500)
-			|| `exit code ${execution.code}`;
-		throw Object.assign(new Error(errMsg), {
-			code: execution.code,
-			sessionId: parsed.sessionId,
-		});
-	}
-	if (!parsed.sessionId) {
-		log.warn(`${label}: no thread.started event in JSON output`);
-	}
-
-	return parsed;
+	const codexHome = path.posix.join(SANDBOX_USER_HOME, '.codex');
+	return {
+		label,
+		spawn: (args, { timeoutMs, input }) => spawnInContainer(
+			['exec', '-i', '-e', `CODEX_HOME=${codexHome}`, '-w', SANDBOX_USER_HOME,
+				CONTAINER_NAME, 'codex', ...args],
+			{ timeoutMs, label, input },
+		),
+		isUnavailable: (execution) => execution.stderr.includes('executable file not found')
+			|| execution.stderr.includes('codex: not found'),
+	};
 }
 
 /**
@@ -413,9 +336,9 @@ module.exports = {
 	DOCKER_AVAILABLE,
 	ensureImage,
 	ensureContainer,
-	executeClaudeInContainer,
+	sandboxClaudeEnv,
 	isCodexAvailableInContainer,
-	executeCodexInContainer,
+	sandboxCodexEnv,
 	writeSandboxUpload,
 	reconcileAgentCredentials,
 };

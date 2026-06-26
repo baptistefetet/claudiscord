@@ -1,6 +1,6 @@
-const { executeClaudeCommand } = require('./claude');
-const { executeCodexCommand } = require('./codex');
-const { executeClaudeInContainer, executeCodexInContainer, reconcileAgentCredentials } = require('./container');
+const { executeClaude, hostClaudeEnv } = require('./claude');
+const { executeCodex, hostCodexEnv } = require('./codex');
+const { sandboxClaudeEnv, sandboxCodexEnv, reconcileAgentCredentials } = require('./container');
 const { runQueued } = require('./queue');
 const sessions = require('./sessions');
 
@@ -50,13 +50,17 @@ function executePrompt(agent, mode, prompt, options = {}) {
 		try {
 			let result;
 			if (agent === 'codex') {
-				if (mode === 'admin') result = await executeCodexCommand(prompt, opts);
-				else if (mode === 'sandbox') result = await executeCodexInContainer(prompt, opts);
-				else throw new Error(`Unknown execution mode: ${mode}`);
+				const env = mode === 'sandbox' ? sandboxCodexEnv()
+					: mode === 'admin' ? hostCodexEnv
+					: null;
+				if (!env) throw new Error(`Unknown execution mode: ${mode}`);
+				result = await executeCodex(prompt, opts, env);
 			} else if (agent === 'claude') {
-				if (mode === 'admin') result = await executeClaudeCommand(prompt, opts);
-				else if (mode === 'sandbox') result = await executeClaudeInContainer(prompt, opts);
-				else throw new Error(`Unknown execution mode: ${mode}`);
+				const env = mode === 'sandbox' ? sandboxClaudeEnv()
+					: mode === 'admin' ? hostClaudeEnv
+					: null;
+				if (!env) throw new Error(`Unknown execution mode: ${mode}`);
+				result = await executeClaude(prompt, opts, env);
 			} else {
 				throw new Error(`Unknown agent: ${agent}`);
 			}

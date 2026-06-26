@@ -245,22 +245,15 @@ function finalizeClaudeResult(result, label) {
 }
 
 /**
- * Spawn Claude via `spawnFn` and finalize its output. Centralizes the error
- * handling shared by the host and sandbox executors: on spawn rejection,
- * attach the partial session id; otherwise parse the result (or throw).
+ * Execute Claude in the given environment. The `env` descriptor abstracts where
+ * and how the process runs, so host and sandbox share this one executor:
+ *   - label:     log / diagnostic label
+ *   - extraArgs: extra CLI flags (e.g. --dangerously-skip-permissions in sandbox)
+ *   - spawn:     (args, { timeoutMs }) => Promise<{ stdout, stderr, code }>
+ * On spawn rejection the partial session id is attached; otherwise the
+ * stream-json output is parsed once and finalized (or thrown).
  */
-async function runClaude(spawnFn, label) {
-	let result;
-	try {
-		result = await spawnFn();
-	} catch (err) {
-		err.sessionId = sessionIdFromEvents(parseStreamJsonEvents(err.stdout));
-		throw err;
-	}
-	return finalizeClaudeResult(result, label);
-}
-
-async function executeClaudeCommand(prompt, options = {}) {
+async function executeClaude(prompt, options = {}, env) {
 	const {
 		sessionId = null,
 		systemPrompt = null,
@@ -272,23 +265,36 @@ async function executeClaudeCommand(prompt, options = {}) {
 	} = options;
 
 	if (!systemPrompt) {
-		throw new Error('executeClaudeCommand requires systemPrompt');
+		throw new Error('executeClaude requires systemPrompt');
 	}
 
-	const spawnOpts = { sessionId, systemPrompt, allowedTools, disallowedTools, model, effort };
+	const args = buildClaudeArgs(prompt, {
+		sessionId, systemPrompt, allowedTools, disallowedTools, model, effort,
+		extraArgs: env.extraArgs,
+	});
 
 	const attach = sessionId ? `resume ${sessionId}` : 'new session';
-	log.info(`Spawning claude: ${attach}, prompt length: ${prompt.length}`);
+	log.info(`${env.label}: ${attach}, prompt length: ${prompt.length}`);
 
-	return runClaude(
-		() => spawnWithTimeout(
-			CLAUDE_BIN,
-			buildClaudeArgs(prompt, spawnOpts),
-			{ timeoutMs, cwd: ADMIN_USER_HOME, env: ADMIN_ENV, label: 'Claude' },
-		),
-		'Claude',
-	);
+	let result;
+	try {
+		result = await env.spawn(args, { timeoutMs });
+	} catch (err) {
+		err.sessionId = sessionIdFromEvents(parseStreamJsonEvents(err.stdout));
+		throw err;
+	}
+	return finalizeClaudeResult(result, env.label);
 }
+
+// Host environment: run the `claude` binary directly under the admin home.
+const hostClaudeEnv = {
+	label: 'Claude',
+	extraArgs: [],
+	spawn: (args, { timeoutMs }) => spawnWithTimeout(
+		CLAUDE_BIN, args,
+		{ timeoutMs, cwd: ADMIN_USER_HOME, env: ADMIN_ENV, label: 'Claude' },
+	),
+};
 
 /**
  * Read the OAuth account usage from Anthropic (5h window + weekly).
@@ -346,7 +352,7 @@ module.exports = {
 	ADMIN_ENV,
 	buildClaudeArgs,
 	spawnWithTimeout,
-	runClaude,
-	executeClaudeCommand,
+	executeClaude,
+	hostClaudeEnv,
 	getClaudeUsage,
 };

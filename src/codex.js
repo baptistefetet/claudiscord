@@ -213,44 +213,43 @@ async function getCodexUsage() {
 	});
 }
 
-async function executeCodexCommand(prompt, options = {}) {
+/**
+ * Execute Codex in the given environment (host or sandbox). The `env` descriptor
+ * abstracts where/how the process runs and the environment-specific error
+ * mapping:
+ *   - label:         log / diagnostic label
+ *   - spawn:         (args, { timeoutMs, input }) => Promise<{ stdout, stderr, code }>
+ *   - precheck?:     () => void — throw before spawning if the env is unusable
+ *   - onSpawnError?: (err) => void — mutate a spawn rejection (e.g. ENOENT remap)
+ *   - isUnavailable?:(execution) => bool — true when a non-zero exit means the
+ *                    Codex binary is missing in this env
+ * The auth-error check is shared, so a sandbox auth failure now also surfaces as
+ * CODEX_NOT_AUTHENTICATED (previously only the host path detected it).
+ */
+async function executeCodex(prompt, options = {}, env) {
 	const {
 		sessionId = null,
 		systemPrompt = null,
 		timeoutMs = PROMPT_TIMEOUT_MS,
 	} = options;
 
-	if (!CODEX_AVAILABLE) {
-		throw Object.assign(new Error('CODEX_NOT_AVAILABLE'), {
-			code: 'CODEX_NOT_AVAILABLE',
-		});
-	}
+	if (env.precheck) env.precheck();
 	if (!systemPrompt) {
-		throw new Error('executeCodexCommand requires systemPrompt');
+		throw new Error('executeCodex requires systemPrompt');
 	}
 
 	const attach = sessionId ? `resume ${sessionId}` : 'new session';
-	log.info(`Spawning codex: ${attach}, prompt length: ${prompt.length}`);
+	log.info(`${env.label}: ${attach}, prompt length: ${prompt.length}`);
 
 	let execution;
 	try {
-		execution = await spawnWithTimeout(
-			CODEX_BIN,
+		execution = await env.spawn(
 			buildCodexArgs({ sessionId, systemPrompt }),
-			{
-				timeoutMs,
-				cwd: ADMIN_USER_HOME,
-				env: process.env,
-				label: 'Codex',
-				input: prompt,
-			},
+			{ timeoutMs, input: prompt },
 		);
 	} catch (err) {
 		err.sessionId = parseCodexOutput(err.stdout).sessionId;
-		if (err.code === 'ENOENT') {
-			err.code = 'CODEX_NOT_AVAILABLE';
-			err.message = 'CODEX_NOT_AVAILABLE';
-		}
+		if (env.onSpawnError) env.onSpawnError(err);
 		throw err;
 	}
 
@@ -259,6 +258,12 @@ async function executeCodexCommand(prompt, options = {}) {
 		if (isCodexAuthError(execution.stdout, execution.stderr)) {
 			throw Object.assign(new Error('CODEX_NOT_AUTHENTICATED'), {
 				code: 'CODEX_NOT_AUTHENTICATED',
+				sessionId: parsed.sessionId,
+			});
+		}
+		if (env.isUnavailable && env.isUnavailable(execution)) {
+			throw Object.assign(new Error('CODEX_NOT_AVAILABLE'), {
+				code: 'CODEX_NOT_AVAILABLE',
 				sessionId: parsed.sessionId,
 			});
 		}
@@ -271,16 +276,35 @@ async function executeCodexCommand(prompt, options = {}) {
 		});
 	}
 	if (!parsed.sessionId) {
-		log.warn('Codex: no thread.started event in JSON output');
+		log.warn(`${env.label}: no thread.started event in JSON output`);
 	}
 
 	return parsed;
 }
 
+// Host environment: run the `codex` binary directly under the admin home.
+const hostCodexEnv = {
+	label: 'Codex',
+	precheck: () => {
+		if (!CODEX_AVAILABLE) {
+			throw Object.assign(new Error('CODEX_NOT_AVAILABLE'), { code: 'CODEX_NOT_AVAILABLE' });
+		}
+	},
+	spawn: (args, { timeoutMs, input }) => spawnWithTimeout(
+		CODEX_BIN, args,
+		{ timeoutMs, cwd: ADMIN_USER_HOME, env: process.env, label: 'Codex', input },
+	),
+	onSpawnError: (err) => {
+		if (err.code === 'ENOENT') {
+			err.code = 'CODEX_NOT_AVAILABLE';
+			err.message = 'CODEX_NOT_AVAILABLE';
+		}
+	},
+};
+
 module.exports = {
 	CODEX_AVAILABLE,
-	buildCodexArgs,
-	parseCodexOutput,
 	getCodexUsage,
-	executeCodexCommand,
+	executeCodex,
+	hostCodexEnv,
 };
