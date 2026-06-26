@@ -423,8 +423,15 @@ async function handleCodex({ channel, channelId, mode, agent }) {
 
 async function handleRestart({ channel }) {
 	await channel.send('Restarting claudiscord service...');
-	execFile('systemctl', ['restart', 'claudiscord'], (err) => {
-		if (err) log.error('Restart error:', err.message);
+	const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+	const cmd = isRoot ? 'systemctl' : 'sudo';
+	const args = isRoot ? ['restart', 'claudiscord'] : ['-n', 'systemctl', 'restart', 'claudiscord'];
+
+	execFile(cmd, args, (err) => {
+		if (err) {
+			log.error('Restart error:', err.message);
+			channel.send(`Restart failed: ${err.message}`).catch(() => {});
+		}
 	});
 	return true;
 }

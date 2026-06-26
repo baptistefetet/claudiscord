@@ -63,6 +63,20 @@ Save the unit below as `/etc/systemd/system/claudiscord.service`, replacing
 `/path/to/claudiscord` with your clone directory. Drop the
 `Requires=docker.service` line if you don't plan to use sandbox mode.
 
+Run the service as the account that should own host-side administration:
+
+- `User=root` gives the bot direct root access, which is the simplest setup for
+  a private machine administration bot.
+- A regular user also works. Install and authenticate Claude Code/Codex for
+  that user, set `User=<that-user>`, and use that user's clone directory.
+  Runtime state is stored in that user's `~/.claudiscord/`.
+- If a regular user is expected to administer the machine, grant it
+  non-interactive sudo permissions. Password-based sudo is not suitable here:
+  Claudiscord runs agents without an interactive terminal, and commands that
+  wait for a password will fail or time out.
+- Docker sandbox mode requires Docker access. Membership in the `docker` group
+  effectively grants root-equivalent privileges on the host.
+
 ```ini
 [Unit]
 Description=Claudiscord - Claude Code Discord relay and scheduler
@@ -89,6 +103,16 @@ Then enable and start:
 sudo systemctl daemon-reload
 sudo systemctl enable --now claudiscord
 ```
+
+For a non-root service user, `/restart` runs `sudo -n systemctl restart
+claudiscord`, so the sudoers rule must not require a password. For example:
+
+```sudoers
+claudiscord ALL=(ALL) NOPASSWD: ALL
+```
+
+Use a narrower sudoers rule if you want the bot to administer only specific
+commands.
 
 ## Verify the install
 
