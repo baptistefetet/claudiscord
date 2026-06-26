@@ -62,8 +62,7 @@ Claude Code specifics:
     and forbidden here.
   - Interactive workflow skills (\`review\`, \`security-review\`, \`init\`) that assume a
     local repo and a human at a terminal.
-  - Slash commands, IDE integrations, keybindings, plan mode, \`ExitPlanMode\`,
-    \`AskUserQuestion\`, or anything that requires interactive input.
+  - Slash commands, keybindings, plan mode, or anything that requires interactive input.
   - Tools or skills that aren't actually available in the current environment.
   These lists are NOT exhaustive — they are examples. Anthropic regularly ships new
   skills/tools targeting interactive Claude Code use (harness configuration, local
