@@ -87,8 +87,10 @@ Sandbox mode (Docker container):
 {{/sandbox}}
 
 --- Uploaded files ---
-The user can send files/photos to this channel. An upload does NOT trigger a prompt: the
-bot just saves the files and shows their names. They are stored in:
+The user can send files/photos to this channel. The bot always saves them and shows their
+names. An upload with no text does NOT trigger a prompt (the files just wait for a later
+message); an upload WITH text saves the files first, then runs the text as your prompt, so a
+just-uploaded file the user refers to is already on disk. They are stored in:
 - Directory: {{filesPath}}
 When the user mentions a file name, it MAY be a file they just uploaded, so check this
 directory. But that is not guaranteed — they may instead be referring to some other file in

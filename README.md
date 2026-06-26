@@ -16,7 +16,7 @@ Works in both DMs and private guild channels. Each channel is an independent con
 - **Single-user authorization** — only the Discord user whose ID is in `AUTHORIZED_USER_ID` can talk to the bot; everyone else is silently dropped
 - **Optional Docker** — sandbox mode is disabled gracefully if Docker isn't installed; admin mode still works
 - **Voice messages** — Discord voice messages (mic button) are transcribed via Groq Whisper before being passed to the active agent
-- **File uploads** — drop files/photos into a channel (no text) and the bot saves them to `.claudiscord/files/`; reference them by name in your next message and the active agent reads them
+- **File uploads** — drop files/photos into a channel and the bot saves them to `.claudiscord/files/`; add text in the same message to have the active agent act on them right away, or send them alone and reference them by name later
 - **Scheduler** — cron-based jobs via `node-cron`, notifications delivered to the channel where the job was created
 
 > **Linux only.** Claudiscord ships a systemd unit, expects GNU coreutils,
@@ -144,17 +144,21 @@ mode still works.
 
 ## File uploads
 
-Drag a file or photo into a channel **without any text** and the bot saves it instead of
-prompting the agent — it replies with the saved file name(s). Reference those names in your
-next message and the active agent reads them from disk.
+Drag a file or photo into a channel and the bot always saves it to disk and replies with
+the saved file name(s). What happens next depends on whether the message also carries text:
+
+- **Files only (no text)** — the bot just persists them and stops; the agent is not invoked.
+  Reference the names in a later message and the active agent reads them from disk.
+- **Files + text** — the files are saved first (same echo), then the text is processed as a
+  normal prompt, so the agent can act on the freshly uploaded files in the same turn.
+
+Details:
 
 - Files land in `<home>/.claudiscord/files/`: `~/.claudiscord/files/` in admin mode,
   `SANDBOX_HOME/.claudiscord/files/` (visible in the container at
   `/home/claude/.claudiscord/files/`) in sandbox mode.
 - Names are the original Discord file names, de-duplicated within a single message. A later
   upload with the same name overwrites the previous one — there is no automatic cleanup.
-- A caption wins: a message carrying both text and attachments is treated as a normal
-  prompt and the attachments are ignored (same rule as voice messages).
 
 ## Discord commands
 
