@@ -1,7 +1,7 @@
 FROM node:22-slim
 
 # UID/GID of the in-container `claude` user. rebuild-sandbox.sh sets these
-# to match the owner of SANDBOX_HOME_DIR on the host so bind-mounted files
+# to match the owner of SANDBOX_HOME on the host so bind-mounted files
 # are readable/writable on both sides without further chown.
 ARG SANDBOX_UID=1001
 ARG SANDBOX_GID=1001

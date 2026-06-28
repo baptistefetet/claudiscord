@@ -29,7 +29,8 @@ Works in both DMs and private guild channels. Each channel is an independent con
 - Node.js 18+
 - A Discord bot token ([Discord Developer Portal](https://discord.com/developers/applications))
 - On the portal **Bot** page: enable the **Message Content Intent**
-- On the portal **Installation / Bot** page: in addition to `Direct Messages` grant the **Guilds** and **Guild Messages** privileges so the bot can read the channels you invite it to
+- When generating the bot's invite link (portal **OAuth2 → URL Generator**, or the **Installation** page), select **both** the `bot` and `applications.commands` scopes — without `applications.commands` the native slash commands cannot be registered
+- In that same invite step, grant the bot the **View Channels**, **Send Messages** and **Read Message History** permissions so it can read and reply in the channels you add it to (DMs need no extra permission). The `Guilds` / `Guild Messages` / `Direct Messages` gateway intents are non-privileged and already enabled in code — nothing to toggle on the portal for them
 - Claude Code CLI installed on the host (`curl -fsSL https://claude.ai/install.sh | bash`) — claudiscord defaults to `~/.local/bin/claude` (the install script's default location); set `CLAUDE_BIN` in `.env` only if it's elsewhere
 - **Optional**: Codex CLI installed and authenticated on the host; set `CODEX_BIN` only if it isn't available as `codex` in `PATH`
 - **Optional**: Docker (only required for sandbox mode)
@@ -173,6 +174,7 @@ Details:
 | `/opus` | Use Claude Opus for this channel |
 | `/sonnet` | Use Claude Sonnet for this channel (default) |
 | `/codex` | Use Codex for this channel |
+| `/remote` | Claude only — toggle the channel between Discord mode and remote control via the Claude mobile app |
 | `/upgrade` | Sandbox only — update the container (apt + Claude Code + Codex) |
 | `/restart` | Admin only — restart the claudiscord service |
 | `!<command>` | Run a shell command (host if the channel is admin, container if sandbox) |

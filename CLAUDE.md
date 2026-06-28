@@ -285,7 +285,7 @@ bash scripts/rebuild-sandbox.sh
 - The shared Discord prompt is injected through the `developer_instructions` config override
 - Codex model selection and authentication remain owned by the Codex CLI configuration; reasoning effort is forced to `xhigh`
 - Sandbox execution uses `/home/claude` as cwd and `/home/claude/.codex` as `CODEX_HOME`
-- `/upgrade` updates the sandbox Codex package with `npm install -g @openai/codex@latest`
+- `/upgrade` (sandbox only) refreshes the container — apt packages, Claude Code, and the Codex package (`npm install -g --prefix /usr/local @openai/codex@latest`)
 - Codex remains unsupported in `/remote`
 
 ## Scheduled jobs
