@@ -236,7 +236,6 @@ function getSystemPrompt(options = {}) {
 		channelAgent = null,
 		channelModel = null,
 	} = options;
-	const today = new Date().toISOString().slice(0, 10);
 	const isJob = Boolean(jobId);
 	const isSandbox = mode === 'sandbox';
 	const resolvedAgent = VALID_AGENTS.includes(channelAgent) ? channelAgent : CHANNEL_DEFAULT_AGENT;
@@ -249,7 +248,6 @@ function getSystemPrompt(options = {}) {
 		{
 			botName,
 			userName,
-			today,
 			jobId: jobId || '',
 			channelId: channelId || '',
 			channelName: channelName || '<unnamed>',

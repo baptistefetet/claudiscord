@@ -120,8 +120,6 @@ async function executeJob(job) {
 
 	log.info(`Job '${key}' starting`);
 
-	const today = new Date().toISOString().slice(0, 10);
-	const fullPrompt = `Today's date: ${today}\n\n${prompt}`;
 	let resolvedChannelName = null;
 	let promptContext = null;
 	let lastSessionId = null;
@@ -154,7 +152,7 @@ async function executeJob(job) {
 			effort: EFFORT_BY_MODEL[jobModel],
 			timeoutMs: PROMPT_TIMEOUT_MS,
 		};
-		const { result: output, sessionId } = await executePrompt(jobAgent, job.mode, fullPrompt, jobOptions);
+		const { result: output, sessionId } = await executePrompt(jobAgent, job.mode, prompt, jobOptions);
 		lastSessionId = sessionId || null;
 
 		log.info(`Job '${key}' completed (output: ${output.length} chars)`);
