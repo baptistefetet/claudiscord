@@ -1,6 +1,5 @@
 const cron = require('node-cron');
 const {
-	ALLOWED_TOOLS,
 	AUTHORIZED_USER_ID,
 	PROMPT_TIMEOUT_MS,
 	EFFORT_BY_MODEL,
@@ -147,7 +146,6 @@ async function executeJob(job) {
 		const jobOptions = {
 			sessionId: null,
 			systemPrompt: jobSystemPrompt,
-			allowedTools: ALLOWED_TOOLS,
 			model: jobModel,
 			effort: EFFORT_BY_MODEL[jobModel],
 			timeoutMs: PROMPT_TIMEOUT_MS,

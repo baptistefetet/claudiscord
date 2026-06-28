@@ -50,15 +50,12 @@ const CONTAINER_NAME = 'claudiscord-sandbox';
 const DOCKER_IMAGE = 'claudiscord-sandbox';
 const CONTAINER_CPUS = 1;
 
-const PROMPT_TIMEOUT_MS = 1_200_000; // 20 min — laisse la place aux gros prompts de dev
+const PROMPT_TIMEOUT_MS = 1_200_000; // 20 min — room for large dev prompts
 const SHELL_TIMEOUT_MS = 300_000;
 const DOCKER_CMD_TIMEOUT = 30_000;
 const UPGRADE_TIMEOUT_MS = 300_000;
 const DISCORD_MAX_MSG_LENGTH = 2000;
 const TYPING_INTERVAL_MS = 8000;
-
-const ALLOWED_TOOLS = 'Bash(*) Read Write Edit Glob Grep WebSearch WebFetch Task';
-const DISALLOWED_TOOLS = 'CronCreate CronDelete CronList Monitor AskUserQuestion RemoteTrigger EnterPlanMode ExitPlanMode EnterWorktree ExitWorktree NotebookEdit ScheduleWakeup PushNotification Skill(loop) Skill(keybindings-help) Skill(schedule) Skill(claude-api) Skill(update-config) Skill(fewer-permission-prompts)';
 
 const VALID_MODELS = ['opus', 'sonnet'];
 const CHANNEL_DEFAULT_MODEL = 'sonnet';
@@ -94,8 +91,6 @@ module.exports = {
 	TYPING_INTERVAL_MS,
 	DOCKER_IMAGE,
 	CONTAINER_CPUS,
-	ALLOWED_TOOLS,
-	DISALLOWED_TOOLS,
 	VALID_MODELS,
 	CHANNEL_DEFAULT_MODEL,
 	EFFORT_BY_MODEL,

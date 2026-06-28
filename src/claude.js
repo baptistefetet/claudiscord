@@ -1,8 +1,15 @@
 const fs = require('fs');
 const path = require('path');
-const { CLAUDE_BIN, PROMPT_TIMEOUT_MS, ALLOWED_TOOLS, DISALLOWED_TOOLS, ADMIN_USER_HOME } = require('./config');
+const { CLAUDE_BIN, PROMPT_TIMEOUT_MS, ADMIN_USER_HOME } = require('./config');
 const { spawnWithTimeout } = require('./spawn');
 const log = require('./logger');
+
+// Tool permissions for the Claude agent (host and sandbox). Fixed by design:
+// claudiscord strips every tool that could interfere with its own operation
+// (local schedulers, plan mode, notebook edits, harness-config skills, …).
+// Claude-only — Codex governs its tools via --yolo and ignores these.
+const ALLOWED_TOOLS = 'Bash(*) Read Write Edit Glob Grep WebSearch WebFetch Task';
+const DISALLOWED_TOOLS = 'CronCreate CronDelete CronList Monitor AskUserQuestion RemoteTrigger EnterPlanMode ExitPlanMode EnterWorktree ExitWorktree NotebookEdit ScheduleWakeup PushNotification Skill(loop) Skill(keybindings-help) Skill(schedule) Skill(claude-api) Skill(update-config) Skill(fewer-permission-prompts)';
 
 // OAuth account usage (5h window + weekly), same endpoint Claude Code's /usage hits.
 const OAUTH_USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
@@ -28,8 +35,6 @@ function buildClaudeArgs(prompt, options = {}) {
 	const {
 		sessionId = null,
 		systemPrompt = null,
-		allowedTools = ALLOWED_TOOLS,
-		disallowedTools = DISALLOWED_TOOLS,
 		model = null,
 		effort = null,
 		extraArgs = [],
@@ -45,8 +50,8 @@ function buildClaudeArgs(prompt, options = {}) {
 	}
 
 	args.push('--output-format', 'stream-json', '--verbose');
-	args.push('--allowedTools', allowedTools);
-	args.push('--disallowedTools', disallowedTools);
+	args.push('--allowedTools', ALLOWED_TOOLS);
+	args.push('--disallowedTools', DISALLOWED_TOOLS);
 	if (model) args.push('--model', model);
 	if (effort) args.push('--effort', effort);
 	args.push('--', prompt);
@@ -192,8 +197,6 @@ async function executeClaude(prompt, options = {}, env) {
 	const {
 		sessionId = null,
 		systemPrompt = null,
-		allowedTools = ALLOWED_TOOLS,
-		disallowedTools = DISALLOWED_TOOLS,
 		model = null,
 		effort = null,
 		timeoutMs = PROMPT_TIMEOUT_MS,
@@ -204,7 +207,7 @@ async function executeClaude(prompt, options = {}, env) {
 	}
 
 	const args = buildClaudeArgs(prompt, {
-		sessionId, systemPrompt, allowedTools, disallowedTools, model, effort,
+		sessionId, systemPrompt, model, effort,
 		extraArgs: env.extraArgs,
 	});
 

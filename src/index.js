@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const config = require('./config');
-const { ALLOWED_TOOLS, EFFORT_BY_MODEL, ADMIN_USER_HOME, STATE_DIR } = config;
+const { EFFORT_BY_MODEL, ADMIN_USER_HOME, STATE_DIR } = config;
 const { getSystemPrompt } = require('./prompts');
 const log = require('./logger');
 const sessions = require('./sessions');
@@ -203,7 +203,6 @@ client.on(Events.MessageCreate, async message => {
 			channelAgent: agent,
 			channelModel: model,
 		}),
-		allowedTools: ALLOWED_TOOLS,
 		model,
 		effort: EFFORT_BY_MODEL[model],
 	};
