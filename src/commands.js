@@ -334,18 +334,6 @@ function isCodexAvailable(mode) {
 	return mode === 'admin' ? CODEX_AVAILABLE : isCodexAvailableInContainer();
 }
 
-async function handleHelp({ channel, mode, agent, model }) {
-	const modelLabel = agent === 'claude' ? `, model: **${model}**` : '';
-	const lines = COMMANDS
-		.filter(c => !c.modes || c.modes.includes(mode))
-		.map(c => `\`${c.name}\` — ${c.help}`);
-	await channel.send(
-		`**Available commands** (current mode: **${mode}**, agent: **${agent}**${modelLabel})\n\n`
-		+ lines.join('\n'),
-	);
-	return true;
-}
-
 async function handleNew({ channel, channelId }) {
 	sessions.clearChannel(channelId);
 	await channel.send('Session reset for this channel.');
@@ -435,17 +423,16 @@ async function handleRestart({ channel }) {
 }
 
 /**
- * Single source of truth for slash commands, in /help display order. Fields:
+ * Single source of truth for slash commands. Fields:
  *   - modes:         allowed channel modes (omit = all). Typing it in another
  *                    mode replies `modeError` instead of falling through.
  *   - remoteAllowed: accepted while the channel is in /remote mode.
- *   - helpOnly:      listed in /help but never dispatched (e.g. the `!` shell,
- *                    matched by prefix before the registry).
+ *   - helpOnly:      excluded from slash registration and registry dispatch
+ *                    (e.g. the `!` shell, matched by prefix before the registry).
  *   - handler:       ({ message, channel, channelId, content, mode, agent,
  *                    model, remoteId }) => Promise<boolean>.
  */
 const COMMANDS = [
-	{ name: '/help', help: 'Show this help', remoteAllowed: true, handler: handleHelp },
 	{ name: '/new', help: 'Reset session for this channel (new conversation)', handler: handleNew },
 	{ name: '/status', help: 'Show current mode, agent and runtime status', remoteAllowed: true, handler: handleStatus },
 	{ name: '/usage', help: 'Show Claude and Codex usage (5h window + weekly)', remoteAllowed: true, handler: handleUsage },

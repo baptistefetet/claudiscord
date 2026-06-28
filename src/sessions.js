@@ -33,8 +33,9 @@ const log = require('./logger');
  *
  * remoteId, when non-null, means the session is currently driven from the
  * Claude mobile app via `claude --bg --remote-control`. While set, the channel
- * only accepts `/remote`, `/status`, `/help`; every other message returns an
- * invalidation hint. Entering remote mode wipes `sessionId`: `claude --bg`
+ * only accepts the commands marked remoteAllowed in `src/commands.js`; every
+ * other message returns an invalidation hint. Entering remote mode wipes
+ * `sessionId`: `claude --bg`
  * manages its own session UUID and we don't try to reconcile back, so the
  * next Discord message after `/remote` stop starts fresh.
  */

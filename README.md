@@ -164,7 +164,6 @@ Details:
 
 | Command | Description |
 |---------|-------------|
-| `/help` | Show available commands |
 | `/new` | Reset the active agent session of the current channel (new conversation) |
 | `/status` | Show the channel's mode, agent and runtime status |
 | `/usage` | Show Claude and Codex account usage (5h window + weekly) |
