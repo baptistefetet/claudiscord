@@ -59,15 +59,23 @@ function splitMessage(text, maxLength = DISCORD_MAX_MSG_LENGTH) {
 }
 
 /**
- * Send a message to a Discord channel (DM or guild).
- * Fetches the channel by id and sends chunked content.
+ * Send `text` to a channel object, transparently splitting it to stay under
+ * Discord's per-message limit (1900 leaves a margin below the 2000 hard cap).
+ * Centralizes chunking so callers never deal with message-size limits themselves.
+ */
+async function sendChunked(channel, text) {
+	for (const chunk of splitMessage(text, 1900)) {
+		await channel.send(chunk);
+	}
+}
+
+/**
+ * Same as sendChunked, but resolves the channel by id first (used where only an
+ * id is known, e.g. scheduled-job notifications).
  */
 async function sendToChannel(channelId, message) {
 	const channel = await client.channels.fetch(channelId);
-	const chunks = splitMessage(message, 1900);
-	for (const chunk of chunks) {
-		await channel.send(chunk);
-	}
+	await sendChunked(channel, message);
 }
 
 function startTypingIndicator(channel) {
@@ -77,4 +85,4 @@ function startTypingIndicator(channel) {
 	return () => clearInterval(interval);
 }
 
-module.exports = { createClient, getClient, login, splitMessage, sendToChannel, startTypingIndicator, resolveChannelName };
+module.exports = { createClient, getClient, login, sendChunked, sendToChannel, startTypingIndicator, resolveChannelName };

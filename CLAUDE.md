@@ -43,7 +43,7 @@ src/
   config.js           # .env loading + paths + constants
   prompts.js          # Shared system prompt builder with Claude-only sections
   logger.js           # stdout/stderr logging (journald-friendly)
-  discord.js          # Client, sendToChannel, splitMessage, typing indicator
+  discord.js          # Client, sendToChannel, sendChunked (splitMessage now private), typing indicator
   queue.js            # Single global FIFO (runQueued, isBusy)
   spawn.js            # spawnWithTimeout: generic subprocess runner (timeout, SIGTERM→SIGKILL)
   claude.js           # Host Claude exec (executeClaude + hostClaudeEnv), stream-json parse, OAuth usage (getClaudeUsage)
@@ -53,7 +53,7 @@ src/
   jobs-store.js       # loadAllJobs (admin+sandbox), recordJobRun, jobKey
   sessions.js         # { channels: { channelId -> { mode, agent, sessionId, ... } } }
   scheduler.js        # minute-resolution ticker, reloadJobs, executeJob, per-key lock
-  commands.js         # COMMANDS registry → dispatch + auto-generated /help; /new /status /usage /jobs /admin /sandbox /opus /sonnet /codex /remote /upgrade /restart !shell
+  commands.js         # COMMANDS registry → dispatch + auto-generated /help; /new /status /usage /jobs /admin /sandbox /opus /sonnet /codex /remote /upgrade /restart !shell; transport-neutral dispatchSlashCommand + getRegisteredCommands (Discord plumbing stays in index.js)
   remote.js           # /remote helpers: startRemote, stopRemote, reconcileRemotes
   stt.js              # Groq Whisper transcription for Discord voice messages
   uploads.js          # Save Discord file/photo attachments to .claudiscord/files
@@ -61,6 +61,45 @@ scripts/
   rebuild-sandbox.sh  # Rebuild Docker sandbox image
 .env                  # AUTHORIZED_USER_ID, DISCORD_TOKEN, CLAUDE_BIN, CODEX_BIN, SANDBOX_HOME, GROQ_API_KEY
 ```
+
+## Slash commands
+
+The text dispatcher (`handleCommand`, message content compared to `COMMANDS[].name`)
+is doubled by native Discord Application Commands so the `/` autocomplete shows them.
+The split keeps the command logic free of the `discord.js` SDK: for messaging it uses
+only `channel.send`; the lone helper still pulled from `./discord` is `resolveChannelName`
+(for `/remote`). Discord's interaction plumbing lives in `index.js`.
+
+- **Single source of truth**: `COMMANDS` drives both paths. `commands.js::getRegistered
+  Commands()` exposes neutral `{ name, help }` metadata (excludes `helpOnly` → `!shell`
+  and free-form prompts, which stay text-only). Add a command to the registry → it
+  registers itself.
+- **Neutral core**: `remoteGateHint()` (remote-mode gate) and `runCommand()` (mode-gate +
+  lookup + handler call) are shared by `handleCommand` (text) and `dispatchSlashCommand`
+  (slash), so there is no duplicated gating. `dispatchSlashCommand({ channel, channelId,
+  name })` resolves session state and dispatches; gating rejections post to the channel
+  via `channel.send`, like the text path.
+- **Discord adapter (index.js)**: the `Events.InteractionCreate` listener owns all
+  Discord plumbing — authorization, `isChatInputCommand`, and routing the handler's
+  output into the interaction's **non-ephemeral** response. A channel `Proxy` (real
+  channel for property reads like `resolveChannelName`, `.send` overridden) feeds a
+  `makeInteractionResponder`: first send → `reply`, later sends → `followUp`; a 2s
+  safety net `deferReply`s so the 3s ack window holds (only the slow commands reach
+  it). The channel then shows Discord's persistent "user used /command" marker + the
+  result in one block, with no "thinking" on fast commands. Token lifetime is 15 min,
+  which bounds a command's runtime. Auth/"channel unavailable" rejections stay ephemeral.
+- **Registration**: `index.js::registerSlashCommands()` runs on `ClientReady`, maps the
+  neutral metadata to Discord's Application Command shape (`ApplicationCommandType`,
+  `dmPermission`) and bulk-overwrites (`client.application.commands.set`). Idempotent —
+  safe on every boot. Global scope (guild channels + DMs); first-time propagation ~1h.
+- **Prerequisite**: the bot must have been invited with the `applications.commands` OAuth
+  scope (in addition to `bot`). Re-authorizing an already-present bot only adds the scope —
+  it does not kick it or reset state (sessions are keyed by `channelId`).
+- **Adding a transport**: implement another adapter (own event→`{channel,name}` mapping +
+  native-command registration from `getRegisteredCommands`) and reuse `dispatchSlashCommand`
+  / `handleCommand`. Still pending for a full second transport: per-transport notification
+  routing in `scheduler.js` (today hard-wired to `discord.sendToChannel`) and namespacing
+  the `channelId` keys (sessions/jobs) to avoid cross-transport collisions.
 
 ## Service
 

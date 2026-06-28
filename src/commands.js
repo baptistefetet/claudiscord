@@ -19,7 +19,7 @@ const { CODEX_AVAILABLE, getCodexUsage } = require('./codex');
 const { getClaudeUsage } = require('./claude');
 const { runQueued, isBusy } = require('./queue');
 const { startRemote, stopRemote } = require('./remote');
-const { resolveChannelName, splitMessage } = require('./discord');
+const { resolveChannelName, sendChunked } = require('./discord');
 const { loadAllJobs } = require('./jobs-store');
 const scheduler = require('./scheduler');
 const log = require('./logger');
@@ -134,7 +134,7 @@ function formatJobBlock(job) {
  * /remote — toggle the channel between Discord mode and Claude-mobile remote mode.
  * Claude-only. Holds a per-channel lock for the whole toggle (see remoteOpInFlight).
  */
-async function handleRemote(channel, channelId, mode, agent, remoteId) {
+async function handleRemote({ channel, channelId, mode, agent, remoteId }) {
 	if (agent !== 'claude') {
 		await channel.send('`/remote` is only available with the **claude** agent. Use `/opus` or `/sonnet` first.');
 		return true;
@@ -197,7 +197,7 @@ async function handleRemote(channel, channelId, mode, agent, remoteId) {
 /**
  * /usage — Claude and Codex account usage (current 5h window + weekly).
  */
-async function handleUsage(channel) {
+async function handleUsage({ channel }) {
 	const [claudeUsage, codexUsage] = await Promise.all([
 		getClaudeUsage(),
 		getCodexUsage(),
@@ -243,7 +243,7 @@ async function handleUsage(channel) {
 /**
  * /jobs — list all scheduled jobs (admin first, then sandbox).
  */
-async function handleJobs(channel) {
+async function handleJobs({ channel }) {
 	const all = loadAllJobs();
 	const admin = all.filter(j => j.mode === 'admin');
 	const sandbox = all.filter(j => j.mode === 'sandbox');
@@ -257,9 +257,7 @@ async function handleJobs(channel) {
 		section('🖥️ **Admin jobs**', admin),
 		section('📦 **Sandbox jobs**', sandbox),
 	].join('\n\n');
-	for (const chunk of splitMessage(out, 1900)) {
-		await channel.send(chunk);
-	}
+	await sendChunked(channel, out);
 	return true;
 }
 
@@ -267,7 +265,7 @@ async function handleJobs(channel) {
  * /upgrade — sandbox only. Update container packages + Claude Code + Codex.
  * Routed through the global queue so it never overwrites a binary mid-prompt.
  */
-async function handleUpgrade(channel, mode) {
+async function handleUpgrade({ channel, mode }) {
 	if (mode !== 'sandbox') {
 		await channel.send('`/upgrade` is only available in sandbox mode.');
 		return true;
@@ -450,16 +448,16 @@ const COMMANDS = [
 	{ name: '/help', help: 'Show this help', remoteAllowed: true, handler: handleHelp },
 	{ name: '/new', help: 'Reset session for this channel (new conversation)', handler: handleNew },
 	{ name: '/status', help: 'Show current mode, agent and runtime status', remoteAllowed: true, handler: handleStatus },
-	{ name: '/usage', help: 'Show Claude and Codex usage (5h window + weekly)', remoteAllowed: true, handler: ({ channel }) => handleUsage(channel) },
-	{ name: '/jobs', help: 'List all scheduled jobs (admin + sandbox)', remoteAllowed: true, handler: ({ channel }) => handleJobs(channel) },
+	{ name: '/usage', help: 'Show Claude and Codex usage (5h window + weekly)', remoteAllowed: true, handler: handleUsage },
+	{ name: '/jobs', help: 'List all scheduled jobs (admin + sandbox)', remoteAllowed: true, handler: handleJobs },
 	{ name: '/admin', help: 'Switch this channel to admin mode (host)', handler: handleAdmin },
 	{ name: '/sandbox', help: 'Switch this channel to sandbox mode (container)', handler: handleSandbox },
 	{ name: '/opus', help: 'Use Claude Opus for this channel', handler: handleModel },
 	{ name: '/sonnet', help: 'Use Claude Sonnet for this channel', handler: handleModel },
 	{ name: '/codex', help: 'Use Codex for this channel', handler: handleCodex },
-	{ name: '/remote', help: 'Toggle this channel between Discord mode and remote mode (Claude mobile app)', remoteAllowed: true, handler: ({ channel, channelId, mode, agent, remoteId }) => handleRemote(channel, channelId, mode, agent, remoteId) },
+	{ name: '/remote', help: 'Toggle this channel between Discord mode and remote mode (Claude mobile app)', remoteAllowed: true, handler: handleRemote },
 	{ name: '!<command>', help: 'Execute a shell command (host if admin, container if sandbox)', helpOnly: true },
-	{ name: '/upgrade', help: 'Update sandbox container (apt + Claude Code + Codex)', modes: ['sandbox'], modeError: '`/upgrade` is only available in sandbox mode.', handler: ({ channel, mode }) => handleUpgrade(channel, mode) },
+	{ name: '/upgrade', help: 'Update sandbox container (apt + Claude Code + Codex)', modes: ['sandbox'], modeError: '`/upgrade` is only available in sandbox mode.', handler: handleUpgrade },
 	{ name: '/restart', help: 'Restart the claudiscord service', modes: ['admin'], modeError: '`/restart` is only available in admin mode.', handler: handleRestart },
 ];
 
@@ -478,18 +476,14 @@ async function handleCommand(message) {
 	const agent = sessions.getAgent(channelId);
 	const model = sessions.getModel(channelId);
 
-	// Remote mode gating: while a channel is driven by the Claude mobile app,
-	// only /remote (toggle off), /status and /help are accepted. Everything
-	// else — plain messages, !shell, other slash commands — is invalidated so
-	// we never spawn a parallel `claude -p` against the live remote session.
-	// We also block during a transition (`remoteOpInFlight`) so a message
-	// arriving while `/remote start` is still queued can't slip through.
+	// Remote-mode gating (shared with the slash path via remoteGateHint): while the
+	// channel is driven by the Claude mobile app, only REMOTE_ALLOWED commands are
+	// accepted. Applies to everything — plain messages, !shell, other slash commands
+	// — so we never spawn a parallel `claude -p` against the live remote session.
+	// Keyed on the full content here; the slash path keys on the command name.
 	const remoteId = sessions.getRemoteId(channelId);
-	const remoteTransitioning = remoteOpInFlight.has(channelId);
-	if ((remoteId || remoteTransitioning) && !REMOTE_ALLOWED.has(content)) {
-		const hint = !remoteId && remoteTransitioning
-			? '⏳ A `/remote` toggle is in progress for this channel.'
-			: `\u{1F6F0}️ This channel is in remote mode (agent \`${remoteId}\`). Send \`/remote\` to return to Discord mode.`;
+	const hint = remoteGateHint(channelId, content);
+	if (hint) {
 		await channel.send(hint);
 		return true;
 	}
@@ -534,16 +528,77 @@ async function handleCommand(message) {
 		return true;
 	}
 
-	// Slash commands dispatched via the registry (single source of truth — also
-	// drives /help and the remote whitelist). An unknown command falls through
-	// (return false) so it is handled as a normal prompt.
-	const cmd = COMMANDS.find(c => !c.helpOnly && c.name === content);
+	// Registry dispatch (single source of truth, shared with the slash path via
+	// runCommand). An unknown command → runCommand returns false → the message is
+	// handled as a normal prompt.
+	return runCommand({ channel, channelId, name: content, mode, agent, model, remoteId, message });
+}
+
+/**
+ * Remote-mode gate, transport-neutral. Returns a hint string to show the user
+ * when the channel is driven by the Claude mobile app (or mid-toggle) and `key`
+ * is not allowed in that state, else null. `key` is the raw content for the text
+ * path or the command name for the slash path (both matched against REMOTE_ALLOWED).
+ */
+function remoteGateHint(channelId, key) {
+	const remoteId = sessions.getRemoteId(channelId);
+	const transitioning = remoteOpInFlight.has(channelId);
+	if ((remoteId || transitioning) && !REMOTE_ALLOWED.has(key)) {
+		return !remoteId && transitioning
+			? '⏳ A `/remote` toggle is in progress for this channel.'
+			: `\u{1F6F0}️ This channel is in remote mode (agent \`${remoteId}\`). Send \`/remote\` to return to Discord mode.`;
+	}
+	return null;
+}
+
+/**
+ * Registry dispatch, transport-neutral: mode-gate + lookup + handler call. The
+ * only messaging primitive it touches is `channel.send`, so any transport can
+ * drive it. Returns true if a command handled the input, false if `name` is not a
+ * registered command (text path: fall through to a normal prompt).
+ */
+async function runCommand({ channel, channelId, name, mode, agent, model, remoteId, message }) {
+	const cmd = COMMANDS.find(c => !c.helpOnly && c.name === name);
 	if (!cmd) return false;
 	if (cmd.modes && !cmd.modes.includes(mode)) {
 		await channel.send(cmd.modeError);
 		return true;
 	}
-	return cmd.handler({ message, channel, channelId, content, mode, agent, model, remoteId });
+	return cmd.handler({ message, channel, channelId, content: name, mode, agent, model, remoteId });
 }
 
-module.exports = { handleCommand };
+/**
+ * Slash-command entry point, transport-neutral. The Discord adapter (index.js)
+ * owns the interaction plumbing (3s ack + non-ephemeral response routing) and calls
+ * this with the resolved channel and command name. Mirrors handleCommand's gating
+ * but keyed on the command name; output goes to the channel via `channel.send`,
+ * exactly like the text path. `name` includes the leading slash (e.g. `/jobs`).
+ */
+async function dispatchSlashCommand({ channel, channelId, name }) {
+	const mode = sessions.getMode(channelId);
+	const agent = sessions.getAgent(channelId);
+	const model = sessions.getModel(channelId);
+	const remoteId = sessions.getRemoteId(channelId);
+
+	const hint = remoteGateHint(channelId, name);
+	if (hint) {
+		await channel.send(hint);
+		return;
+	}
+	const handled = await runCommand({ channel, channelId, name, mode, agent, model, remoteId, message: null });
+	if (!handled) await channel.send('Unknown command.');
+}
+
+/**
+ * Neutral command metadata for transports that register native commands (e.g.
+ * Discord slash commands). Excludes `helpOnly` entries (the `!shell` prefix) and
+ * any non-slash name. The transport maps { name, help } to its own shape; `name`
+ * keeps the leading slash so it stays the registry's canonical identifier.
+ */
+function getRegisteredCommands() {
+	return COMMANDS
+		.filter(c => !c.helpOnly && c.name.startsWith('/'))
+		.map(c => ({ name: c.name, help: c.help }));
+}
+
+module.exports = { handleCommand, dispatchSlashCommand, getRegisteredCommands };

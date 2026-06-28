@@ -8,13 +8,13 @@ const sessions = require('./sessions');
 const { ensureImage, DOCKER_AVAILABLE } = require('./container');
 const { executePrompt } = require('./executor');
 const { isBusy } = require('./queue');
-const { createClient, login, splitMessage, startTypingIndicator, resolveChannelName } = require('./discord');
-const { handleCommand } = require('./commands');
+const { createClient, login, sendChunked, startTypingIndicator, resolveChannelName } = require('./discord');
+const { handleCommand, dispatchSlashCommand, getRegisteredCommands } = require('./commands');
 const { reconcileRemotes } = require('./remote');
 const { transcribeVoiceMessage } = require('./stt');
 const { saveUploads } = require('./uploads');
 const scheduler = require('./scheduler');
-const { Events, ChannelType, MessageFlags } = require('discord.js');
+const { Events, ChannelType, MessageFlags, ApplicationCommandType } = require('discord.js');
 
 process.on('unhandledRejection', err => {
 	log.error('Unhandled rejection:', err);
@@ -224,10 +224,7 @@ client.on(Events.MessageCreate, async message => {
 
 		const agentLabel = agent === 'codex' ? 'Codex' : 'Claude Code';
 		const responseText = result.result || `Empty response from ${agentLabel}.`;
-		const chunks = splitMessage(responseText);
-		for (const chunk of chunks) {
-			await channel.send(chunk);
-		}
+		await sendChunked(channel, responseText);
 	} catch (err) {
 		if (stopTyping) stopTyping();
 
@@ -259,11 +256,140 @@ client.on(Events.MessageCreate, async message => {
 	}
 });
 
+// Routes a command handler's `channel.send(...)` calls onto a SINGLE non-ephemeral
+// interaction response: the first send becomes the reply (Discord renders the
+// persistent "user used /command" marker above it), later sends become follow-ups.
+// A 2s safety net defers — only the few slow commands reach it — so the 3s ack
+// window is respected while fast commands reply directly, with no "thinking"
+// placeholder. The 15-min token lifetime bounds how long a command may run.
+function makeInteractionResponder(interaction) {
+	const realChannel = interaction.channel;
+	let acked = false;        // an initial response (reply or defer) was sent
+	let deferred = false;
+	let firstFilled = false;  // the deferred placeholder has received its content
+	let deferPromise = null;
+	let broken = false;       // interaction unusable → fall back to the real channel
+
+	const deferTimer = setTimeout(() => {
+		if (acked || broken) return;
+		acked = true; deferred = true;
+		deferPromise = interaction.deferReply().then(() => {}, () => { broken = true; });
+	}, 2000);
+
+	// Post `text` through the interaction, falling back to a plain channel message if
+	// the interaction can no longer be used: the 15-min token may expire while a
+	// command sits in the global queue (a long agent prompt can hold it ~20 min), and
+	// any reply/edit/follow-up may fail. The fallback only loses the "used /command"
+	// grouping — output is never dropped.
+	const send = async (text) => {
+		if (broken) { await realChannel.send(text); return; }
+		try {
+			if (!acked) {
+				acked = true;
+				clearTimeout(deferTimer);
+				await interaction.reply({ content: text });
+				firstFilled = true;
+				return;
+			}
+			if (deferPromise) await deferPromise;   // let an in-flight defer settle first
+			if (broken) { await realChannel.send(text); return; }
+			if (deferred && !firstFilled) {
+				firstFilled = true;
+				await interaction.editReply({ content: text });
+				return;
+			}
+			await interaction.followUp({ content: text });
+		} catch (err) {
+			broken = true;
+			await realChannel.send(text).catch(() => {});
+		}
+	};
+
+	const finish = async () => {
+		clearTimeout(deferTimer);
+		if (deferPromise) await deferPromise;
+		if (broken || firstFilled) return;
+		if (!acked) {                  // handler sent nothing, fast → ack so it doesn't error
+			acked = true;
+			await interaction.reply({ content: '✅' }).catch(() => {});
+		} else if (deferred) {         // deferred but nothing sent → clear the placeholder
+			await interaction.editReply({ content: '✅' }).catch(() => {});
+		}
+	};
+
+	return { send, finish };
+}
+
+// Slash-command interactions (Discord Application Commands). This listener is the
+// Discord adapter: all Discord-specific plumbing lives here — authorization and the
+// interaction→response translation. Handler output is routed into the interaction's
+// own non-ephemeral response (via a channel Proxy whose `.send` maps to the
+// responder), so the channel shows Discord's persistent "user used /command" marker
+// + the result in one block, with no "thinking" on fast commands. The neutral
+// gate+dispatch lives in commands.js (dispatchSlashCommand), shared with the text
+// path, so commands.js stays free of any discord.js dependency.
+client.on(Events.InteractionCreate, async interaction => {
+	if (!interaction.isChatInputCommand()) return;
+
+	// Same strict authorization as the message path. Interactions must be acked, so
+	// reply ephemerally (errors stay private) instead of silently dropping.
+	if (interaction.user.id !== config.AUTHORIZED_USER_ID) {
+		await interaction.reply({ content: '⛔ Not authorized.', flags: MessageFlags.Ephemeral }).catch(() => {});
+		return;
+	}
+	if (!interaction.channel) {
+		await interaction.reply({ content: 'Channel unavailable.', flags: MessageFlags.Ephemeral }).catch(() => {});
+		return;
+	}
+
+	// Inherit the parent channel's mode/agent/model on first contact in a thread,
+	// exactly like the message path does before dispatching commands.
+	if (interaction.channel.isThread?.()) sessions.ensureFromParent(interaction.channelId, interaction.channel.parentId);
+
+	const responder = makeInteractionResponder(interaction);
+	// Proxy the real channel so resolveChannelName() (and any other property) still
+	// resolves against it, but `.send` routes to the interaction response.
+	const channel = new Proxy(interaction.channel, {
+		get(target, prop) {
+			if (prop === 'send') return responder.send;
+			const value = Reflect.get(target, prop, target);
+			return typeof value === 'function' ? value.bind(target) : value;
+		},
+	});
+
+	try {
+		await dispatchSlashCommand({ channel, channelId: interaction.channelId, name: `/${interaction.commandName}` });
+	} catch (err) {
+		log.error('InteractionCreate error:', err.message || err);
+		await responder.send(`Command error: ${err.message?.slice(0, 200) || 'unknown'}`).catch(() => {});
+	} finally {
+		await responder.finish().catch(() => {});
+	}
+});
+
 client.on(Events.ClientReady, async () => {
 	log.info(`Connected as ${client.user.tag}`);
+	try { await registerSlashCommands(); } catch (err) { log.warn('registerSlashCommands failed:', err.message); }
 	try { await purgeInvalidChannels(); } catch (err) { log.warn('purgeInvalidChannels failed:', err.message); }
 	scheduler.start();
 });
+
+// Map the neutral command metadata (commands.js) to Discord's Application Command
+// shape and bulk-overwrite the global commands. The Discord-specific shape lives
+// here, not in commands.js. Idempotent: Discord only mutates what actually changed,
+// so this is safe on every boot. Names are lowercased (Discord constraint);
+// descriptions clamped to 100 chars; dmPermission keeps them usable in DMs. Global
+// scope covers guild channels + DMs; first-time propagation can take up to ~1h.
+async function registerSlashCommands() {
+	const data = getRegisteredCommands().map(c => ({
+		name: c.name.slice(1).toLowerCase(),
+		description: c.help.length > 100 ? `${c.help.slice(0, 99)}…` : c.help,
+		type: ApplicationCommandType.ChatInput,
+		dmPermission: true,
+	}));
+	await client.application.commands.set(data);
+	log.info(`Registered ${data.length} global slash command(s)`);
+}
 
 // Remove sessions.json entries whose Discord channel no longer exists (channel
 // deleted, bot kicked from guild, etc.). Strict on the error code: only
