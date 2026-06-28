@@ -2,7 +2,7 @@
 
 A single-user Discord bot that relays your messages to [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or the optional [Codex CLI](https://developers.openai.com/codex/cli), with optional Docker sandboxing and a built-in job scheduler.
 
-Works in both DMs and private guild channels. Each channel is an independent conversation (its own session, its own mode), and the channel topic is injected into the system prompt as a mini `CLAUDE.md` — perfect for per-project contexts without manual `/clear`.
+Works in both DMs and private guild channels. Each channel is an independent conversation (its own session, its own mode), and the channel topic is injected into the system prompt as a mini `CLAUDE.md` — perfect for per-project contexts without manual `/new`.
 
 ## Features
 
@@ -165,7 +165,7 @@ Details:
 | Command | Description |
 |---------|-------------|
 | `/help` | Show available commands |
-| `/clear` | Reset the active agent session of the current channel |
+| `/new` | Reset the active agent session of the current channel (new conversation) |
 | `/status` | Show the channel's mode, agent and runtime status |
 | `/usage` | Show Claude and Codex account usage (5h window + weekly) |
 | `/jobs` | List all scheduled jobs (admin first, then sandbox) |

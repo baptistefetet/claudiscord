@@ -9,7 +9,7 @@ See `README.md` for installation, setup and Discord commands reference.
 ```
 Discord message (DM or guild text channel)
   -> authorization filter (authorized user only)
-  -> command dispatcher (/admin, /sandbox, /clear, …)
+  -> command dispatcher (/admin, /sandbox, /new, …)
   -> session lookup by channelId
   -> executePrompt(agent, mode, prompt) [global queue — one agent at a time]
        claude + admin   -> host Claude
@@ -53,7 +53,7 @@ src/
   jobs-store.js       # loadAllJobs (admin+sandbox), recordJobRun, jobKey
   sessions.js         # { channels: { channelId -> { mode, agent, sessionId, ... } } }
   scheduler.js        # minute-resolution ticker, reloadJobs, executeJob, per-key lock
-  commands.js         # COMMANDS registry → dispatch + auto-generated /help; /clear /status /usage /jobs /admin /sandbox /opus /sonnet /codex /remote /upgrade /restart !shell
+  commands.js         # COMMANDS registry → dispatch + auto-generated /help; /new /status /usage /jobs /admin /sandbox /opus /sonnet /codex /remote /upgrade /restart !shell
   remote.js           # /remote helpers: startRemote, stopRemote, reconcileRemotes
   stt.js              # Groq Whisper transcription for Discord voice messages
   uploads.js          # Save Discord file/photo attachments to .claudiscord/files

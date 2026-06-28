@@ -32,7 +32,7 @@ const SHELL_MAX_OUTPUT = DISCORD_MAX_MSG_LENGTH - 25;
 // wait + spawn + state persistence). Closes two races:
 //   1. While `/remote start` is queued, `remoteId` is not yet set on the
 //      session — without this lock, a concurrent plain message or
-//      `/clear`/`/admin` would pass the remote gate and step on the session.
+//      `/new`/`/admin` would pass the remote gate and step on the session.
 //   2. Two back-to-back `/remote` calls could both pick the start branch
 //      before the first finished, spawning two agents and orphaning one.
 const remoteOpInFlight = new Set();
@@ -348,7 +348,7 @@ async function handleHelp({ channel, mode, agent, model }) {
 	return true;
 }
 
-async function handleClear({ channel, channelId }) {
+async function handleNew({ channel, channelId }) {
 	sessions.clearChannel(channelId);
 	await channel.send('Session reset for this channel.');
 	return true;
@@ -448,7 +448,7 @@ async function handleRestart({ channel }) {
  */
 const COMMANDS = [
 	{ name: '/help', help: 'Show this help', remoteAllowed: true, handler: handleHelp },
-	{ name: '/clear', help: 'Reset session for this channel (new conversation)', handler: handleClear },
+	{ name: '/new', help: 'Reset session for this channel (new conversation)', handler: handleNew },
 	{ name: '/status', help: 'Show current mode, agent and runtime status', remoteAllowed: true, handler: handleStatus },
 	{ name: '/usage', help: 'Show Claude and Codex usage (5h window + weekly)', remoteAllowed: true, handler: ({ channel }) => handleUsage(channel) },
 	{ name: '/jobs', help: 'List all scheduled jobs (admin + sandbox)', remoteAllowed: true, handler: ({ channel }) => handleJobs(channel) },
