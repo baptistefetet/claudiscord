@@ -283,12 +283,10 @@ async function handleUpgrade({ channel, mode }) {
 	await runQueued(async () => {
 		try {
 			ensureContainer();
-			await channel.send('Updating container packages...');
 			await execFileAsync('docker', [
 				'exec', '-u', 'root', CONTAINER_NAME, 'bash', '-c',
 				'DEBIAN_FRONTEND=noninteractive apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" 2>&1 | tail -10',
 			], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
-			await channel.send('Updating Claude Code...');
 			await execFileAsync('docker', [
 				'exec', CONTAINER_NAME, 'bash', '-c',
 				'curl -fsSL https://claude.ai/install.sh -o /tmp/claude-install.sh',
@@ -301,19 +299,20 @@ async function handleUpgrade({ channel, mode }) {
 				'exec', '-u', 'root', CONTAINER_NAME, 'bash', '-c',
 				'cp /home/claude/.local/share/claude/versions/$(ls -t /home/claude/.local/share/claude/versions/ | head -1) /usr/local/bin/claude && chmod 755 /usr/local/bin/claude',
 			], { encoding: 'utf8', timeout: 10000 });
-			await channel.send('Updating Codex...');
 			await execFileAsync('docker', [
 				'exec', '-u', 'root', CONTAINER_NAME,
 				'npm', 'install', '-g', '--prefix', '/usr/local',
 				'@openai/codex@latest', '--no-fund', '--no-audit',
 			], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
+			// Keep only the version number (e.g. "2.1.195 (Claude Code)" -> "2.1.195").
+			const parseVersion = (out) => (out.match(/\d+(?:\.\d+)+/) || [''])[0];
 			let claudeVersion = '';
 			let codexVersion = '';
 			try {
-				claudeVersion = (await execFileAsync('docker', ['exec', CONTAINER_NAME, 'claude', '--version'], { encoding: 'utf8', timeout: 10000 })).stdout.trim();
+				claudeVersion = parseVersion((await execFileAsync('docker', ['exec', CONTAINER_NAME, 'claude', '--version'], { encoding: 'utf8', timeout: 10000 })).stdout);
 			} catch {}
 			try {
-				codexVersion = (await execFileAsync('docker', ['exec', CONTAINER_NAME, 'codex', '--version'], { encoding: 'utf8', timeout: 10000 })).stdout.trim();
+				codexVersion = parseVersion((await execFileAsync('docker', ['exec', CONTAINER_NAME, 'codex', '--version'], { encoding: 'utf8', timeout: 10000 })).stdout);
 			} catch {}
 			const versions = [
 				claudeVersion ? `Claude: \`${claudeVersion}\`` : null,
