@@ -2,7 +2,6 @@ const cron = require('node-cron');
 const {
 	AUTHORIZED_USER_ID,
 	PROMPT_TIMEOUT_MS,
-	EFFORT_BY_MODEL,
 	VALID_MODELS,
 	CHANNEL_DEFAULT_MODEL,
 	VALID_AGENTS,
@@ -147,7 +146,6 @@ async function executeJob(job) {
 			sessionId: null,
 			systemPrompt: jobSystemPrompt,
 			model: jobModel,
-			effort: EFFORT_BY_MODEL[jobModel],
 			timeoutMs: PROMPT_TIMEOUT_MS,
 		};
 		const { result: output, sessionId } = await executePrompt(jobAgent, job.mode, prompt, jobOptions);

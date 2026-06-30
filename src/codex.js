@@ -1,7 +1,6 @@
 const { execFileSync, spawn } = require('child_process');
 const {
 	CODEX_BIN,
-	CODEX_REASONING_EFFORT,
 	PROMPT_TIMEOUT_MS,
 	ADMIN_USER_HOME,
 } = require('./config');
@@ -32,7 +31,7 @@ function buildCodexArgs(options = {}) {
 		'--skip-git-repo-check',
 		'--json',
 		'-c',
-		`model_reasoning_effort=${JSON.stringify(CODEX_REASONING_EFFORT)}`,
+		'model_reasoning_effort="xhigh"',
 	];
 	if (systemPrompt) {
 		executionArgs.push(

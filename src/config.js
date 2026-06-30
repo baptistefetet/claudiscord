@@ -59,10 +59,8 @@ const TYPING_INTERVAL_MS = 8000;
 
 const VALID_MODELS = ['opus', 'sonnet'];
 const CHANNEL_DEFAULT_MODEL = 'sonnet';
-const EFFORT_BY_MODEL = { opus: 'xhigh', sonnet: 'high' };
 const VALID_AGENTS = ['claude', 'codex'];
 const CHANNEL_DEFAULT_AGENT = 'claude';
-const CODEX_REASONING_EFFORT = 'xhigh';
 
 module.exports = {
 	AUTHORIZED_USER_ID,
@@ -93,10 +91,8 @@ module.exports = {
 	CONTAINER_CPUS,
 	VALID_MODELS,
 	CHANNEL_DEFAULT_MODEL,
-	EFFORT_BY_MODEL,
 	VALID_AGENTS,
 	CHANNEL_DEFAULT_AGENT,
-	CODEX_REASONING_EFFORT,
 	DOCKER_CMD_TIMEOUT,
 	UPGRADE_TIMEOUT_MS,
 };

@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const config = require('./config');
-const { EFFORT_BY_MODEL, ADMIN_USER_HOME, STATE_DIR } = config;
+const { ADMIN_USER_HOME, STATE_DIR } = config;
 const { getSystemPrompt } = require('./prompts');
 const log = require('./logger');
 const sessions = require('./sessions');
@@ -204,7 +204,6 @@ client.on(Events.MessageCreate, async message => {
 			channelModel: model,
 		}),
 		model,
-		effort: EFFORT_BY_MODEL[model],
 	};
 
 	// Surface the wait once per channel if another prompt is already running.

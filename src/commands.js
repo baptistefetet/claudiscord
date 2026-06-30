@@ -7,7 +7,6 @@ const {
 	DISCORD_MAX_MSG_LENGTH,
 	CONTAINER_NAME,
 	ADMIN_USER_HOME,
-	CODEX_REASONING_EFFORT,
 } = require('./config');
 const sessions = require('./sessions');
 const {
@@ -369,9 +368,8 @@ async function handleStatus({ channel, mode, agent, model, remoteId }) {
 	const dockerNote = DOCKER_AVAILABLE ? '' : '\nSandbox unavailable on this host.';
 	const remoteLine = remoteId ? `\nRemote: \`${remoteId}\`` : '';
 	const modelLine = agent === 'claude' ? `\nModel: **${model}**` : '';
-	const reasoningLine = agent === 'codex' ? `\nReasoning: **${CODEX_REASONING_EFFORT}**` : '';
 	const codexLine = isCodexAvailable(mode) ? '' : `\nCodex unavailable in **${mode}** mode.`;
-	await channel.send(`Channel mode: **${mode}**\nAgent: **${agent}**${modelLine}${reasoningLine}${remoteLine}${dockerNote}${codexLine}`);
+	await channel.send(`Channel mode: **${mode}**\nAgent: **${agent}**${modelLine}${remoteLine}${dockerNote}${codexLine}`);
 	return true;
 }
 
@@ -402,7 +400,7 @@ async function handleCodex({ channel, channelId, mode, agent }) {
 		return true;
 	}
 	sessions.setAgent(channelId, 'codex');
-	await channel.send(`Channel switched to **codex** with **${CODEX_REASONING_EFFORT}** reasoning. Session reset.`);
+	await channel.send('Channel switched to **codex**. Session reset.');
 	return true;
 }
 

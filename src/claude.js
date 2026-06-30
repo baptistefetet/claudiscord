@@ -36,7 +36,6 @@ function buildClaudeArgs(prompt, options = {}) {
 		sessionId = null,
 		systemPrompt = null,
 		model = null,
-		effort = null,
 		extraArgs = [],
 	} = options;
 
@@ -53,7 +52,7 @@ function buildClaudeArgs(prompt, options = {}) {
 	args.push('--allowedTools', ALLOWED_TOOLS);
 	args.push('--disallowedTools', DISALLOWED_TOOLS);
 	if (model) args.push('--model', model);
-	if (effort) args.push('--effort', effort);
+	args.push('--effort', 'max');
 	args.push('--', prompt);
 
 	return args;
@@ -198,7 +197,6 @@ async function executeClaude(prompt, options = {}, env) {
 		sessionId = null,
 		systemPrompt = null,
 		model = null,
-		effort = null,
 		timeoutMs = PROMPT_TIMEOUT_MS,
 	} = options;
 
@@ -207,7 +205,7 @@ async function executeClaude(prompt, options = {}, env) {
 	}
 
 	const args = buildClaudeArgs(prompt, {
-		sessionId, systemPrompt, model, effort,
+		sessionId, systemPrompt, model,
 		extraArgs: env.extraArgs,
 	});
 

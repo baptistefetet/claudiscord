@@ -11,7 +11,6 @@ const {
 	DOCKER_IMAGE,
 	CONTAINER_CPUS,
 	DOCKER_CMD_TIMEOUT,
-	CODEX_REASONING_EFFORT,
 } = require('./config');
 const { getDefaultClaudeMd } = require('./prompts');
 const { spawnWithTimeout } = require('./spawn');
@@ -19,7 +18,7 @@ const log = require('./logger');
 
 const DOCKERFILE_DIR = path.resolve(__dirname, '..');
 const SANDBOX_CODEX_CONFIG = `cli_auth_credentials_store = "file"
-model_reasoning_effort = "${CODEX_REASONING_EFFORT}"
+model_reasoning_effort = "xhigh"
 `;
 
 // UID/GID of the 'claude' user inside the container. By convention the
