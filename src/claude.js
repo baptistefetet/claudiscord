@@ -4,12 +4,14 @@ const { CLAUDE_BIN, PROMPT_TIMEOUT_MS, ADMIN_USER_HOME } = require('./config');
 const { spawnWithTimeout } = require('./spawn');
 const log = require('./logger');
 
-// Tool permissions for the Claude agent (host and sandbox). Fixed by design:
-// claudiscord strips every tool that could interfere with its own operation
-// (local schedulers, plan mode, notebook edits, harness-config skills, …).
-// Claude-only — Codex governs its tools via --yolo and ignores these.
+// Tool permissions for the Claude agent (host and sandbox). Claude-only — Codex
+// governs its tools via --yolo and ignores these. `claude -p` already drops the
+// interactive tools (AskUserQuestion, plan mode, …), so we only disallow what would
+// actually conflict with claudiscord: its own scheduling (Cron*, ScheduleWakeup,
+// loop/schedule skills), remote triggering, and harness-config skills that could
+// rewrite the host settings we inherit.
 const ALLOWED_TOOLS = 'Bash(*) Read Write Edit Glob Grep WebSearch WebFetch Task';
-const DISALLOWED_TOOLS = 'CronCreate CronDelete CronList Monitor AskUserQuestion RemoteTrigger EnterPlanMode ExitPlanMode EnterWorktree ExitWorktree NotebookEdit ScheduleWakeup PushNotification Skill(loop) Skill(keybindings-help) Skill(schedule) Skill(claude-api) Skill(update-config) Skill(fewer-permission-prompts)';
+const DISALLOWED_TOOLS = 'CronCreate CronDelete CronList ScheduleWakeup RemoteTrigger Skill(loop) Skill(schedule) Skill(update-config) Skill(fewer-permission-prompts)';
 
 // OAuth account usage (5h window + weekly), same endpoint Claude Code's /usage hits.
 const OAUTH_USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
