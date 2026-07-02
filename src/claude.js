@@ -6,12 +6,25 @@ const log = require('./logger');
 
 // Tool permissions for the Claude agent (host and sandbox). Claude-only — Codex
 // governs its tools via --yolo and ignores these. `claude -p` already drops the
-// interactive tools (AskUserQuestion, plan mode, …), so we only disallow what would
-// actually conflict with claudiscord: its own scheduling (Cron*, ScheduleWakeup,
-// loop/schedule skills), remote triggering, and harness-config skills that could
-// rewrite the host settings we inherit.
+// interactive tools (AskUserQuestion, plan mode, …), so DISALLOWED_TOOLS only lists
+// what would actually conflict with claudiscord or make no sense in a Discord relay.
+// It is assembled from a few per-type groups below so the list stays readable.
 const ALLOWED_TOOLS = 'Bash(*) Read Write Edit Glob Grep WebSearch WebFetch Task';
-const DISALLOWED_TOOLS = 'CronCreate CronDelete CronList ScheduleWakeup RemoteTrigger Skill(loop) Skill(schedule) Skill(update-config) Skill(fewer-permission-prompts)';
+
+// Native scheduling + remote session control — claudiscord owns the job and
+// session lifecycle itself.
+const ORCHESTRATION_TOOLS = ['CronCreate', 'CronDelete', 'CronList', 'ScheduleWakeup', 'RemoteTrigger'];
+// Features with no place in a headless Discord relay: agent messaging, push
+// notifications, git worktree switching, Jupyter notebook editing.
+const UNSUPPORTED_TOOLS = ['SendMessage', 'PushNotification', 'EnterWorktree', 'ExitWorktree', 'NotebookEdit'];
+// Skills that duplicate the job system or could rewrite the inherited host config.
+const DISALLOWED_SKILLS = ['Skill(loop)', 'Skill(schedule)', 'Skill(update-config)', 'Skill(fewer-permission-prompts)'];
+
+const DISALLOWED_TOOLS = [
+	...ORCHESTRATION_TOOLS,
+	...UNSUPPORTED_TOOLS,
+	...DISALLOWED_SKILLS,
+].join(' ');
 
 // OAuth account usage (5h window + weekly), same endpoint Claude Code's /usage hits.
 const OAUTH_USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
