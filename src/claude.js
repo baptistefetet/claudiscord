@@ -17,8 +17,10 @@ const ORCHESTRATION_TOOLS = ['CronCreate', 'CronDelete', 'CronList', 'ScheduleWa
 // Features with no place in a headless Discord relay: agent messaging, push
 // notifications, git worktree switching, Jupyter notebook editing.
 const UNSUPPORTED_TOOLS = ['SendMessage', 'PushNotification', 'EnterWorktree', 'ExitWorktree', 'NotebookEdit'];
-// Skills that duplicate the job system or could rewrite the inherited host config.
-const DISALLOWED_SKILLS = ['Skill(loop)', 'Skill(schedule)', 'Skill(update-config)', 'Skill(fewer-permission-prompts)'];
+// Skills that duplicate the job system, rewrite the inherited host config, or
+// scaffold a per-project CLAUDE.md (init — claudiscord always runs at root, not
+// in a project directory).
+const DISALLOWED_SKILLS = ['Skill(loop)', 'Skill(schedule)', 'Skill(update-config)', 'Skill(fewer-permission-prompts)', 'Skill(init)'];
 
 const DISALLOWED_TOOLS = [
 	...ORCHESTRATION_TOOLS,
