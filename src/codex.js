@@ -115,11 +115,10 @@ function startCodexLogin(mode) {
 		if (!isCodexAvailableInContainer()) {
 			throw Object.assign(new Error('CODEX_NOT_AVAILABLE'), { code: 'CODEX_NOT_AVAILABLE' });
 		}
-		const codexHome = path.posix.join(SANDBOX_USER_HOME, '.codex');
 		child = spawn('docker', [
 			'exec',
 			'-i',
-			'-e', `CODEX_HOME=${codexHome}`,
+			'-e', `CODEX_HOME=${sandboxCodexHome()}`,
 			'-w', SANDBOX_USER_HOME,
 			CONTAINER_NAME,
 			'codex',
@@ -209,24 +208,74 @@ function isCodexAuthError(stdout = '', stderr = '') {
 		|| output.includes('token expired');
 }
 
+function sandboxCodexHome() {
+	return path.posix.join(SANDBOX_USER_HOME, '.codex');
+}
+
+function spawnCodexAppServer(mode) {
+	if (mode === 'sandbox') {
+		if (!isCodexAvailableInContainer()) {
+			throw Object.assign(new Error('CODEX_NOT_AVAILABLE'), { code: 'CODEX_NOT_AVAILABLE' });
+		}
+		return {
+			label: 'getCodexUsage(sandbox)',
+			child: spawn('docker', [
+				'exec',
+				'-i',
+				'-e', `CODEX_HOME=${sandboxCodexHome()}`,
+				'-w', SANDBOX_USER_HOME,
+				CONTAINER_NAME,
+				'codex',
+				'app-server',
+			], {
+				stdio: ['pipe', 'pipe', 'pipe'],
+			}),
+			cleanup: () => {
+				execFileSync('docker', [
+					'exec',
+					CONTAINER_NAME,
+					'sh',
+					'-c',
+					'pkill -f "[c]odex app-server" || true',
+				], { stdio: 'ignore', timeout: 5000 });
+			},
+		};
+	}
+
+	if (!CODEX_AVAILABLE) {
+		throw Object.assign(new Error('CODEX_NOT_AVAILABLE'), { code: 'CODEX_NOT_AVAILABLE' });
+	}
+	return {
+		label: 'getCodexUsage(host)',
+		child: spawn(CODEX_BIN, ['app-server'], {
+			cwd: ADMIN_USER_HOME,
+			env: process.env,
+			stdio: ['pipe', 'pipe', 'pipe'],
+		}),
+		cleanup: null,
+	};
+}
+
 /**
  * Read ChatGPT account rate limits through Codex App Server. This uses the
- * host Codex credentials and does not run a model turn or consume quota.
+ * credentials for the selected execution environment and does not run a model
+ * turn or consume quota.
  */
-async function getCodexUsage() {
-	if (!CODEX_AVAILABLE) return { available: false, reason: 'no-cli' };
-
+async function getCodexUsage(mode = 'admin') {
 	return new Promise((resolve) => {
 		let child;
+		let cleanup = null;
+		let label = `getCodexUsage(${mode})`;
 		try {
-			child = spawn(CODEX_BIN, ['app-server'], {
-				cwd: ADMIN_USER_HOME,
-				env: process.env,
-				stdio: ['pipe', 'pipe', 'pipe'],
-			});
+			const appServer = spawnCodexAppServer(mode);
+			child = appServer.child;
+			cleanup = appServer.cleanup;
+			label = appServer.label;
 		} catch (err) {
-			log.warn('getCodexUsage spawn error:', err.message);
-			resolve({ available: false, reason: 'error' });
+			if (err.code !== 'CODEX_NOT_AVAILABLE') {
+				log.warn(`${label} spawn error:`, err.message);
+			}
+			resolve({ available: false, reason: err.code === 'CODEX_NOT_AVAILABLE' ? 'no-cli' : 'error' });
 			return;
 		}
 		let settled = false;
@@ -234,7 +283,7 @@ async function getCodexUsage() {
 		let stderr = '';
 
 		const timer = setTimeout(() => {
-			log.warn('getCodexUsage timed out');
+			log.warn(`${label} timed out`);
 			finish({ available: false, reason: 'error' });
 		}, CODEX_USAGE_TIMEOUT_MS);
 
@@ -243,6 +292,11 @@ async function getCodexUsage() {
 			settled = true;
 			clearTimeout(timer);
 			if (!child.killed) child.kill('SIGTERM');
+			try {
+				if (cleanup) cleanup();
+			} catch (err) {
+				log.warn(`${label} cleanup failed:`, err.message);
+			}
 			resolve(result);
 		}
 
@@ -269,7 +323,7 @@ async function getCodexUsage() {
 				if (message.error) {
 					const error = JSON.stringify(message.error);
 					const reason = isCodexAuthError(error, stderr) ? 'expired' : 'error';
-					log.warn('getCodexUsage App Server error');
+					log.warn(`${label} App Server error`);
 					finish({ available: false, reason });
 					return;
 				}
@@ -300,12 +354,12 @@ async function getCodexUsage() {
 			}
 		});
 		child.on('error', (err) => {
-			log.warn('getCodexUsage spawn error:', err.message);
+			log.warn(`${label} spawn error:`, err.message);
 			finish({ available: false, reason: err.code === 'ENOENT' ? 'no-cli' : 'error' });
 		});
 		child.on('close', (code) => {
 			if (settled) return;
-			log.warn(`getCodexUsage App Server exited with code ${code}: ${stderr.slice(-300)}`);
+			log.warn(`${label} App Server exited with code ${code}: ${stderr.slice(-300)}`);
 			finish({
 				available: false,
 				reason: isCodexAuthError('', stderr) ? 'expired' : 'error',
@@ -313,7 +367,7 @@ async function getCodexUsage() {
 		});
 		child.stdin.on('error', (err) => {
 			if (settled) return;
-			log.warn('getCodexUsage stdin error:', err.message);
+			log.warn(`${label} stdin error:`, err.message);
 			finish({ available: false, reason: 'error' });
 		});
 

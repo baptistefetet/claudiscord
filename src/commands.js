@@ -293,13 +293,14 @@ async function handleRemote({ channel, channelId, mode, agent, remoteId }) {
 }
 
 /**
- * /usage — Claude and Codex account usage (current 5h window + weekly).
+ * /usage — Claude and Codex account usage for the current mode.
  */
-async function handleUsage({ channel }) {
+async function handleUsage({ channel, mode }) {
 	const [claudeUsage, codexUsage] = await Promise.all([
-		getClaudeUsage(),
-		getCodexUsage(),
+		getClaudeUsage(mode),
+		getCodexUsage(mode),
 	]);
+	const modeLabel = mode === 'sandbox' ? 'sandbox' : 'host';
 	// Relative reset hint: "resets in 1h47" or "resets in 4d 6h" for the weekly window.
 	const fmtReset = (iso) => {
 		if (!iso) return '';
@@ -321,19 +322,19 @@ async function handleUsage({ channel }) {
 			+ `▫️ Weekly: **${Math.round(usage.weekly)}%**${fmtReset(usage.weeklyResetAt)}`;
 	};
 	const claudeReasons = {
-		'no-oauth': 'Not available (API-key auth, no subscription window).',
-		expired: 'Authentication expired. Run any Claude prompt to refresh; if it still fails, run `/login`.',
+		'no-oauth': 'Not available (no OAuth credentials in this environment).',
+		expired: `Authentication expired. Select Claude in **${modeLabel}** mode, then run \`/login\`.`,
 		error: 'Unavailable right now.',
 	};
 	const codexReasons = {
-		'no-cli': 'The Codex CLI is not installed.',
+		'no-cli': 'The Codex CLI is not installed in this environment.',
 		'no-subscription': 'Not available (API-key auth, no subscription window).',
-		expired: 'Authentication expired. Switch to `/codex` in admin mode, then run `/login`.',
+		expired: `Authentication expired. Select Codex in **${modeLabel}** mode, then run \`/login\`.`,
 		error: 'Unavailable right now.',
 	};
 	await channel.send([
-		formatUsage('Claude', claudeUsage, claudeReasons),
-		formatUsage('Codex', codexUsage, codexReasons),
+		formatUsage(`Claude (${modeLabel})`, claudeUsage, claudeReasons),
+		formatUsage(`Codex (${modeLabel})`, codexUsage, codexReasons),
 	].join('\n\n'));
 	return true;
 }
@@ -642,7 +643,7 @@ async function handleRestart({ channel }) {
 const COMMANDS = [
 	{ name: '/new', help: 'Reset session for this channel (new conversation)', handler: handleNew },
 	{ name: '/status', help: 'Show current mode, agent and runtime status', remoteAllowed: true, handler: handleStatus },
-	{ name: '/usage', help: 'Show Claude and Codex usage (5h window + weekly)', remoteAllowed: true, handler: handleUsage },
+	{ name: '/usage', help: 'Show Claude and Codex usage for the current mode', remoteAllowed: true, handler: handleUsage },
 	{ name: '/login', help: 'Refresh current agent login via a Discord-friendly link', remoteAllowed: true, handler: handleLogin },
 	{ name: '/jobs', help: 'List all scheduled jobs (admin + sandbox)', remoteAllowed: true, handler: handleJobs },
 	{ name: '/admin', help: 'Switch this channel to admin mode (host)', handler: handleAdmin },

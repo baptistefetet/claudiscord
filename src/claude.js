@@ -5,6 +5,7 @@ const {
 	CLAUDE_BIN,
 	PROMPT_TIMEOUT_MS,
 	ADMIN_USER_HOME,
+	SANDBOX_HOST_HOME,
 	CONTAINER_NAME,
 	SANDBOX_USER_HOME,
 } = require('./config');
@@ -343,19 +344,26 @@ const hostClaudeEnv = {
 	),
 };
 
+function claudeCredentialsPath(mode) {
+	if (mode === 'sandbox') {
+		return SANDBOX_HOST_HOME
+			? path.join(SANDBOX_HOST_HOME, '.claude', '.credentials.json')
+			: null;
+	}
+	return path.join(ADMIN_USER_HOME, '.claude', '.credentials.json');
+}
+
 /**
- * Read the OAuth account usage from Anthropic (5h window + weekly).
- * Token comes from the host credentials file — usage is account-wide, so it is
- * identical whether the channel is admin or sandbox. Never throws: returns a
- * tagged result the caller renders into a friendly Discord message.
+ * Read OAuth account usage from Anthropic (5h window + weekly) using the
+ * credentials for the selected execution environment.
  */
-async function getClaudeUsage() {
+async function getClaudeUsage(mode = 'admin') {
+	const credentialsPath = claudeCredentialsPath(mode);
+	if (!credentialsPath) return { available: false, reason: 'no-oauth' };
+
 	let token;
 	try {
-		const raw = await fs.promises.readFile(
-			path.join(ADMIN_USER_HOME, '.claude', '.credentials.json'),
-			'utf8',
-		);
+		const raw = await fs.promises.readFile(credentialsPath, 'utf8');
 		token = JSON.parse(raw)?.claudeAiOauth?.accessToken;
 	} catch {
 		return { available: false, reason: 'no-oauth' };
@@ -372,13 +380,13 @@ async function getClaudeUsage() {
 			signal: AbortSignal.timeout(10000),
 		});
 	} catch (err) {
-		log.warn('getClaudeUsage fetch error:', err.message);
+		log.warn(`getClaudeUsage(${mode}) fetch error:`, err.message);
 		return { available: false, reason: 'error' };
 	}
 
 	if (res.status === 401) return { available: false, reason: 'expired' };
 	if (!res.ok) {
-		log.warn(`getClaudeUsage HTTP ${res.status}`);
+		log.warn(`getClaudeUsage(${mode}) HTTP ${res.status}`);
 		return { available: false, reason: 'error' };
 	}
 

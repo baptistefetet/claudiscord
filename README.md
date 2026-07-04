@@ -167,7 +167,7 @@ Details:
 |---------|-------------|
 | `/new` | Reset the active agent session of the current channel (new conversation) |
 | `/status` | Show the channel's mode, agent and runtime status |
-| `/usage` | Show Claude and Codex account usage (5h window + weekly) |
+| `/usage` | Show Claude and Codex account usage for the current mode |
 | `/login` | Refresh the current agent login in the current mode via a Discord-friendly browser flow |
 | `/jobs` | List all scheduled jobs (admin first, then sandbox) |
 | `/admin` | Switch the current channel to admin mode (host) |
