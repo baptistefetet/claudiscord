@@ -53,7 +53,7 @@ src/
   jobs-store.js       # loadAllJobs (admin+sandbox), recordJobRun, jobKey
   sessions.js         # { channels: { channelId -> { mode, agent, sessionId, ... } } }
   scheduler.js        # minute-resolution ticker, reloadJobs, executeJob, per-key lock
-  commands.js         # COMMANDS registry → dispatch + native slash metadata; /new /status /usage /jobs /admin /sandbox /opus /sonnet /codex /remote /upgrade /restart !shell; transport-neutral dispatchSlashCommand + getRegisteredCommands (Discord plumbing stays in index.js)
+  commands.js         # COMMANDS registry → dispatch + native slash metadata; /new /status /usage /login /jobs /admin /sandbox /opus /sonnet /codex /remote /upgrade /restart !shell; transport-neutral dispatchSlashCommand + getRegisteredCommands (Discord plumbing stays in index.js)
   remote.js           # /remote helpers: startRemote, stopRemote, reconcileRemotes
   stt.js              # Groq Whisper transcription for Discord voice messages
   uploads.js          # Save Discord file/photo attachments to .claudiscord/files
@@ -241,16 +241,18 @@ SANDBOX_HOST_HOME/
     config.toml           # minimal file config, xhigh reasoning
 ```
 
-`ensureStorage()` seeds `SANDBOX_HOST_HOME/.claude/.credentials.json` from
-`ADMIN_USER_HOME/.claude/.credentials.json` when the sandbox file is absent.
-It likewise seeds `SANDBOX_HOST_HOME/.codex/auth.json` from
-`ADMIN_USER_HOME/.codex/auth.json`. Copies are atomic, mode `0600`, and chowned
-to the sandbox UID/GID. Host and sandbox share one rotating-token account, so
-after a successful run their credentials are kept in sync (newer mtime wins,
-`syncAgentCredentials`); a failed sandbox run drops its credentials to re-seed
-from the host next run (`dropSandboxAuthFile`). If host credentials are missing or
-invalid, sandbox creation continues but the corresponding agent reports an
-authentication error.
+`ensureStorage()` prepares the sandbox config dirs, then credential reconciliation
+seeds `SANDBOX_HOST_HOME/.claude/.credentials.json` from
+`ADMIN_USER_HOME/.claude/.credentials.json` when host credentials are usable.
+Claude copies are intentionally conservative: before a run only host -> sandbox
+is allowed; sandbox -> host happens only after a successful sandbox run, and a
+sandbox auth failure drops the sandbox file so the next run re-seeds from host.
+Codex still uses freshness-based reconciliation. Copies are atomic, mode `0600`,
+and chowned to the sandbox UID/GID. If host credentials are missing or invalid,
+sandbox creation continues but the corresponding agent reports an authentication
+error. `/login` starts `claude auth login --claudeai`, sends the OAuth URL to
+Discord, accepts the returned code, then force re-seeds sandbox credentials from
+the refreshed host file.
 
 ### Background tasks
 
@@ -361,7 +363,7 @@ bash scripts/rebuild-sandbox.sh
 - Implementation: `src/remote.js` spawns `claude --bg [--resume <channelSessionId>] --remote-control <channelName>` (host for admin, `docker exec` for sandbox). The CLI prints `backgrounded · <agentId>` on stdout — we parse the 8-hex agent ID and persist it as `remoteId` in the sessions file.
 - Asymmetric continuity: `--resume` makes `claude --bg` copy the existing Discord conversation into the bg session's JSONL, so the mobile user picks up where Discord left off. But `--bg` manages its own UUID and we don't reconcile back — `setRemoteId` wipes the channel's `sessionId`, so the next Discord message after `/remote` stop starts a fresh session. Going Discord → mobile keeps history; coming back Discord → fresh.
 - Naming: the mobile app shows each session under `<channelName>` (DM = username), so multiple channels can run in parallel and stay discoverable.
-- Gating (`src/commands.js`): while `remoteId` is set, only `/remote`, `/status`, `/jobs`, `/usage` are accepted in that channel. Every other input (plain text, `!shell`, other slash commands) returns an invalidation hint and does **not** spawn `claude -p` — this prevents two concurrent processes touching the same session. Voice messages are also dropped *before* Groq STT (`src/index.js`), so a vocal in remote mode neither pays for transcription nor leaks the `🎙️ <transcript>` echo.
+- Gating (`src/commands.js`): while `remoteId` is set, only `/remote`, `/status`, `/jobs`, `/usage`, `/login` are accepted in that channel. Every other input (plain text, `!shell`, other slash commands) returns an invalidation hint and does **not** spawn `claude -p` — this prevents two concurrent processes touching the same session. Voice messages are also dropped *before* Groq STT (`src/index.js`), so a vocal in remote mode neither pays for transcription nor leaks the `🎙️ <transcript>` echo.
 - Cross-channel sandbox lockout: while *any* channel holds a sandbox remote, every other sandbox prompt / `!shell` / scheduled job is refused (`hasActiveSandboxRemote()` check in `executor.js`, `commands.js`, `scheduler.js`). Reason: `killAgentProcessesInContainer` pkills every non-init PID in the container on timeout, which would scoop up the live remote daemon. Admin channels are unaffected.
 - Stop: `/remote` while active runs `claude stop <agentId>` (host or container), then deletes `~/.claude/jobs/<agentId>/` so the agent stops showing up in `claude agents` as a stopped session (`claude stop` keeps the conversation around by design). Strict 8-hex guard on the agentId before any `rm -rf`. Finally clears `remoteId` and calls `scheduler.reloadJobs()` — Claude may have edited the jobs files during the mobile session, and we did not go through the executor path that normally triggers a reload.
 - Startup reconciliation: `reconcileRemotes()` runs after `sessions.load()` and best-effort-stops every persisted `remoteId` (also doing the jobs/ cleanup). After a machine reboot the daemon is gone and the stop fails harmlessly; the channel reverts to Discord mode either way.

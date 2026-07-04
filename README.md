@@ -168,6 +168,7 @@ Details:
 | `/new` | Reset the active agent session of the current channel (new conversation) |
 | `/status` | Show the channel's mode, agent and runtime status |
 | `/usage` | Show Claude and Codex account usage (5h window + weekly) |
+| `/login` | Refresh Claude login via a Discord-friendly link/code flow |
 | `/jobs` | List all scheduled jobs (admin first, then sandbox) |
 | `/admin` | Switch the current channel to admin mode (host) |
 | `/sandbox` | Switch the current channel to sandbox mode (container) |
@@ -186,10 +187,11 @@ When sandbox storage is initialized, Claudiscord copies the host credentials:
 - `~/.claude/.credentials.json` to `SANDBOX_HOME/.claude/.credentials.json`
 - `~/.codex/auth.json` to `SANDBOX_HOME/.codex/auth.json`
 
-At runtime, host and sandbox share one rotating-token account, so after a
-successful run their credentials are synced (newer copy wins) and a failed
-sandbox run drops its own to re-seed from the host on the next run. Both files
-contain secrets and are written with mode `0600`.
+At runtime, Claude credentials are copied host -> sandbox before runs, and
+sandbox -> host only after a successful sandbox run. A sandbox authentication
+failure drops the sandbox credentials so the next run re-seeds from the host.
+Codex still uses freshness-based reconciliation. Both files contain secrets and
+are written with mode `0600`.
 
 Authenticate Claude Code on the host before first use:
 
@@ -197,6 +199,9 @@ Authenticate Claude Code on the host before first use:
 claude auth login
 codex login
 ```
+
+From Discord, `/login` runs the Claude login flow by sending an OAuth link and
+accepting the returned code in the same channel.
 
 If host credentials are missing or invalid, sandbox initialization continues
 but the corresponding agent reports an authentication error until the host is

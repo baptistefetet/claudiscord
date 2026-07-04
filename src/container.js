@@ -110,41 +110,92 @@ function credentialFreshness(agent, filePath) {
 	}
 }
 
-// Align an agent's host and sandbox credentials before a run so it starts with
-// the freshest copy. Both share one account, and only the most recently
-// refreshed file holds a live token, so we overwrite the staler side (a missing
-// or corrupt file is -Infinity and is repaired here — this subsumes seeding).
-// Executions are serialized through the global queue, so there is no concurrent
-// refresh; the copy is skipped when contents already match, so it never loops. A
-// destination whose parent dir is absent (environment not provisioned yet) is
-// left untouched.
+function credentialPaths(agent) {
+	const rel = agent === 'codex'
+		? path.join('.codex', 'auth.json')
+		: path.join('.claude', '.credentials.json');
+	return {
+		hostPath: path.join(ADMIN_USER_HOME, rel),
+		sandboxPath: path.join(SANDBOX_HOST_HOME, rel),
+	};
+}
+
+function copyCredentialFile(agent, from, to, uid, gid, direction) {
+	if (credentialFreshness(agent, from) === -Infinity) return false;
+	if (!fs.existsSync(path.dirname(to))) return false;
+
+	const fromBuf = fs.readFileSync(from);
+	let toBuf = null;
+	try { toBuf = fs.readFileSync(to); } catch { /* absent: created below */ }
+	if (toBuf && fromBuf.equals(toBuf)) return false;
+
+	writeFileAtomicOwned(to, fromBuf, uid, gid);
+	log.info(`Reconciled ${agent} credentials: ${direction}`);
+	return true;
+}
+
+// Before a Claude run, only seed/repair the sandbox from the host. Host login is
+// the user-controlled source of truth; sandbox credentials are copied back only
+// after a sandbox run has authenticated successfully.
+function reconcileClaudeCredentialsBeforeRun() {
+	const { hostPath, sandboxPath } = credentialPaths('claude');
+	copyCredentialFile('claude', hostPath, sandboxPath, SANDBOX_UID, SANDBOX_GID, 'host -> sandbox');
+}
+
+// Codex keeps the older freshness-based behaviour for now. Its auth file has a
+// stable last_refresh timestamp / API-key fallback, and this preserves existing
+// semantics while the Claude path is made stricter.
+function reconcileCodexCredentialsBeforeRun() {
+	const { hostPath, sandboxPath } = credentialPaths('codex');
+
+	const hostFresh = credentialFreshness('codex', hostPath);
+	const sandboxFresh = credentialFreshness('codex', sandboxPath);
+	if (hostFresh === -Infinity && sandboxFresh === -Infinity) return;
+
+	const [from, to, uid, gid, direction] = sandboxFresh > hostFresh
+		? [sandboxPath, hostPath, 0, 0, 'sandbox -> host']
+		: [hostPath, sandboxPath, SANDBOX_UID, SANDBOX_GID, 'host -> sandbox'];
+	copyCredentialFile('codex', from, to, uid, gid, direction);
+}
+
+// Prepare an agent's host/sandbox credentials before a run. For Claude this is
+// intentionally one-way (host -> sandbox); a sandbox -> host copy is only safe
+// after the sandbox side has just completed a successful authenticated run.
 function reconcileAgentCredentials(agent) {
 	try {
 		if (!SANDBOX_HOST_HOME) return;
-		const rel = agent === 'codex'
-			? path.join('.codex', 'auth.json')
-			: path.join('.claude', '.credentials.json');
-		const hostPath = path.join(ADMIN_USER_HOME, rel);
-		const sandboxPath = path.join(SANDBOX_HOST_HOME, rel);
-
-		const hostFresh = credentialFreshness(agent, hostPath);
-		const sandboxFresh = credentialFreshness(agent, sandboxPath);
-		if (hostFresh === -Infinity && sandboxFresh === -Infinity) return;
-
-		const [from, to, uid, gid] = sandboxFresh > hostFresh
-			? [sandboxPath, hostPath, 0, 0]
-			: [hostPath, sandboxPath, SANDBOX_UID, SANDBOX_GID];
-		if (!fs.existsSync(path.dirname(to))) return;
-
-		const fromBuf = fs.readFileSync(from);
-		let toBuf = null;
-		try { toBuf = fs.readFileSync(to); } catch { /* absent: created below */ }
-		if (toBuf && fromBuf.equals(toBuf)) return;
-
-		writeFileAtomicOwned(to, fromBuf, uid, gid);
-		log.info(`Reconciled ${agent} credentials: ${from === hostPath ? 'host -> sandbox' : 'sandbox -> host'}`);
+		if (agent === 'claude') {
+			reconcileClaudeCredentialsBeforeRun();
+		} else {
+			reconcileCodexCredentialsBeforeRun();
+		}
 	} catch (err) {
 		log.warn(`reconcileAgentCredentials(${agent}) failed: ${err.message}`);
+	}
+}
+
+function syncAgentCredentialsAfterSuccess(agent, mode) {
+	try {
+		if (!SANDBOX_HOST_HOME || agent !== 'claude') return;
+		const { hostPath, sandboxPath } = credentialPaths('claude');
+		if (mode === 'sandbox') {
+			copyCredentialFile('claude', sandboxPath, hostPath, 0, 0, 'sandbox -> host');
+		} else if (mode === 'admin') {
+			copyCredentialFile('claude', hostPath, sandboxPath, SANDBOX_UID, SANDBOX_GID, 'host -> sandbox');
+		}
+	} catch (err) {
+		log.warn(`syncAgentCredentialsAfterSuccess(${agent}, ${mode}) failed: ${err.message}`);
+	}
+}
+
+function dropSandboxAgentCredentials(agent) {
+	try {
+		if (!SANDBOX_HOST_HOME) return;
+		const { sandboxPath } = credentialPaths(agent);
+		fs.rmSync(sandboxPath, { force: true });
+		log.warn(`Removed sandbox ${agent} credentials after an authentication failure`);
+	} catch (err) {
+		log.warn(`dropSandboxAgentCredentials(${agent}) failed: ${err.message}`);
 	}
 }
 
@@ -340,4 +391,6 @@ module.exports = {
 	sandboxCodexEnv,
 	writeSandboxUpload,
 	reconcileAgentCredentials,
+	syncAgentCredentialsAfterSuccess,
+	dropSandboxAgentCredentials,
 };
