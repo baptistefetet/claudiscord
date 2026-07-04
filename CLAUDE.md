@@ -174,7 +174,7 @@ references them by name in a later message.
 - `/codex` selects Codex and resets the channel session. It works in admin and sandbox modes when the corresponding binary is installed.
 - `/opus` and `/sonnet` select Claude and its model. Switching from Codex resets the session; changing only the Claude model does not.
 - Codex uses the model configured by the Codex CLI; claudiscord does not override it.
-- Reasoning effort is hardcoded in the arg builders: Claude `max` (opus) / `medium` (sonnet) in `buildClaudeArgs`, Codex `xhigh` in `buildCodexArgs`.
+- Reasoning effort is hardcoded in the arg builders: Claude `xhigh` (opus) / `medium` (sonnet) in `buildClaudeArgs`, Codex `xhigh` in `buildCodexArgs`.
 - Agent and model are persisted in `sessions.json` next to the mode.
 - Scheduled jobs snapshot the channel's agent and Claude model at scheduling time. Missing `agent` fields fall back to `claude` for backward compatibility.
 
@@ -265,7 +265,7 @@ bash scripts/rebuild-sandbox.sh
 - `claude -p` with `--output-format stream-json --verbose` for both interactive messages and jobs; the first `session_id` seen in the stream is recorded as the job's `lastSessionId`
 - A first invocation omits session flags; Claude allocates an UUID and emits `session_id` in its JSON output. Subsequent invocations use `--resume <uuid>`.
 - `--dangerously-skip-permissions` in sandbox (the container IS the sandbox)
-- Model follows the channel/job snapshot; reasoning effort is hardcoded by model (`opus` → `max`, `sonnet` → `medium`)
+- Model follows the channel/job snapshot; reasoning effort is hardcoded by model (`opus` → `xhigh`, `sonnet` → `medium`)
 - Host cwd: `os.homedir()` of the user running the service (auto-loads `$HOME/CLAUDE.md`) — typically `/root` on Linux when the service runs as root, `/var/root` on macOS
 - Sandbox cwd: `/home/claude`
 - Timeout: 1200s (SIGTERM then SIGKILL after 5s, no partial-answer recovery)

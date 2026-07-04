@@ -182,21 +182,13 @@ Details:
 
 ## Authentication
 
-Host and sandbox credentials are intentionally independent. Claudiscord does not
-copy `~/.claude/.credentials.json` or `~/.codex/auth.json` between the host and
-`SANDBOX_HOME`; whichever environment runs an agent must be authenticated there.
+Each environment authenticates independently: admin (host) and sandbox have their
+own credentials. Whichever environment runs an agent must be logged in there.
 
 From Discord, select the target environment and agent first (`/admin` or
 `/sandbox`, then `/sonnet`/`/opus` or `/codex`), then run `/login`. Claude sends
 an OAuth link and accepts the returned code in the same channel. Codex sends a
 device-auth browser link and waits for the CLI to complete.
-
-You can also authenticate directly on the host:
-
-```
-claude auth login
-codex login --device-auth
-```
 
 If an environment is not authenticated, the corresponding agent reports an
 authentication error until `/login` is completed for that same mode and agent.
