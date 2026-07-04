@@ -168,7 +168,7 @@ Details:
 | `/new` | Reset the active agent session of the current channel (new conversation) |
 | `/status` | Show the channel's mode, agent and runtime status |
 | `/usage` | Show Claude and Codex account usage (5h window + weekly) |
-| `/login` | Refresh Claude login via a Discord-friendly link/code flow |
+| `/login` | Refresh the current agent login in the current mode via a Discord-friendly browser flow |
 | `/jobs` | List all scheduled jobs (admin first, then sandbox) |
 | `/admin` | Switch the current channel to admin mode (host) |
 | `/sandbox` | Switch the current channel to sandbox mode (container) |
@@ -180,32 +180,26 @@ Details:
 | `/restart` | Admin only — restart the claudiscord service |
 | `!<command>` | Run a shell command (host if the channel is admin, container if sandbox) |
 
-## Sandbox authentication
+## Authentication
 
-When sandbox storage is initialized, Claudiscord copies the host credentials:
+Host and sandbox credentials are intentionally independent. Claudiscord does not
+copy `~/.claude/.credentials.json` or `~/.codex/auth.json` between the host and
+`SANDBOX_HOME`; whichever environment runs an agent must be authenticated there.
 
-- `~/.claude/.credentials.json` to `SANDBOX_HOME/.claude/.credentials.json`
-- `~/.codex/auth.json` to `SANDBOX_HOME/.codex/auth.json`
+From Discord, select the target environment and agent first (`/admin` or
+`/sandbox`, then `/sonnet`/`/opus` or `/codex`), then run `/login`. Claude sends
+an OAuth link and accepts the returned code in the same channel. Codex sends a
+device-auth browser link and waits for the CLI to complete.
 
-At runtime, Claude credentials are copied host -> sandbox before runs, and
-sandbox -> host only after a successful sandbox run. A sandbox authentication
-failure drops the sandbox credentials so the next run re-seeds from the host.
-Codex still uses freshness-based reconciliation. Both files contain secrets and
-are written with mode `0600`.
-
-Authenticate Claude Code on the host before first use:
+You can also authenticate directly on the host:
 
 ```
 claude auth login
-codex login
+codex login --device-auth
 ```
 
-From Discord, `/login` runs the Claude login flow by sending an OAuth link and
-accepting the returned code in the same channel.
-
-If host credentials are missing or invalid, sandbox initialization continues
-but the corresponding agent reports an authentication error until the host is
-authenticated and the missing sandbox credential can be seeded.
+If an environment is not authenticated, the corresponding agent reports an
+authentication error until `/login` is completed for that same mode and agent.
 
 ## Configuration
 

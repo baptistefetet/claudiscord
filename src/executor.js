@@ -3,21 +3,9 @@ const { executeCodex, hostCodexEnv } = require('./codex');
 const {
 	sandboxClaudeEnv,
 	sandboxCodexEnv,
-	reconcileAgentCredentials,
-	syncAgentCredentialsAfterSuccess,
-	dropSandboxAgentCredentials,
 } = require('./container');
 const { runQueued } = require('./queue');
 const sessions = require('./sessions');
-
-function isClaudeAuthError(err) {
-	const msg = String(err?.message || '').toLowerCase();
-	return msg.includes('not logged in')
-		|| msg.includes('please run /login')
-		|| msg.includes('invalid authentication credentials')
-		|| msg.includes('failed to authenticate')
-		|| msg.includes('authentication_failed');
-}
 
 /**
  * Execute a prompt with the selected agent and environment. All executions
@@ -57,11 +45,6 @@ function executePrompt(agent, mode, prompt, options = {}) {
 			|| (sessions.getAgent(channelId) === agent && sessions.getMode(channelId) === mode)
 		);
 
-		// Prepare shared credentials before the run. Claude only seeds host ->
-		// sandbox here; sandbox -> host is allowed only after a successful sandbox
-		// run, so a failed auth file cannot be propagated.
-		reconcileAgentCredentials(agent);
-
 		try {
 			let result;
 			if (agent === 'codex') {
@@ -83,12 +66,8 @@ function executePrompt(agent, mode, prompt, options = {}) {
 			if (channelId && result.sessionId && sessionContextIsCurrent()) {
 				sessions.setSessionId(channelId, result.sessionId);
 			}
-			syncAgentCredentialsAfterSuccess(agent, mode);
 			return result;
 		} catch (err) {
-			if (agent === 'claude' && mode === 'sandbox' && isClaudeAuthError(err)) {
-				dropSandboxAgentCredentials('claude');
-			}
 			if (channelId && err.sessionId && sessionContextIsCurrent()) {
 				sessions.setSessionId(channelId, err.sessionId);
 			}

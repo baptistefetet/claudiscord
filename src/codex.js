@@ -1,13 +1,21 @@
+const path = require('path');
 const { execFileSync, spawn } = require('child_process');
 const {
 	CODEX_BIN,
 	PROMPT_TIMEOUT_MS,
 	ADMIN_USER_HOME,
+	CONTAINER_NAME,
+	SANDBOX_USER_HOME,
 } = require('./config');
+const { ensureContainer, isCodexAvailableInContainer } = require('./container');
 const { spawnWithTimeout } = require('./spawn');
 const log = require('./logger');
 
 const CODEX_USAGE_TIMEOUT_MS = 10000;
+const CODEX_LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
+const CODEX_LOGIN_URL_TIMEOUT_MS = 15 * 1000;
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
+const URL_RE = /https?:\/\/[^\s<>"')]+/g;
 
 let CODEX_AVAILABLE = true;
 try {
@@ -18,6 +26,121 @@ try {
 } catch {
 	CODEX_AVAILABLE = false;
 	log.warn('Codex not detected — Codex agent disabled');
+}
+
+function loginTargetLabel(mode) {
+	return mode === 'sandbox' ? 'sandbox' : 'host';
+}
+
+function cleanUrl(url) {
+	return url.replace(/[.,;:]+$/, '');
+}
+
+function stripAnsi(output) {
+	return output.replace(ANSI_RE, '');
+}
+
+function extractCodexLoginUrl(output) {
+	const urls = stripAnsi(output).match(URL_RE) || [];
+	if (urls.length === 0) return null;
+	const preferred = urls.find(url => /openai|chatgpt|device/i.test(url)) || urls[0];
+	return cleanUrl(preferred);
+}
+
+function extractCodexDeviceCode(output) {
+	const stripped = stripAnsi(output);
+	const patterns = [
+		/\b([A-Z0-9]{4,8}-[A-Z0-9]{4,8})\b/,
+		/(?:user\s+code|device\s+code|one-time\s+code)\s*[:=]\s*([A-Z0-9]{4,8}(?:-[A-Z0-9]{4,8})?)/i,
+		/(?:user\s+code|device\s+code|one-time\s+code)[^\n]*(?:\r?\n\s*)+([A-Z0-9]{4,8}(?:-[A-Z0-9]{4,8})?)/i,
+	];
+	for (const pattern of patterns) {
+		const match = stripped.match(pattern);
+		if (match) return match[1].toUpperCase();
+	}
+	return null;
+}
+
+function buildCodexLoginFlow(mode, child) {
+	const target = loginTargetLabel(mode);
+	const label = `Codex ${target}`;
+	return {
+		agent: 'codex',
+		mode,
+		label,
+		child,
+		timeoutMs: CODEX_LOGIN_TIMEOUT_MS,
+		urlTimeoutMs: CODEX_LOGIN_URL_TIMEOUT_MS,
+		awaitsDiscordInput: false,
+		extractUrl: extractCodexLoginUrl,
+		formatUrlMessage: (url, output) => {
+			const code = extractCodexDeviceCode(output);
+			return [
+				`Codex login started for **${target}**.`,
+				'Open this link on your iPhone:',
+				`<${url}>`,
+				code ? `Enter this code: \`${code}\`` : 'Complete the browser authorization.',
+				'I will confirm here when Codex finishes.',
+				'This login expires in 10 minutes. Use `/login cancel` to abort.',
+			].join('\n');
+		},
+		pendingHint: 'Finish the browser authorization, or use `/login cancel`.',
+		inputHint: 'Finish the browser authorization, or use `/login cancel`.',
+		inputReceivedMessage: null,
+		cancelMessage: `${label} login cancelled.`,
+		noUrlMessage: `${label} login did not produce a login URL. Check the service logs and try again.`,
+		successMessage: `${label} login completed.`,
+		cleanup: mode === 'sandbox'
+			? () => {
+				execFileSync('docker', [
+					'exec',
+					CONTAINER_NAME,
+					'sh',
+					'-c',
+					'pkill -f "[c]odex login --device-auth" || true',
+				], { stdio: 'ignore', timeout: 5000 });
+			}
+			: null,
+		formatFailureMessage: ({ killed }) => {
+			if (killed) return `${label} login expired or was cancelled. Run \`/login\` to start again.`;
+			return `${label} login failed. Run \`/login\` to try again.`;
+		},
+	};
+}
+
+function startCodexLogin(mode) {
+	let child;
+	if (mode === 'sandbox') {
+		ensureContainer();
+		if (!isCodexAvailableInContainer()) {
+			throw Object.assign(new Error('CODEX_NOT_AVAILABLE'), { code: 'CODEX_NOT_AVAILABLE' });
+		}
+		const codexHome = path.posix.join(SANDBOX_USER_HOME, '.codex');
+		child = spawn('docker', [
+			'exec',
+			'-i',
+			'-e', `CODEX_HOME=${codexHome}`,
+			'-w', SANDBOX_USER_HOME,
+			CONTAINER_NAME,
+			'codex',
+			'login',
+			'--device-auth',
+		], {
+			stdio: ['pipe', 'pipe', 'pipe'],
+		});
+	} else if (mode === 'admin') {
+		if (!CODEX_AVAILABLE) {
+			throw Object.assign(new Error('CODEX_NOT_AVAILABLE'), { code: 'CODEX_NOT_AVAILABLE' });
+		}
+		child = spawn(CODEX_BIN, ['login', '--device-auth'], {
+			cwd: ADMIN_USER_HOME,
+			env: process.env,
+			stdio: ['pipe', 'pipe', 'pipe'],
+		});
+	} else {
+		throw new Error(`Unknown execution mode: ${mode}`);
+	}
+	return buildCodexLoginFlow(mode, child);
 }
 
 function buildCodexArgs(options = {}) {
@@ -306,4 +429,5 @@ module.exports = {
 	getCodexUsage,
 	executeCodex,
 	hostCodexEnv,
+	startCodexLogin,
 };

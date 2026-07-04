@@ -1,26 +1,21 @@
-const fs = require('fs');
-const path = require('path');
 const { spawn, execFileSync, execFile } = require('child_process');
 const { promisify } = require('util');
 const execFileAsync = promisify(execFile);
 const {
-	CLAUDE_BIN,
 	UPGRADE_TIMEOUT_MS,
 	SHELL_TIMEOUT_MS,
 	DISCORD_MAX_MSG_LENGTH,
 	CONTAINER_NAME,
 	ADMIN_USER_HOME,
-	SANDBOX_HOST_HOME,
 } = require('./config');
 const sessions = require('./sessions');
 const {
 	ensureContainer,
 	DOCKER_AVAILABLE,
 	isCodexAvailableInContainer,
-	reconcileAgentCredentials,
 } = require('./container');
-const { CODEX_AVAILABLE, getCodexUsage } = require('./codex');
-const { ADMIN_ENV, getClaudeUsage } = require('./claude');
+const { CODEX_AVAILABLE, getCodexUsage, startCodexLogin } = require('./codex');
+const { getClaudeUsage, startClaudeLogin } = require('./claude');
 const { runQueued, isBusy } = require('./queue');
 const { startRemote, stopRemote } = require('./remote');
 const { resolveChannelName, sendChunked } = require('./discord');
@@ -29,11 +24,8 @@ const scheduler = require('./scheduler');
 const log = require('./logger');
 
 const KILL_GRACE_MS = 5000;
-const CLAUDE_LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
-const CLAUDE_LOGIN_URL_TIMEOUT_MS = 15 * 1000;
 // Worst case: "```\n" (4) + output + "\n... (truncated)\n```" (21) = 25 overhead
 const SHELL_MAX_OUTPUT = DISCORD_MAX_MSG_LENGTH - 25;
-const CLAUDE_LOGIN_URL_RE = /https:\/\/claude\.com\/cai\/oauth\/authorize\?[^\s]+/;
 
 // Per-channel lock held for the whole duration of a `/remote` toggle (queue
 // wait + spawn + state persistence). Closes two races:
@@ -43,80 +35,102 @@ const CLAUDE_LOGIN_URL_RE = /https:\/\/claude\.com\/cai\/oauth\/authorize\?[^\s]
 //   2. Two back-to-back `/remote` calls could both pick the start branch
 //      before the first finished, spawning two agents and orphaning one.
 const remoteOpInFlight = new Set();
-let pendingClaudeLogin = null;
+let pendingLogin = null;
 
-function extractClaudeLoginUrl(output) {
-	const match = output.match(CLAUDE_LOGIN_URL_RE);
-	return match ? match[0] : null;
+function startAgentLogin(agent, mode) {
+	if (agent === 'codex') return startCodexLogin(mode);
+	return startClaudeLogin(mode);
 }
 
-function killClaudeLogin(login) {
+function killLogin(login) {
 	if (!login || login.closed) return;
 	login.killed = true;
 	try { login.child.kill('SIGTERM'); } catch (_) {}
+	try {
+		if (login.flow.cleanup) login.flow.cleanup();
+	} catch (err) {
+		log.warn(`${login.flow.label} login cleanup failed: ${err.message}`);
+	}
 	setTimeout(() => {
 		if (!login.closed) {
 			try { login.child.kill('SIGKILL'); } catch (_) {}
+			try {
+				if (login.flow.cleanup) login.flow.cleanup();
+			} catch (err) {
+				log.warn(`${login.flow.label} login cleanup failed: ${err.message}`);
+			}
 		}
 	}, KILL_GRACE_MS);
 }
 
-function clearClaudeLogin(login) {
-	if (!login || pendingClaudeLogin !== login) return;
+function clearLogin(login) {
+	if (!login || pendingLogin !== login) return;
 	clearTimeout(login.timeout);
 	clearTimeout(login.urlTimeout);
 	if (login.releaseQueue) {
 		login.releaseQueue();
 		login.releaseQueue = null;
 	}
-	pendingClaudeLogin = null;
+	pendingLogin = null;
 }
 
-function resolveClaudeLoginStart(login) {
+function resolveLoginStart(login) {
 	if (!login || login.startResolved) return;
 	login.startResolved = true;
 	if (login.resolveStart) login.resolveStart();
 }
 
-function forceSandboxClaudeCredentialsFromHost() {
-	if (!SANDBOX_HOST_HOME) return;
-	try {
-		fs.rmSync(path.join(SANDBOX_HOST_HOME, '.claude', '.credentials.json'), { force: true });
-		reconcileAgentCredentials('claude');
-	} catch (err) {
-		log.warn(`forceSandboxClaudeCredentialsFromHost failed: ${err.message}`);
-	}
+function loginOutput(login) {
+	return `${login.stdout}\n${login.stderr}`;
 }
 
-async function finishPendingClaudeLogin(channel, content) {
-	const login = pendingClaudeLogin;
+function maybeSendLoginUrl(login, channel) {
+	if (login.urlSent) return;
+	const output = loginOutput(login);
+	const url = login.flow.extractUrl(output);
+	if (!url) return;
+	login.urlSent = true;
+	clearTimeout(login.urlTimeout);
+	channel.send(login.flow.formatUrlMessage(url, output))
+		.catch(err => log.error(`${login.flow.label} login URL send error:`, err.message))
+		.finally(() => resolveLoginStart(login));
+}
+
+async function finishPendingLogin(channel, content) {
+	const login = pendingLogin;
 	if (!login || login.channelId !== channel.id) return false;
 
 	const trimmed = content.trim();
 	if (trimmed === '/login') {
-		await channel.send('A Claude login is already pending here. Open the link above, then send only the code from Claude.');
+		await channel.send(`${login.flow.label} login is already pending here. ${login.flow.pendingHint}`);
 		return true;
 	}
 	if (trimmed === '/login cancel' || trimmed === '/cancel') {
-		killClaudeLogin(login);
-		clearClaudeLogin(login);
-		await channel.send('Claude login cancelled.');
-		resolveClaudeLoginStart(login);
+		killLogin(login);
+		clearLogin(login);
+		await channel.send(login.flow.cancelMessage);
+		resolveLoginStart(login);
+		return true;
+	}
+	if (!login.flow.awaitsDiscordInput) {
+		await channel.send(`${login.flow.label} login is pending. ${login.flow.pendingHint}`);
 		return true;
 	}
 	if (trimmed.startsWith('/')) {
-		await channel.send('Claude login is pending. Send only the code from Claude, or `/login cancel`.');
+		await channel.send(`${login.flow.label} login is pending. ${login.flow.inputHint}`);
 		return true;
 	}
 
-	login.codeSubmitted = true;
+	login.inputSubmitted = true;
 	try {
 		login.child.stdin.write(`${trimmed}\n`);
-		await channel.send('Code received. Finishing Claude login...');
+		if (login.flow.inputReceivedMessage) {
+			await channel.send(login.flow.inputReceivedMessage);
+		}
 	} catch (err) {
-		clearClaudeLogin(login);
-		await channel.send(`Claude login failed before the code could be sent: ${err.message}`);
-		resolveClaudeLoginStart(login);
+		clearLogin(login);
+		await channel.send(`${login.flow.label} login failed before the input could be sent: ${err.message}`);
+		resolveLoginStart(login);
 	}
 	return true;
 }
@@ -314,7 +328,7 @@ async function handleUsage({ channel }) {
 	const codexReasons = {
 		'no-cli': 'The Codex CLI is not installed.',
 		'no-subscription': 'Not available (API-key auth, no subscription window).',
-		expired: 'Authentication expired. Run `codex login` on the host.',
+		expired: 'Authentication expired. Switch to `/codex` in admin mode, then run `/login`.',
 		error: 'Unavailable right now.',
 	};
 	await channel.send([
@@ -325,16 +339,15 @@ async function handleUsage({ channel }) {
 }
 
 /**
- * /login — start Claude Code's browser OAuth flow and relay the URL + pasted
- * code through Discord. Only one login can be pending because credentials are
- * host-wide, not channel-scoped.
+ * /login — start the selected agent's browser login flow in the selected
+ * environment. Only one login can be pending because it holds the global queue.
  */
-async function handleLogin({ channel, channelId }) {
-	if (pendingClaudeLogin) {
-		const sameChannel = pendingClaudeLogin.channelId === channelId;
+async function handleLogin({ channel, channelId, mode, agent }) {
+	if (pendingLogin) {
+		const sameChannel = pendingLogin.channelId === channelId;
 		await channel.send(sameChannel
-			? 'A Claude login is already pending here. Open the link above, then send only the code from Claude.'
-			: 'A Claude login is already pending in another channel. Finish or let it expire before starting a new one.');
+			? `${pendingLogin.flow.label} login is already pending here. ${pendingLogin.flow.pendingHint}`
+			: `${pendingLogin.flow.label} login is already pending in another channel. Finish or let it expire before starting a new one.`);
 		return true;
 	}
 	if (isBusy()) {
@@ -342,25 +355,27 @@ async function handleLogin({ channel, channelId }) {
 		return true;
 	}
 
-	let child;
+	let flow;
 	try {
-		child = spawn(CLAUDE_BIN, ['auth', 'login', '--claudeai'], {
-			cwd: ADMIN_USER_HOME,
-			env: ADMIN_ENV,
-			stdio: ['pipe', 'pipe', 'pipe'],
-		});
+		flow = startAgentLogin(agent, mode);
 	} catch (err) {
-		await channel.send(`Claude login failed to start: ${err.message}`);
+		if (err.code === 'CODEX_NOT_AVAILABLE') {
+			await channel.send(`Codex is not installed or not available in **${mode}** mode.`);
+			return true;
+		}
+		const label = agent === 'codex' ? 'Codex' : 'Claude';
+		await channel.send(`${label} login failed to start: ${err.message}`);
 		return true;
 	}
 
 	const login = {
-		child,
+		flow,
+		child: flow.child,
 		channelId,
 		stdout: '',
 		stderr: '',
 		urlSent: false,
-		codeSubmitted: false,
+		inputSubmitted: false,
 		killed: false,
 		closed: false,
 		timeout: null,
@@ -371,70 +386,64 @@ async function handleLogin({ channel, channelId }) {
 	};
 	const queueHold = new Promise((resolve) => { login.releaseQueue = resolve; });
 	const startPromise = new Promise((resolve) => { login.resolveStart = resolve; });
-	pendingClaudeLogin = login;
+	pendingLogin = login;
 	runQueued(() => queueHold)
-		.catch(err => log.warn(`Claude login queue hold failed: ${err.message}`));
+		.catch(err => log.warn(`${flow.label} login queue hold failed: ${err.message}`));
 
-	child.stdin.on('error', () => {});
-	child.stdout.on('data', (chunk) => {
+	login.child.stdin.on('error', () => {});
+	login.child.stdout.on('data', (chunk) => {
 		login.stdout += chunk;
-		if (login.urlSent) return;
-		const url = extractClaudeLoginUrl(login.stdout);
-		if (!url) return;
-		login.urlSent = true;
-		clearTimeout(login.urlTimeout);
-		channel.send([
-			'Claude login started.',
-			'Open this link on your iPhone:',
-			`<${url}>`,
-			'After signing in, Claude will show a code. Send only that code here.',
-			'This login expires in 10 minutes. Use `/login cancel` to abort.',
-		].join('\n'))
-			.catch(err => log.error('Claude login URL send error:', err.message))
-			.finally(() => resolveClaudeLoginStart(login));
+		maybeSendLoginUrl(login, channel);
 	});
-	child.stderr.on('data', (chunk) => { login.stderr += chunk; });
-	child.on('error', (err) => {
-		clearClaudeLogin(login);
-		channel.send(`Claude login failed to start: ${err.message}`)
+	login.child.stderr.on('data', (chunk) => {
+		login.stderr += chunk;
+		maybeSendLoginUrl(login, channel);
+	});
+	login.child.on('error', (err) => {
+		clearLogin(login);
+		channel.send(`${flow.label} login failed to start: ${err.message}`)
 			.catch(() => {})
-			.finally(() => resolveClaudeLoginStart(login));
+			.finally(() => resolveLoginStart(login));
 	});
-	child.on('close', (code) => {
+	login.child.on('close', (code) => {
 		login.closed = true;
-		if (pendingClaudeLogin !== login) return;
-		clearClaudeLogin(login);
+		if (pendingLogin !== login) return;
+		clearLogin(login);
 		if (code === 0) {
-			forceSandboxClaudeCredentialsFromHost();
-			channel.send('Claude login completed. Host credentials are refreshed; sandbox credentials were re-seeded from host.').catch(() => {});
+			channel.send(flow.successMessage).catch(() => {})
+				.finally(() => resolveLoginStart(login));
 			return;
 		}
-		if (login.killed) {
-			channel.send('Claude login expired or was cancelled. Run `/login` to start again.').catch(() => {});
-			return;
-		}
-		const hint = login.urlSent && !login.codeSubmitted
-			? 'No code was submitted.'
-			: 'Claude rejected the submitted code or the login flow failed.';
-		channel.send(`${hint} Run \`/login\` to try again.`)
+		channel.send(flow.formatFailureMessage({
+			killed: login.killed,
+			urlSent: login.urlSent,
+			inputSubmitted: login.inputSubmitted,
+			code,
+			output: loginOutput(login),
+		}))
 			.catch(() => {})
-			.finally(() => resolveClaudeLoginStart(login));
+			.finally(() => resolveLoginStart(login));
 	});
 
 	login.urlTimeout = setTimeout(() => {
-		if (login.urlSent || pendingClaudeLogin !== login) return;
-		killClaudeLogin(login);
-		clearClaudeLogin(login);
-		channel.send('Claude login did not produce a login URL. Check the service logs and try again.')
+		if (login.urlSent || pendingLogin !== login) return;
+		killLogin(login);
+		clearLogin(login);
+		channel.send(flow.noUrlMessage)
 			.catch(() => {})
-			.finally(() => resolveClaudeLoginStart(login));
-	}, CLAUDE_LOGIN_URL_TIMEOUT_MS);
+			.finally(() => resolveLoginStart(login));
+	}, flow.urlTimeoutMs);
 	login.timeout = setTimeout(() => {
-		if (pendingClaudeLogin !== login) return;
-		killClaudeLogin(login);
-		clearClaudeLogin(login);
-		channel.send('Claude login expired. Run `/login` to start again.').catch(() => {});
-	}, CLAUDE_LOGIN_TIMEOUT_MS);
+		if (pendingLogin !== login) return;
+		killLogin(login);
+		clearLogin(login);
+		channel.send(flow.formatFailureMessage({
+			killed: true,
+			urlSent: login.urlSent,
+			inputSubmitted: login.inputSubmitted,
+			output: loginOutput(login),
+		})).catch(() => {});
+	}, flow.timeoutMs);
 
 	await startPromise;
 	return true;
@@ -634,7 +643,7 @@ const COMMANDS = [
 	{ name: '/new', help: 'Reset session for this channel (new conversation)', handler: handleNew },
 	{ name: '/status', help: 'Show current mode, agent and runtime status', remoteAllowed: true, handler: handleStatus },
 	{ name: '/usage', help: 'Show Claude and Codex usage (5h window + weekly)', remoteAllowed: true, handler: handleUsage },
-	{ name: '/login', help: 'Refresh Claude login via a Discord-friendly link', remoteAllowed: true, handler: handleLogin },
+	{ name: '/login', help: 'Refresh current agent login via a Discord-friendly link', remoteAllowed: true, handler: handleLogin },
 	{ name: '/jobs', help: 'List all scheduled jobs (admin + sandbox)', remoteAllowed: true, handler: handleJobs },
 	{ name: '/admin', help: 'Switch this channel to admin mode (host)', handler: handleAdmin },
 	{ name: '/sandbox', help: 'Switch this channel to sandbox mode (container)', handler: handleSandbox },
@@ -662,7 +671,7 @@ async function handleCommand(message) {
 	const agent = sessions.getAgent(channelId);
 	const model = sessions.getModel(channelId);
 
-	if (await finishPendingClaudeLogin(channel, content)) return true;
+	if (await finishPendingLogin(channel, content)) return true;
 
 	// Remote-mode gating (shared with the slash path via remoteGateHint): while the
 	// channel is driven by the Claude mobile app, only REMOTE_ALLOWED commands are

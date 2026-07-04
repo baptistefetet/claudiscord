@@ -46,9 +46,9 @@ src/
   discord.js          # Client, sendToChannel, sendChunked (splitMessage now private), typing indicator
   queue.js            # Single global FIFO (runQueued, isBusy)
   spawn.js            # spawnWithTimeout: generic subprocess runner (timeout, SIGTERM→SIGKILL)
-  claude.js           # Host Claude exec (executeClaude + hostClaudeEnv), stream-json parse, OAuth usage (getClaudeUsage)
-  codex.js            # Host Codex exec (executeCodex + hostCodexEnv), JSONL parse, account usage (getCodexUsage)
-  container.js        # Docker: image/container, sandbox env factories (sandboxClaudeEnv/sandboxCodexEnv), creds
+  claude.js           # Claude exec/login (host + sandbox), stream-json parse, OAuth usage (getClaudeUsage)
+  codex.js            # Codex exec/login (host + sandbox), JSONL parse, account usage (getCodexUsage)
+  container.js        # Docker: image/container, sandbox env factories (sandboxClaudeEnv/sandboxCodexEnv)
   executor.js         # executePrompt(agent, mode) → pick env (host const / sandbox factory) → executeClaude|executeCodex; queue
   jobs-store.js       # loadAllJobs (admin+sandbox), recordJobRun, jobKey
   sessions.js         # { channels: { channelId -> { mode, agent, sessionId, ... } } }
@@ -206,7 +206,7 @@ the script creates it owned by `1001:1001` and uses those defaults.
 
 Runtime echoes this: `src/container.js` reads `SANDBOX_HOME`'s ownership
 via `fs.statSync` at startup (`readSandboxIds`) and uses those IDs for
-every chown when seeding files. Single source of truth: the directory's
+every chown when creating files. Single source of truth: the directory's
 ownership.
 
 Implication: if you move `SANDBOX_HOME` to a path with different
@@ -234,25 +234,19 @@ The sandbox home also contains agent config:
 SANDBOX_HOST_HOME/
   CLAUDE.md               # customisable
   .claude/
-    .credentials.json     # seeded from host on first use
+    .credentials.json     # sandbox Claude auth, created by sandbox /login or CLI
     skills/               # user skills
   .codex/
-    auth.json             # seeded from host on first use
+    auth.json             # sandbox Codex auth, created by sandbox /login or CLI
     config.toml           # minimal file config, xhigh reasoning
 ```
 
-`ensureStorage()` prepares the sandbox config dirs, then credential reconciliation
-seeds `SANDBOX_HOST_HOME/.claude/.credentials.json` from
-`ADMIN_USER_HOME/.claude/.credentials.json` when host credentials are usable.
-Claude copies are intentionally conservative: before a run only host -> sandbox
-is allowed; sandbox -> host happens only after a successful sandbox run, and a
-sandbox auth failure drops the sandbox file so the next run re-seeds from host.
-Codex still uses freshness-based reconciliation. Copies are atomic, mode `0600`,
-and chowned to the sandbox UID/GID. If host credentials are missing or invalid,
-sandbox creation continues but the corresponding agent reports an authentication
-error. `/login` starts `claude auth login --claudeai`, sends the OAuth URL to
-Discord, accepts the returned code, then force re-seeds sandbox credentials from
-the refreshed host file.
+`ensureStorage()` prepares the sandbox config dirs and minimal Codex config only;
+it does not read, copy, compare, or delete agent credentials. Host and sandbox
+auth are independent: `/login` uses the current channel mode and agent, so
+`/sandbox` + `/codex` + `/login` authenticates sandbox Codex without touching
+host Codex. Claude login relays the OAuth URL and returned code through Discord;
+Codex login uses `codex login --device-auth` and waits for browser completion.
 
 ### Background tasks
 
@@ -367,4 +361,4 @@ bash scripts/rebuild-sandbox.sh
 - Cross-channel sandbox lockout: while *any* channel holds a sandbox remote, every other sandbox prompt / `!shell` / scheduled job is refused (`hasActiveSandboxRemote()` check in `executor.js`, `commands.js`, `scheduler.js`). Reason: `killAgentProcessesInContainer` pkills every non-init PID in the container on timeout, which would scoop up the live remote daemon. Admin channels are unaffected.
 - Stop: `/remote` while active runs `claude stop <agentId>` (host or container), then deletes `~/.claude/jobs/<agentId>/` so the agent stops showing up in `claude agents` as a stopped session (`claude stop` keeps the conversation around by design). Strict 8-hex guard on the agentId before any `rm -rf`. Finally clears `remoteId` and calls `scheduler.reloadJobs()` — Claude may have edited the jobs files during the mobile session, and we did not go through the executor path that normally triggers a reload.
 - Startup reconciliation: `reconcileRemotes()` runs after `sessions.load()` and best-effort-stops every persisted `remoteId` (also doing the jobs/ cleanup). After a machine reboot the daemon is gone and the stop fails harmlessly; the channel reverts to Discord mode either way.
-- Sandbox prerequisite: the in-container claude daemon needs valid credentials, seeded from the host on first use. Without them the mobile app won't see the session.
+- Sandbox prerequisite: the in-container claude daemon needs valid sandbox Claude credentials. Run `/sandbox`, select Claude with `/opus` or `/sonnet`, then `/login` before using sandbox `/remote`.

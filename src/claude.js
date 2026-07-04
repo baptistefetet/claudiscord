@@ -1,6 +1,14 @@
 const fs = require('fs');
 const path = require('path');
-const { CLAUDE_BIN, PROMPT_TIMEOUT_MS, ADMIN_USER_HOME } = require('./config');
+const { spawn, execFileSync } = require('child_process');
+const {
+	CLAUDE_BIN,
+	PROMPT_TIMEOUT_MS,
+	ADMIN_USER_HOME,
+	CONTAINER_NAME,
+	SANDBOX_USER_HOME,
+} = require('./config');
+const { ensureContainer } = require('./container');
 const { spawnWithTimeout } = require('./spawn');
 const log = require('./logger');
 
@@ -39,6 +47,92 @@ const ADMIN_ENV = {
 	...process.env,
 	PATH: `${CLAUDE_BIN_DIR}:${process.env.PATH || ''}`,
 };
+const CLAUDE_LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
+const CLAUDE_LOGIN_URL_TIMEOUT_MS = 15 * 1000;
+const CLAUDE_LOGIN_URL_RE = /https:\/\/claude\.com\/cai\/oauth\/authorize\?[^\s]+/;
+
+function loginTargetLabel(mode) {
+	return mode === 'sandbox' ? 'sandbox' : 'host';
+}
+
+function extractClaudeLoginUrl(output) {
+	const match = output.match(CLAUDE_LOGIN_URL_RE);
+	return match ? match[0] : null;
+}
+
+function buildClaudeLoginFlow(mode, child) {
+	const target = loginTargetLabel(mode);
+	const label = `Claude ${target}`;
+	return {
+		agent: 'claude',
+		mode,
+		label,
+		child,
+		timeoutMs: CLAUDE_LOGIN_TIMEOUT_MS,
+		urlTimeoutMs: CLAUDE_LOGIN_URL_TIMEOUT_MS,
+		awaitsDiscordInput: true,
+		extractUrl: extractClaudeLoginUrl,
+		formatUrlMessage: (url) => [
+			`Claude login started for **${target}**.`,
+			'Open this link on your iPhone:',
+			`<${url}>`,
+			'After signing in, Claude will show a code. Send only that code here.',
+			'This login expires in 10 minutes. Use `/login cancel` to abort.',
+		].join('\n'),
+		pendingHint: 'Open the link above, then send only the code from Claude.',
+		inputHint: 'Send only the code from Claude, or `/login cancel`.',
+		inputReceivedMessage: 'Code received. Finishing Claude login...',
+		cancelMessage: `${label} login cancelled.`,
+		noUrlMessage: `${label} login did not produce a login URL. Check the service logs and try again.`,
+		successMessage: `${label} login completed.`,
+		cleanup: mode === 'sandbox'
+			? () => {
+				execFileSync('docker', [
+					'exec',
+					CONTAINER_NAME,
+					'sh',
+					'-c',
+					'pkill -f "[c]laude auth login --claudeai" || true',
+				], { stdio: 'ignore', timeout: 5000 });
+			}
+			: null,
+		formatFailureMessage: ({ killed, urlSent, inputSubmitted }) => {
+			if (killed) return `${label} login expired or was cancelled. Run \`/login\` to start again.`;
+			const hint = urlSent && !inputSubmitted
+				? 'No code was submitted.'
+				: 'Claude rejected the submitted code or the login flow failed.';
+			return `${hint} Run \`/login\` to try again.`;
+		},
+	};
+}
+
+function startClaudeLogin(mode) {
+	let child;
+	if (mode === 'sandbox') {
+		ensureContainer();
+		child = spawn('docker', [
+			'exec',
+			'-i',
+			'-w', SANDBOX_USER_HOME,
+			CONTAINER_NAME,
+			'claude',
+			'auth',
+			'login',
+			'--claudeai',
+		], {
+			stdio: ['pipe', 'pipe', 'pipe'],
+		});
+	} else if (mode === 'admin') {
+		child = spawn(CLAUDE_BIN, ['auth', 'login', '--claudeai'], {
+			cwd: ADMIN_USER_HOME,
+			env: ADMIN_ENV,
+			stdio: ['pipe', 'pipe', 'pipe'],
+		});
+	} else {
+		throw new Error(`Unknown execution mode: ${mode}`);
+	}
+	return buildClaudeLoginFlow(mode, child);
+}
 
 /**
  * Build Claude CLI arguments from options.
@@ -306,4 +400,5 @@ module.exports = {
 	executeClaude,
 	hostClaudeEnv,
 	getClaudeUsage,
+	startClaudeLogin,
 };
