@@ -323,13 +323,13 @@ async function handleUsage({ channel, mode }) {
 	};
 	const claudeReasons = {
 		'no-oauth': 'Not available (no OAuth credentials in this environment).',
-		expired: `Authentication expired. Select Claude in **${modeLabel}** mode, then run \`/login\`.`,
+		expired: `Authentication expired.`,
 		error: 'Unavailable right now.',
 	};
 	const codexReasons = {
 		'no-cli': 'The Codex CLI is not installed in this environment.',
 		'no-subscription': 'Not available (API-key auth, no subscription window).',
-		expired: `Authentication expired. Select Codex in **${modeLabel}** mode, then run \`/login\`.`,
+		expired: `Authentication expired.`,
 		error: 'Unavailable right now.',
 	};
 	await channel.send([
