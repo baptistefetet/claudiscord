@@ -17,7 +17,9 @@ const log = require('./logger');
 // governs its tools via --yolo and ignores these. `claude -p` already drops the
 // interactive tools (AskUserQuestion, plan mode, …), so DISALLOWED_TOOLS only lists
 // what would actually conflict with claudiscord or make no sense in a Discord relay.
-// It is assembled from a few per-type groups below so the list stays readable.
+// Bundled skills (update-config, loop, schedule, etc.) are excluded separately via
+// the disableBundledSkills setting below, so any new one Anthropic ships is excluded
+// automatically. Plugin skills and .claude/skills/ ones are unaffected by that setting.
 const ALLOWED_TOOLS = 'Bash(*) Read Write Edit Glob Grep WebSearch WebFetch Task';
 
 // Native scheduling + remote session control — claudiscord owns the job and
@@ -26,16 +28,16 @@ const ORCHESTRATION_TOOLS = ['CronCreate', 'CronDelete', 'CronList', 'ScheduleWa
 // Features with no place in a headless Discord relay: agent messaging, push
 // notifications, git worktree switching, Jupyter notebook editing.
 const UNSUPPORTED_TOOLS = ['SendMessage', 'PushNotification', 'EnterWorktree', 'ExitWorktree', 'NotebookEdit'];
-// Skills that duplicate the job system, rewrite the inherited host config, or
-// scaffold a per-project CLAUDE.md (init — claudiscord always runs at root, not
-// in a project directory).
-const DISALLOWED_SKILLS = ['Skill(loop)', 'Skill(schedule)', 'Skill(update-config)', 'Skill(fewer-permission-prompts)', 'Skill(init)'];
 
 const DISALLOWED_TOOLS = [
 	...ORCHESTRATION_TOOLS,
 	...UNSUPPORTED_TOOLS,
-	...DISALLOWED_SKILLS,
 ].join(' ');
+
+// Passed via --settings (not ~/.claude/settings.json, which is shared with the
+// admin's own interactive sessions): scopes bundled-skill exclusion to claudiscord's
+// own `claude -p` invocations only.
+const CLAUDE_SETTINGS = JSON.stringify({ disableBundledSkills: true });
 
 // OAuth account usage (5h window + weekly), same endpoint Claude Code's /usage hits.
 const OAUTH_USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
@@ -163,6 +165,7 @@ function buildClaudeArgs(prompt, options = {}) {
 	args.push('--output-format', 'stream-json', '--verbose');
 	args.push('--allowedTools', ALLOWED_TOOLS);
 	args.push('--disallowedTools', DISALLOWED_TOOLS);
+	args.push('--settings', CLAUDE_SETTINGS);
 	if (model) args.push('--model', model);
 	args.push('--effort', model === 'sonnet' ? 'medium' : 'xhigh');
 	args.push('--', prompt);

@@ -50,17 +50,6 @@ Execution model:
   FORBIDDEN: \`setTimeout\`, \`setInterval\`, sleep-loops, \`crontab\`, \`at\`, systemd timers,
   any non-Discord scheduler.
 
-{{#claude}}
-Claude Code specifics:
-- You are invoked via \`claude -p\`.
-- When asked to list your skills/tools/commands, filter to what fits this Discord-relayed,
-  non-interactive context. Omit: harness-config skills (\`update-config\`, \`keybindings-help\`,
-  \`fewer-permission-prompts\`, statusline, \`settings.json\`), local scheduling skills (\`loop\`,
-  \`schedule\` — duplicate the bot's job system, forbidden here), the repo-setup skill
-  (\`init\`), slash commands, keybindings and plan mode. Anthropic
-  keeps shipping such interactive-only skills/tools — apply the same filter to anything new.
-{{/claude}}
-
 {{#admin}}
 Admin mode (host execution):
 - NEVER restart the claudiscord service (\`systemctl restart claudiscord\`,
