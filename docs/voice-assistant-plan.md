@@ -36,8 +36,9 @@ global FIFO queue.
   - Still drop empty / too-short transcripts and known Whisper silence
     hallucinations ("Sous-titres…", "Merci d'avoir regardé", etc.).
 - **Brain** — `executePrompt('claude', mode, text)`; session keyed by the voice
-  (or linked text) `channelId` so multi-turn memory works like text. The reply
-  text can also be posted to the text channel.
+  channel's own `channelId` (its text-in-voice chat shares the same ID — see
+  "Mode selection") so multi-turn memory works like text. The reply text is
+  also posted to the voice channel's chat.
 - **Voice system prompt** — new voice-specific section in `src/prompts.js`
   (same mechanism as `{{#claude}}`), replacing the Discord text-formatting rules:
   - Replies must be **speakable**: no markdown, no code blocks / lists / tables,
@@ -82,6 +83,27 @@ turn is captured, speak a short "busy, one moment" notice — the voice
 equivalent of the text "⏳ waiting" hint — so the wait is explained instead of
 leaving only the ambient bed playing.
 
+## Mode selection (admin / sandbox)
+
+A voice channel IS a regular channel: its built-in text chat ("text-in-voice")
+shares the voice channel's ID, so the channel gets its own `sessions.json`
+entry (mode/agent/model) like any text channel. No new mechanism:
+
+- **Mode**: type `/admin` or `/sandbox` in the voice channel's own text chat.
+  Mode switching stays **text-only** — never voice-triggered: a switch clears
+  the session, too destructive to fire on a mistranscription. `/status` works
+  there too; the bot announces the mode out loud on join.
+- **Code prerequisite**: the message handler's channel-type allowlist
+  (`src/index.js`, DM/GuildText/PublicThread check) must also accept
+  `ChannelType.GuildVoice`. To confirm at build time: `messageCreate` firing
+  for text-in-voice with `channel.type === GuildVoice` (standard Discord
+  behavior, untested on this bot).
+- **Agent**: voice turns always run Claude with the channel's mode; `/codex`
+  on a voice channel is refused.
+- The `🎙️ <transcript>` echo and the text copy of replies post to that same
+  chat, next to the spoken conversation. Sandbox voice inherits container
+  execution and the cross-channel sandbox-remote lockout.
+
 ## Dependencies (Pi4 / ARM64, host)
 
 - npm: `@discordjs/voice`, `@discordjs/opus` (native; `opusscript` fallback),
@@ -105,13 +127,14 @@ leaving only the ambient bed playing.
 
 1. Duplex: half-duplex v1 (no interruption). Barge-in stays out of scope for now
    (see below), but the mixer approach keeps the rails for it.
-2. Agent scope: host/admin (full powers) — voice would pilot the Pi as root; to
-   confirm.
-3. Whisper hallucination filter thresholds.
+2. Whisper hallucination filter thresholds.
 
 Decided:
 - **No wake word** — claudiscord is single-user (one speaker, alone in the room),
   so every allowed-user utterance goes to Claude directly.
+- **Mode/agent scope** — per-channel like everywhere else: the voice channel's
+  own session entry decides admin vs sandbox (default admin), switched from
+  its text-in-voice chat. Voice turns always run Claude (see "Mode selection").
 
 ## Ideas borrowed from Hermes voice mode
 
