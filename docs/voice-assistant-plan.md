@@ -9,7 +9,7 @@ Answer by voice in a Discord **guild voice channel**: the user speaks, the bot
 replies out loud. Fluidity is explicitly a non-goal — a half-duplex,
 walkie-talkie turn-taking feel is acceptable.
 
-## Approach: STT → `claude -p` → TTS (~$0)
+## Approach: STT → `claude -p` → TTS (near-$0)
 
 A realtime speech-to-speech model (OpenAI Realtime API / "gpt-live") was rejected
 purely on cost (~$0.18–0.46 / min of audio) since full-duplex fluidity is not
@@ -50,9 +50,19 @@ global FIFO queue.
     confirmation question** before acting instead of guessing — especially in
     admin mode (root powers, no visual echo of what was understood before
     execution).
-- **TTS** — **Piper** local binary + a French **medium** voice (ONNX). Offline,
-  $0. On a Pi4 use a low/medium voice for near-real-time; high-quality voices add
-  several seconds. text → WAV.
+- **TTS** — **OpenAI `gpt-4o-mini-tts`** (~$0.015/min of audio), the sole
+  retained solution (reliability + simplicity). Plain REST (`POST
+  https://api.openai.com/v1/audio/speech`, Bearer key) called with Node's
+  native `fetch` — no SDK, zero new npm dependency, own module in the
+  `src/stt.js` mold. French supported; tone steerable via `instructions`.
+  - **Key-gated**: `OPENAI_API_KEY` in `.env`, optional exactly like
+    `GROQ_API_KEY`. Its presence enables voice mode; without it `/voice join`
+    reports a friendly error (same pattern as `/sandbox` without Docker).
+  - Output: `mp3` decoded by ffmpeg for playback (`opus` response format
+    exists but its container is undocumented — probe it at build time).
+  - Rejected: **Piper** (local ONNX — binary + model + Pi4 CPU too heavy for
+    an optional feature); **edge-tts** (free but unofficial Edge
+    impersonation, breakage risk + ~6 npm deps).
 - **Playback** — `createAudioPlayer` + `createAudioResource(wav)` into the
   connection (Opus encode handled by the lib).
 - **Lifecycle** — `/voice join` / `/voice leave` commands; auto-leave after an
@@ -61,7 +71,7 @@ global FIFO queue.
 ## State machine
 
 `LISTENING → (silence) CAPTURED → TRANSCRIBING (Whisper) → [gate] → THINKING
-(claude -p, serialized by the FIFO) → SPEAKING (Piper + playback) → LISTENING`
+(claude -p, serialized by the FIFO) → SPEAKING (TTS + playback) → LISTENING`
 
 v1 is **half-duplex**: ignore new input while THINKING/SPEAKING. The bot never
 hears its own output (Discord separates per-user streams).
@@ -75,15 +85,19 @@ leaving only the ambient bed playing.
 ## Dependencies (Pi4 / ARM64, host)
 
 - npm: `@discordjs/voice`, `@discordjs/opus` (native; `opusscript` fallback),
-  `sodium-native` (or `libsodium-wrappers`) for voice encryption, `prism-media`.
-- system: `ffmpeg`, `piper` binary + a French voice model (`.onnx` + `.json`).
+  `prism-media`. No sodium package: Node's built-in `aes-256-gcm` handles
+  voice encryption (verified available on the host's node v22). TTS adds no
+  dependency (native `fetch`).
+- system: `ffmpeg` — already installed on the host (7.1.x). Used on the STT
+  input path (user Opus 48 kHz → WAV for Whisper) and to decode the TTS mp3
+  for playback.
 
 ## Non-functional
 
-- **Latency**: ~5–12 s/turn (silence wait + Whisper + `claude -p` + Piper),
+- **Latency**: ~4–10 s/turn (silence wait + Whisper + `claude -p` + TTS API),
   longer when Claude runs tools. Acceptable by design.
-- **Cost**: ~$0 incremental (Whisper already used, Piper free, Claude via the
-  existing plan).
+- **Cost**: near-$0 (Whisper already used, TTS ~$0.015/min ≈ $2–3/month at
+  daily use, Claude via the existing plan).
 - **Effort**: working prototype ~2–3 focused days; polish (wake word, auto-leave,
   filtering, barge-in) more.
 
@@ -140,7 +154,9 @@ approach. Worth reusing:
 ## References
 
 - discord.js voice receive: https://discordjs.guide/voice/receiving-audio.html
-- Piper on Raspberry Pi: https://rmauro.dev/how-to-run-piper-tts-on-your-raspberry-pi-offline-voice-zero-internet-needed/
+- OpenAI create-speech endpoint: https://developers.openai.com/api/docs/api-reference/audio/createSpeech
+- edge-tts (rejected — unofficial Edge impersonation, breakage risk): https://github.com/rany2/edge-tts
+- Piper on Raspberry Pi (rejected — local model too heavy): https://rmauro.dev/how-to-run-piper-tts-on-your-raspberry-pi-offline-voice-zero-internet-needed/
 - Groq TTS (EN/AR only, paid — why not used): https://console.groq.com/docs/text-to-speech
 - OpenAI Realtime (rejected on cost): https://developers.openai.com/api/docs/guides/realtime
 - Hermes voice mode guide: https://hermes-agent.nousresearch.com/docs/guides/use-voice-mode-with-hermes
