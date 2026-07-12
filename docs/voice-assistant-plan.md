@@ -38,6 +38,18 @@ global FIFO queue.
 - **Brain** — `executePrompt('claude', mode, text)`; session keyed by the voice
   (or linked text) `channelId` so multi-turn memory works like text. The reply
   text can also be posted to the text channel.
+- **Voice system prompt** — new voice-specific section in `src/prompts.js`
+  (same mechanism as `{{#claude}}`), replacing the Discord text-formatting rules:
+  - Replies must be **speakable**: no markdown, no code blocks / lists / tables,
+    short sentences, concise (Piper synthesizes every word).
+  - The input is a Whisper transcript, not typed text. Local project names
+    (claudiscord, batflix, …) are not in the STT vocabulary and arrive
+    phonetically mangled — treat odd words as candidates for known project
+    names.
+  - When the transcript is garbled or the intent uncertain, **ask a short
+    confirmation question** before acting instead of guessing — especially in
+    admin mode (root powers, no visual echo of what was understood before
+    execution).
 - **TTS** — **Piper** local binary + a French **medium** voice (ONNX). Offline,
   $0. On a Pi4 use a low/medium voice for near-real-time; high-quality voices add
   several seconds. text → WAV.
@@ -53,6 +65,12 @@ global FIFO queue.
 
 v1 is **half-duplex**: ignore new input while THINKING/SPEAKING. The bot never
 hears its own output (Discord separates per-user streams).
+
+Queue contention: THINKING goes through the global FIFO, which a scheduled job
+or a text prompt may hold for minutes (1200 s timeout). If `isBusy()` when the
+turn is captured, speak a short "busy, one moment" notice — the voice
+equivalent of the text "⏳ waiting" hint — so the wait is explained instead of
+leaving only the ambient bed playing.
 
 ## Dependencies (Pi4 / ARM64, host)
 
