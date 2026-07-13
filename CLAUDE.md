@@ -174,7 +174,7 @@ references them by name in a later message.
 - `/codex` selects Codex and resets the channel session. It works in admin and sandbox modes when the corresponding binary is installed.
 - `/opus` and `/sonnet` select Claude and its model. Switching from Codex resets the session; changing only the Claude model does not.
 - Codex uses the model configured by the Codex CLI; claudiscord does not override it.
-- Reasoning effort is hardcoded in the arg builders: Claude `xhigh` (opus) / `medium` (sonnet) in `buildClaudeArgs`, Codex `xhigh` in `buildCodexArgs`.
+- Reasoning effort is hardcoded in the arg builders: Claude `xhigh` (opus) / `medium` (sonnet) in `buildClaudeArgs`, Codex via the `CODEX_REASONING_EFFORT` constant in `codex.js`.
 - Agent and model are persisted in `sessions.json` next to the mode.
 - Scheduled jobs snapshot the channel's agent and Claude model at scheduling time. Missing `agent` fields fall back to `claude` for backward compatibility.
 
@@ -238,7 +238,7 @@ SANDBOX_HOST_HOME/
     skills/               # user skills
   .codex/
     auth.json             # sandbox Codex auth, created by sandbox /login or CLI
-    config.toml           # minimal file config, xhigh reasoning
+    config.toml           # minimal file config (auth store only)
 ```
 
 `ensureStorage()` prepares the sandbox config dirs and minimal Codex config only;
@@ -273,12 +273,12 @@ bash scripts/rebuild-sandbox.sh
 ## Codex CLI usage
 
 - Optional host integration, detected at startup from `CODEX_BIN` (default `codex`); the sandbox image installs `@openai/codex`
-- `codex exec --yolo --skip-git-repo-check --json -c model_reasoning_effort="xhigh" -` for a new conversation
-- `codex exec resume --yolo --skip-git-repo-check --json -c model_reasoning_effort="xhigh" <uuid> -` for subsequent prompts
+- `codex exec --yolo --skip-git-repo-check --json -c model_reasoning_effort="high" -` for a new conversation
+- `codex exec resume` uses the same flags plus `<uuid>` before the trailing `-` for subsequent prompts
 - Prompts are passed through stdin; progress is not relayed to Discord
 - `thread.started.thread_id` supplies the session UUID and the last completed `agent_message` supplies the response
 - The shared Discord prompt is injected through the `developer_instructions` config override
-- Codex model selection and authentication remain owned by the Codex CLI configuration; reasoning effort is forced to `xhigh`
+- Codex model selection and authentication remain owned by the Codex CLI configuration; reasoning effort is forced by claudiscord (`CODEX_REASONING_EFFORT` in `codex.js`)
 - Sandbox execution uses `/home/claude` as cwd and `/home/claude/.codex` as `CODEX_HOME`
 - `/upgrade` (sandbox only) refreshes the container — apt packages, Claude Code, and the Codex package (`npm install -g --prefix /usr/local @openai/codex@latest`)
 - Codex remains unsupported in `/remote`

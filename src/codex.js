@@ -17,6 +17,10 @@ const CODEX_LOGIN_URL_TIMEOUT_MS = 15 * 1000;
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 const URL_RE = /https?:\/\/[^\s<>"')]+/g;
 
+// model_reasoning_effort passed via -c to every Codex exec (host + sandbox);
+// the -c flag overrides any config.toml value, so this is the single source.
+const CODEX_REASONING_EFFORT = 'high';
+
 let CODEX_AVAILABLE = true;
 try {
 	execFileSync(CODEX_BIN, ['--version'], {
@@ -153,7 +157,7 @@ function buildCodexArgs(options = {}) {
 		'--skip-git-repo-check',
 		'--json',
 		'-c',
-		'model_reasoning_effort="xhigh"',
+		`model_reasoning_effort="${CODEX_REASONING_EFFORT}"`,
 	];
 	if (systemPrompt) {
 		executionArgs.push(

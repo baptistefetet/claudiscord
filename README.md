@@ -141,7 +141,7 @@ mode still works.
 - Set the channel's **topic** to whatever you want the agent to keep in mind for this conversation — it's injected into the system prompt alongside the channel name.
 - The first message in a new channel defaults to **admin** mode. Switch with `/sandbox` if you'd rather keep that channel to a containerized workspace.
 - Claude Code is the default agent. `/codex` selects Codex in either mode; `/opus` or `/sonnet` selects Claude again.
-- Codex reasoning effort is forced to `xhigh` for host and sandbox executions.
+- Codex reasoning effort is forced for host and sandbox executions (`CODEX_REASONING_EFFORT` in `src/codex.js`).
 
 ## File uploads
 

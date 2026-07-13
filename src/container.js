@@ -17,7 +17,6 @@ const log = require('./logger');
 
 const DOCKERFILE_DIR = path.resolve(__dirname, '..');
 const SANDBOX_CODEX_CONFIG = `cli_auth_credentials_store = "file"
-model_reasoning_effort = "xhigh"
 `;
 
 // UID/GID of the 'claude' user inside the container. By convention the
