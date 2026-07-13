@@ -64,42 +64,14 @@ scripts/
 
 ## Slash commands
 
-The text dispatcher (`handleCommand`, message content compared to `COMMANDS[].name`)
-is doubled by native Discord Application Commands so the `/` autocomplete shows them.
-The split keeps the command logic free of the `discord.js` SDK: for messaging it uses
-only `channel.send`; the lone helper still pulled from `./discord` is `resolveChannelName`
-(for `/remote`). Discord's interaction plumbing lives in `index.js`.
+The text dispatcher (`handleCommand`, message content compared to `COMMANDS[].name`) is doubled by native Discord Application Commands so the `/` autocomplete shows them. The split keeps the command logic free of the `discord.js` SDK: for messaging it uses only `channel.send`; the lone helper still pulled from `./discord` is `resolveChannelName` (for `/remote`). Discord's interaction plumbing lives in `index.js`.
 
-- **Single source of truth**: `COMMANDS` drives both paths. `commands.js::getRegistered
-  Commands()` exposes neutral `{ name, help }` metadata (excludes `helpOnly` → `!shell`
-  and free-form prompts, which stay text-only). Add a command to the registry → it
-  registers itself.
-- **Neutral core**: `remoteGateHint()` (remote-mode gate) and `runCommand()` (mode-gate +
-  lookup + handler call) are shared by `handleCommand` (text) and `dispatchSlashCommand`
-  (slash), so there is no duplicated gating. `dispatchSlashCommand({ channel, channelId,
-  name })` resolves session state and dispatches; gating rejections post to the channel
-  via `channel.send`, like the text path.
-- **Discord adapter (index.js)**: the `Events.InteractionCreate` listener owns all
-  Discord plumbing — authorization, `isChatInputCommand`, and routing the handler's
-  output into the interaction's **non-ephemeral** response. A channel `Proxy` (real
-  channel for property reads like `resolveChannelName`, `.send` overridden) feeds a
-  `makeInteractionResponder`: first send → `reply`, later sends → `followUp`; a 2s
-  safety net `deferReply`s so the 3s ack window holds (only the slow commands reach
-  it). The channel then shows Discord's persistent "user used /command" marker + the
-  result in one block, with no "thinking" on fast commands. Token lifetime is 15 min,
-  which bounds a command's runtime. Auth/"channel unavailable" rejections stay ephemeral.
-- **Registration**: `index.js::registerSlashCommands()` runs on `ClientReady`, maps the
-  neutral metadata to Discord's Application Command shape (`ApplicationCommandType`,
-  `dmPermission`) and bulk-overwrites (`client.application.commands.set`). Idempotent —
-  safe on every boot. Global scope (guild channels + DMs); first-time propagation ~1h.
-- **Prerequisite**: the bot must have been invited with the `applications.commands` OAuth
-  scope (in addition to `bot`). Re-authorizing an already-present bot only adds the scope —
-  it does not kick it or reset state (sessions are keyed by `channelId`).
-- **Adding a transport**: implement another adapter (own event→`{channel,name}` mapping +
-  native-command registration from `getRegisteredCommands`) and reuse `dispatchSlashCommand`
-  / `handleCommand`. Still pending for a full second transport: per-transport notification
-  routing in `scheduler.js` (today hard-wired to `discord.sendToChannel`) and namespacing
-  the `channelId` keys (sessions/jobs) to avoid cross-transport collisions.
+- **Single source of truth**: `COMMANDS` drives both paths. `commands.js::getRegisteredCommands()` exposes neutral `{ name, help }` metadata (excludes `helpOnly` → `!shell` and free-form prompts, which stay text-only). Add a command to the registry → it registers itself.
+- **Neutral core**: `remoteGateHint()` (remote-mode gate) and `runCommand()` (mode-gate + lookup + handler call) are shared by `handleCommand` (text) and `dispatchSlashCommand` (slash), so there is no duplicated gating. `dispatchSlashCommand({ channel, channelId, name })` resolves session state and dispatches; gating rejections post to the channel via `channel.send`, like the text path.
+- **Discord adapter (index.js)**: the `Events.InteractionCreate` listener owns all Discord plumbing — authorization, `isChatInputCommand`, and routing the handler's output into the interaction's **non-ephemeral** response. A channel `Proxy` (real channel for property reads like `resolveChannelName`, `.send` overridden) feeds a `makeInteractionResponder`: first send → `reply`, later sends → `followUp`; a 2s safety net `deferReply`s so the 3s ack window holds (only the slow commands reach it). The channel then shows Discord's persistent "user used /command" marker + the result in one block, with no "thinking" on fast commands. Token lifetime is 15 min, which bounds a command's runtime. Auth/"channel unavailable" rejections stay ephemeral.
+- **Registration**: `index.js::registerSlashCommands()` runs on `ClientReady`, maps the neutral metadata to Discord's Application Command shape (`ApplicationCommandType`, `dmPermission`) and bulk-overwrites (`client.application.commands.set`). Idempotent — safe on every boot. Global scope (guild channels + DMs); first-time propagation ~1h.
+- **Prerequisite**: the bot must have been invited with the `applications.commands` OAuth scope (in addition to `bot`). Re-authorizing an already-present bot only adds the scope — it does not kick it or reset state (sessions are keyed by `channelId`).
+- **Adding a transport**: implement another adapter (own event→`{channel,name}` mapping + native-command registration from `getRegisteredCommands`) and reuse `dispatchSlashCommand` / `handleCommand`. Still pending for a full second transport: per-transport notification routing in `scheduler.js` (today hard-wired to `discord.sendToChannel`) and namespacing the `channelId` keys (sessions/jobs) to avoid cross-transport collisions.
 
 ## Service
 
@@ -110,49 +82,27 @@ only `channel.send`; the lone helper still pulled from `./discord` is `resolveCh
 
 ## Voice messages (speech-to-text)
 
-Discord voice messages (the mic button — flag `MessageFlags.IsVoiceMessage`)
-are transcribed via Groq Whisper before being passed to the active agent. Plain audio
-attachments (`.mp3` etc.) are ignored on purpose — only the dedicated voice
-message UI triggers transcription.
+Discord voice messages (the mic button — flag `MessageFlags.IsVoiceMessage`) are transcribed via Groq Whisper before being passed to the active agent. Plain audio attachments (`.mp3` etc.) are ignored on purpose — only the dedicated voice message UI triggers transcription.
 
 - Module: `src/stt.js` (single `transcribeVoiceMessage` function, no SDK).
 - Endpoint: `POST https://api.groq.com/openai/v1/audio/transcriptions`.
-- Defaults: model `whisper-large-v3`, language `fr`. Override via `STT_MODEL`
-  / `STT_LANGUAGE` in `.env`.
+- Defaults: model `whisper-large-v3`, language `fr`. Override via `STT_MODEL` / `STT_LANGUAGE` in `.env`.
 - If `GROQ_API_KEY` is missing, voice messages are silently dropped (warn log).
-- Text wins if both text and voice are present in the same message — Groq is
-  not called.
-- The transcription is echoed back to the channel as `🎙️ <text>` before
-  the agent executes, so the user sees what Whisper understood.
+- Text wins if both text and voice are present in the same message — Groq is not called.
+- The transcription is echoed back to the channel as `🎙️ <text>` before the agent executes, so the user sees what Whisper understood.
 - API errors are surfaced to the channel and logged; the bot stays up.
 
 ## File uploads
 
-The user can drop files/photos into a channel (with no text). An upload does NOT
-spawn an agent: the bot saves the attachments and echoes their names. The user then
-references them by name in a later message.
+The user can drop files/photos into a channel (with no text). An upload does NOT spawn an agent: the bot saves the attachments and echoes their names. The user then references them by name in a later message.
 
-- Module: `src/uploads.js` (single `saveUploads(attachments, mode)` function; download
-  pattern borrowed from `src/stt.js`).
+- Module: `src/uploads.js` (single `saveUploads(attachments, mode)` function; download pattern borrowed from `src/stt.js`).
 - Target dir, per channel mode, sibling of `jobs.json`:
   - admin → `ADMIN_USER_HOME/.claudiscord/files/`
-  - sandbox → `SANDBOX_HOST_HOME/.claudiscord/files/`, bind-mounted as
-    `/home/claude/.claudiscord/files/`. Files are `chown`'d to the container's
-    `claude` user (`container.js::writeSandboxUpload`) so the non-root process can read
-    them.
-- Naming: original Discord `attachment.name` (basename), de-duplicated within a single
-  batch (`image.png`, `image-2.png`). Across messages the same name is overwritten — no
-  automatic cleanup.
-- Text + attachments: the files are saved and echoed first (same as an upload-only
-  message), then the text is processed as a normal prompt so the agent can reference
-  them. With no text, the upload does not spawn the agent. Voice messages are excluded
-  (their lone attachment is the audio, handled by STT). The detection in `src/index.js`
-  runs before `handleCommand`, so uploads also work in `/remote` mode (files are saved,
-  the text still gets the remote-mode rejection without spawning `claude -p`).
-- The system prompt (`src/prompts.js`, "Uploaded files" section, `{{filesPath}}`) tells
-  the agent the files dir and that a mentioned name *may* be an upload (re-read from disk
-  each time, content can change) but could just as well be any other file in the
-  environment.
+  - sandbox → `SANDBOX_HOST_HOME/.claudiscord/files/`, bind-mounted as `/home/claude/.claudiscord/files/`. Files are `chown`'d to the container's `claude` user (`container.js::writeSandboxUpload`) so the non-root process can read them.
+- Naming: original Discord `attachment.name` (basename), de-duplicated within a single batch (`image.png`, `image-2.png`). Across messages the same name is overwritten — no automatic cleanup.
+- Text + attachments: the files are saved and echoed first (same as an upload-only message), then the text is processed as a normal prompt so the agent can reference them. With no text, the upload does not spawn the agent. Voice messages are excluded (their lone attachment is the audio, handled by STT). The detection in `src/index.js` runs before `handleCommand`, so uploads also work in `/remote` mode (files are saved, the text still gets the remote-mode rejection without spawning `claude -p`).
+- The system prompt (`src/prompts.js`, "Uploaded files" section, `{{filesPath}}`) tells the agent the files dir and that a mentioned name *may* be an upload (re-read from disk each time, content can change) but could just as well be any other file in the environment.
 
 ## Authorization
 
@@ -199,19 +149,11 @@ All executions — interactive prompts and scheduled jobs, Claude and Codex — 
 
 ### Host user/group alignment
 
-`scripts/rebuild-sandbox.sh` reads the UID/GID of `SANDBOX_HOME` and
-passes them as `--build-arg SANDBOX_UID=… SANDBOX_GID=…` so the in-container
-`claude` user matches host ownership. If the directory doesn't exist yet,
-the script creates it owned by `1001:1001` and uses those defaults.
+`scripts/rebuild-sandbox.sh` reads the UID/GID of `SANDBOX_HOME` and passes them as `--build-arg SANDBOX_UID=… SANDBOX_GID=…` so the in-container `claude` user matches host ownership. If the directory doesn't exist yet, the script creates it owned by `1001:1001` and uses those defaults.
 
-Runtime echoes this: `src/container.js` reads `SANDBOX_HOME`'s ownership
-via `fs.statSync` at startup (`readSandboxIds`) and uses those IDs for
-every chown when creating files. Single source of truth: the directory's
-ownership.
+Runtime echoes this: `src/container.js` reads `SANDBOX_HOME`'s ownership via `fs.statSync` at startup (`readSandboxIds`) and uses those IDs for every chown when creating files. Single source of truth: the directory's ownership.
 
-Implication: if you move `SANDBOX_HOME` to a path with different
-ownership, rerun `rebuild-sandbox.sh` so the image is rebuilt with matching
-IDs.
+Implication: if you move `SANDBOX_HOME` to a path with different ownership, rerun `rebuild-sandbox.sh` so the image is rebuilt with matching IDs.
 
 ### State storage layout
 
@@ -241,18 +183,11 @@ SANDBOX_HOST_HOME/
     config.toml           # minimal file config (auth store only)
 ```
 
-`ensureStorage()` prepares the sandbox config dirs and minimal Codex config only;
-it does not read, copy, compare, or delete agent credentials. Host and sandbox
-auth are independent: `/login` uses the current channel mode and agent, so
-`/sandbox` + `/codex` + `/login` authenticates sandbox Codex without touching
-host Codex. Claude login relays the OAuth URL and returned code through Discord;
-Codex login uses `codex login --device-auth` and waits for browser completion.
+`ensureStorage()` prepares the sandbox config dirs and minimal Codex config only; it does not read, copy, compare, or delete agent credentials. Host and sandbox auth are independent: `/login` uses the current channel mode and agent, so `/sandbox` + `/codex` + `/login` authenticates sandbox Codex without touching host Codex. Claude login relays the OAuth URL and returned code through Discord; Codex login uses `codex login --device-auth` and waits for browser completion.
 
 ### Background tasks
 
-`spawnWithTimeout` (`src/spawn.js`) waits for the active CLI to exit naturally.
-After 20 minutes, the process is killed and the user receives a timeout error;
-partial output is not recovered. The channel session remains resumable.
+`spawnWithTimeout` (`src/spawn.js`) waits for the active CLI to exit naturally. After 20 minutes, the process is killed and the user receives a timeout error; partial output is not recovered. The channel session remains resumable.
 
 ### Image rebuild
 

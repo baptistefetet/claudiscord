@@ -19,9 +19,7 @@ Works in both DMs and private guild channels. Each channel is an independent con
 - **File uploads** — drop files/photos into a channel and the bot saves them to `.claudiscord/files/`; add text in the same message to have the active agent act on them right away, or send them alone and reference them by name later
 - **Scheduler** — cron-based jobs via `node-cron`, notifications delivered to the channel where the job was created
 
-> **Linux only.** Claudiscord ships a systemd unit, expects GNU coreutils,
-> and the sandbox aligns UIDs/GIDs the Linux way. macOS and Windows are
-> not supported.
+> **Linux only.** Claudiscord ships a systemd unit, expects GNU coreutils, and the sandbox aligns UIDs/GIDs the Linux way. macOS and Windows are not supported.
 
 ## Prerequisites
 
@@ -52,31 +50,18 @@ cp .env.example .env
 bash scripts/rebuild-sandbox.sh
 ```
 
-`rebuild-sandbox.sh` creates `SANDBOX_HOME` if needed and builds the
-image with the in-container `claude` user UID/GID matching the directory's
-owner, so bind-mounted files are read/write-able on both sides without
-manual chown setup. After a successful rebuild, it removes dangling images
-and the unused Docker build cache.
+`rebuild-sandbox.sh` creates `SANDBOX_HOME` if needed and builds the image with the in-container `claude` user UID/GID matching the directory's owner, so bind-mounted files are read/write-able on both sides without manual chown setup. After a successful rebuild, it removes dangling images and the unused Docker build cache.
 
 ## Systemd service
 
-Save the unit below as `/etc/systemd/system/claudiscord.service`, replacing
-`/path/to/claudiscord` with your clone directory. Drop the
-`Requires=docker.service` line if you don't plan to use sandbox mode.
+Save the unit below as `/etc/systemd/system/claudiscord.service`, replacing `/path/to/claudiscord` with your clone directory. Drop the `Requires=docker.service` line if you don't plan to use sandbox mode.
 
 Run the service as the account that should own host-side administration:
 
-- `User=root` gives the bot direct root access, which is the simplest setup for
-  a private machine administration bot.
-- A regular user also works. Install and authenticate Claude Code/Codex for
-  that user, set `User=<that-user>`, and use that user's clone directory.
-  Runtime state is stored in that user's `~/.claudiscord/`.
-- If a regular user is expected to administer the machine, grant it
-  non-interactive sudo permissions. Password-based sudo is not suitable here:
-  Claudiscord runs agents without an interactive terminal, and commands that
-  wait for a password will fail or time out.
-- Docker sandbox mode requires Docker access. Membership in the `docker` group
-  effectively grants root-equivalent privileges on the host.
+- `User=root` gives the bot direct root access, which is the simplest setup for a private machine administration bot.
+- A regular user also works. Install and authenticate Claude Code/Codex for that user, set `User=<that-user>`, and use that user's clone directory. Runtime state is stored in that user's `~/.claudiscord/`.
+- If a regular user is expected to administer the machine, grant it non-interactive sudo permissions. Password-based sudo is not suitable here: Claudiscord runs agents without an interactive terminal, and commands that wait for a password will fail or time out.
+- Docker sandbox mode requires Docker access. Membership in the `docker` group effectively grants root-equivalent privileges on the host.
 
 ```ini
 [Unit]
@@ -105,15 +90,13 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now claudiscord
 ```
 
-For a non-root service user, `/restart` runs `sudo -n systemctl restart
-claudiscord`, so the sudoers rule must not require a password. For example:
+For a non-root service user, `/restart` runs `sudo -n systemctl restart claudiscord`, so the sudoers rule must not require a password. For example:
 
 ```sudoers
 claudiscord ALL=(ALL) NOPASSWD: ALL
 ```
 
-Use a narrower sudoers rule if you want the bot to administer only specific
-commands.
+Use a narrower sudoers rule if you want the bot to administer only specific commands.
 
 ## Verify the install
 
@@ -130,10 +113,7 @@ You should see something like:
 [claudiscord] Scheduler reloaded: 0 active job(s)
 ```
 
-If sandbox mode is configured you'll also see `Docker image
-'claudiscord-sandbox' found`. If `SANDBOX_HOME` is empty or Docker
-isn't installed, expect a `sandbox mode disabled` warning instead — admin
-mode still works.
+If sandbox mode is configured you'll also see `Docker image 'claudiscord-sandbox' found`. If `SANDBOX_HOME` is empty or Docker isn't installed, expect a `sandbox mode disabled` warning instead — admin mode still works.
 
 ## Using channels
 
@@ -145,21 +125,15 @@ mode still works.
 
 ## File uploads
 
-Drag a file or photo into a channel and the bot always saves it to disk and replies with
-the saved file name(s). What happens next depends on whether the message also carries text:
+Drag a file or photo into a channel and the bot always saves it to disk and replies with the saved file name(s). What happens next depends on whether the message also carries text:
 
-- **Files only (no text)** — the bot just persists them and stops; the agent is not invoked.
-  Reference the names in a later message and the active agent reads them from disk.
-- **Files + text** — the files are saved first (same echo), then the text is processed as a
-  normal prompt, so the agent can act on the freshly uploaded files in the same turn.
+- **Files only (no text)** — the bot just persists them and stops; the agent is not invoked. Reference the names in a later message and the active agent reads them from disk.
+- **Files + text** — the files are saved first (same echo), then the text is processed as a normal prompt, so the agent can act on the freshly uploaded files in the same turn.
 
 Details:
 
-- Files land in `<home>/.claudiscord/files/`: `~/.claudiscord/files/` in admin mode,
-  `SANDBOX_HOME/.claudiscord/files/` (visible in the container at
-  `/home/claude/.claudiscord/files/`) in sandbox mode.
-- Names are the original Discord file names, de-duplicated within a single message. A later
-  upload with the same name overwrites the previous one — there is no automatic cleanup.
+- Files land in `<home>/.claudiscord/files/`: `~/.claudiscord/files/` in admin mode, `SANDBOX_HOME/.claudiscord/files/` (visible in the container at `/home/claude/.claudiscord/files/`) in sandbox mode.
+- Names are the original Discord file names, de-duplicated within a single message. A later upload with the same name overwrites the previous one — there is no automatic cleanup.
 
 ## Discord commands
 
@@ -182,16 +156,11 @@ Details:
 
 ## Authentication
 
-Each environment authenticates independently: admin (host) and sandbox have their
-own credentials. Whichever environment runs an agent must be logged in there.
+Each environment authenticates independently: admin (host) and sandbox have their own credentials. Whichever environment runs an agent must be logged in there.
 
-From Discord, select the target environment and agent first (`/admin` or
-`/sandbox`, then `/sonnet`/`/opus` or `/codex`), then run `/login`. Claude sends
-an OAuth link and accepts the returned code in the same channel. Codex sends a
-device-auth browser link and waits for the CLI to complete.
+From Discord, select the target environment and agent first (`/admin` or `/sandbox`, then `/sonnet`/`/opus` or `/codex`), then run `/login`. Claude sends an OAuth link and accepts the returned code in the same channel. Codex sends a device-auth browser link and waits for the CLI to complete.
 
-If an environment is not authenticated, the corresponding agent reports an
-authentication error until `/login` is completed for that same mode and agent.
+If an environment is not authenticated, the corresponding agent reports an authentication error until `/login` is completed for that same mode and agent.
 
 ## Configuration
 
