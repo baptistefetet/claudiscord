@@ -94,3 +94,15 @@ lossy cancel:
   interacts with the sandbox-remote lockout.
 
 Out of scope for v1.
+
+## References
+
+- OpenClaw — Discord channel (three voice modes, barge-in, wake word,
+  follow-users): <https://docs.openclaw.ai/fr/channels/discord/>
+- Hermes — Voice Mode (VAD, streaming TTS, hallucination filter, STT/TTS
+  providers):
+  <https://github.com/nousresearch/hermes-agent/blob/main/website/docs/user-guide/features/voice-mode.md>
+- Hermes — Discord messaging (voice-channel join, STT providers):
+  <https://github.com/nousresearch/hermes-agent/blob/main/website/docs/user-guide/messaging/discord.md>
+- Hermes — `voice_mixer.py` (source of `src/mixer.js`, ambient bed / duck gains):
+  <https://github.com/NousResearch/hermes-agent/blob/main/plugins/platforms/discord/voice_mixer.py>
