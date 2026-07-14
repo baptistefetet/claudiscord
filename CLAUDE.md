@@ -97,7 +97,7 @@ Discord voice messages (the mic button — flag `MessageFlags.IsVoiceMessage`) a
 
 ## Voice assistant (voice channels)
 
-`/voice` typed in a guild voice channel's text-in-voice chat toggles the assistant for THAT voice channel (one active session per process). Requires `OPENAI_API_KEY` (TTS) + `GROQ_API_KEY` (STT) — friendly error otherwise, same pattern as `/sandbox` without Docker. Design rationale: `docs/voice-assistant-plan.md`.
+`/voice` typed in a guild voice channel's text-in-voice chat toggles the assistant for THAT voice channel (one active session per process). Requires `OPENAI_API_KEY` (TTS) + `GROQ_API_KEY` (STT) — friendly error otherwise, same pattern as `/sandbox` without Docker.
 
 - **Pipeline** (`src/voice.js`): `receiver.subscribe(AfterSilence 900ms)` → prism opus decode → ffmpeg → 16 kHz mono WAV → Groq Whisper (`stt.js::transcribeAudio`) → gate (min 300 ms, French Whisper hallucination patterns) → `executePrompt('claude', mode, text)` → OpenAI TTS (`tts.js`) → ffmpeg mp3→PCM → mixer playback. The session is keyed by the voice channel's own `channelId` (text-in-voice shares it), so voice and chat share one Claude conversation and `/admin`, `/sandbox`, `/status` typed in the chat apply.
 - **Half-duplex**: speaking-start events are ignored unless the state is `listening`. The bot never hears itself (per-user streams). The transcript (`🎙️ …`) and the reply are also posted to the chat.
