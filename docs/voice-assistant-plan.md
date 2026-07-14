@@ -1,7 +1,10 @@
-# Voice Assistant — Design Plan (deferred)
+# Voice Assistant — Design Plan
 
-**Status: PLANNED, not implemented.** Talk to BatBot in a Discord voice channel,
-reusing the existing `claude -p` request/response mold. To be built later.
+**Status: IMPLEMENTED (v1, 2026-07).** See `CLAUDE.md` § "Voice assistant" for the
+as-built summary; this document is kept as design rationale. Talk to BatBot in a
+Discord voice channel, reusing the existing `claude -p` request/response mold.
+Not implemented from the ideas below: verbal tool-call acknowledgement (needs a
+claude.js event hook), SSRC→user inference on rejoin.
 
 ## Goal
 

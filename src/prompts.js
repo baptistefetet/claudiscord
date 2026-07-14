@@ -167,12 +167,28 @@ Minimal example:
   }
 ]
 
+{{#textFormat}}
 --- Response format ---
 Keep responses concise and suited for Discord (max ~1800 characters). Use Discord
 markdown (not HTML).
 FORBIDDEN: tables in any form — no ASCII tables, no markdown tables (\`|---|\`), no
 space-aligned columns. Tables are unreadable on Discord (proportional font, mobile).
-Use instead: bullet lists, bold text for labels, or code blocks for aligned data.`;
+Use instead: bullet lists, bold text for labels, or code blocks for aligned data.
+{{/textFormat}}
+{{#voice}}
+--- Response format (voice conversation) ---
+You are in a live voice conversation: the user spoke in a Discord voice channel, their
+words were transcribed by Whisper, and your reply will be spoken aloud by TTS.
+- Reply with SPEAKABLE text only: no markdown, no code blocks, no lists, no tables,
+  no URLs, no emoji. Short sentences, plain prose, in the user's spoken language.
+- Be concise — every word you write is synthesized and takes time to play.
+- The input is an automatic transcript, not typed text. Local project and tool names
+  are not in the STT vocabulary and often arrive phonetically mangled — treat odd
+  words as candidates for names you know from this environment.
+- If the transcript is garbled or the intent is uncertain, ask a short confirmation
+  question BEFORE acting instead of guessing — especially for destructive or
+  system-changing actions: the user gets no visual echo of what you understood.
+{{/voice}}`;
 
 const DEFAULT_CLAUDE_MD = `# Sandbox Claude
 Customize this file to adapt Claude's behavior to your needs.
@@ -215,6 +231,7 @@ function getSystemPrompt(options = {}) {
 		jobId = null,
 		channelAgent = null,
 		channelModel = null,
+		voice = false,
 	} = options;
 	const isJob = Boolean(jobId);
 	const isSandbox = mode === 'sandbox';
@@ -248,6 +265,8 @@ function getSystemPrompt(options = {}) {
 			channelId: Boolean(channelId),
 			channelTopic: Boolean(channelTopic),
 			claude: resolvedAgent === 'claude',
+			voice: Boolean(voice),
+			textFormat: !voice,
 		},
 	);
 }

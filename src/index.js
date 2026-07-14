@@ -12,6 +12,7 @@ const { createClient, login, sendChunked, startTypingIndicator, resolveChannelNa
 const { handleCommand, dispatchSlashCommand, getRegisteredCommands } = require('./commands');
 const { reconcileRemotes } = require('./remote');
 const { transcribeVoiceMessage } = require('./stt');
+const { leaveVoice } = require('./voice');
 const { saveUploads } = require('./uploads');
 const scheduler = require('./scheduler');
 const { Events, ChannelType, MessageFlags, ApplicationCommandType } = require('discord.js');
@@ -46,7 +47,10 @@ client.on(Events.MessageCreate, async message => {
 	const isDM = channel.type === ChannelType.DM;
 	const isGuildText = channel.type === ChannelType.GuildText;
 	const isPublicThread = channel.type === ChannelType.PublicThread;
-	if (!isDM && !isGuildText && !isPublicThread) return;
+	// A voice channel's built-in text chat shares the voice channel's ID, so it
+	// behaves like any text channel (own session; /admin, /sandbox, /voice…).
+	const isGuildVoice = channel.type === ChannelType.GuildVoice;
+	if (!isDM && !isGuildText && !isPublicThread && !isGuildVoice) return;
 
 	const content = message.content.trim();
 	const isVoice = message.flags?.has(MessageFlags.IsVoiceMessage) || false;
@@ -419,6 +423,7 @@ async function purgeInvalidChannels() {
 function shutdown(signal) {
 	log.info(`Received ${signal}, shutting down...`);
 	scheduler.stop();
+	try { leaveVoice(); } catch (_) {}
 	client.destroy();
 	process.exit(0);
 }

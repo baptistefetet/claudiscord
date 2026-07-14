@@ -19,6 +19,8 @@ function createClient() {
 			GatewayIntentBits.GuildMessages,
 			GatewayIntentBits.DirectMessages,
 			GatewayIntentBits.MessageContent,
+			// Voice assistant: join/leave voice channels and receive audio.
+			GatewayIntentBits.GuildVoiceStates,
 		],
 	});
 

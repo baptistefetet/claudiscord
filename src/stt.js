@@ -2,17 +2,15 @@ const log = require('./logger');
 
 const GROQ_TRANSCRIPTIONS_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
 
-async function transcribeVoiceMessage(attachment, { apiKey, model, language }) {
+/**
+ * Transcribe an in-memory audio buffer via Groq Whisper. Shared core for
+ * Discord voice messages (downloaded attachment) and voice-channel turns
+ * (PCM captured live, converted to WAV by src/voice.js).
+ */
+async function transcribeAudio(buf, { apiKey, model, language, filename = 'audio.wav', contentType = 'audio/wav' }) {
 	if (!apiKey) throw new Error('GROQ_API_KEY missing');
 
-	const audioRes = await fetch(attachment.url);
-	if (!audioRes.ok) {
-		throw new Error(`Failed to download audio (${audioRes.status})`);
-	}
-	const buf = await audioRes.arrayBuffer();
-
-	const filename = attachment.name || 'voice-message.ogg';
-	const blob = new Blob([buf], { type: attachment.contentType || 'audio/ogg' });
+	const blob = new Blob([buf], { type: contentType });
 
 	const form = new FormData();
 	form.append('file', blob, filename);
@@ -37,4 +35,19 @@ async function transcribeVoiceMessage(attachment, { apiKey, model, language }) {
 	return text;
 }
 
-module.exports = { transcribeVoiceMessage };
+async function transcribeVoiceMessage(attachment, { apiKey, model, language }) {
+	const audioRes = await fetch(attachment.url);
+	if (!audioRes.ok) {
+		throw new Error(`Failed to download audio (${audioRes.status})`);
+	}
+	const buf = await audioRes.arrayBuffer();
+	return transcribeAudio(buf, {
+		apiKey,
+		model,
+		language,
+		filename: attachment.name || 'voice-message.ogg',
+		contentType: attachment.contentType || 'audio/ogg',
+	});
+}
+
+module.exports = { transcribeAudio, transcribeVoiceMessage };

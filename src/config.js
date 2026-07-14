@@ -29,6 +29,12 @@ const GROQ_API_KEY = process.env.GROQ_API_KEY || null;
 const STT_MODEL = process.env.STT_MODEL || 'whisper-large-v3';
 const STT_LANGUAGE = process.env.STT_LANGUAGE || 'fr';
 
+// Optional: enables the voice assistant (/voice) — OpenAI TTS for spoken
+// replies. Voice mode also needs GROQ_API_KEY for transcription.
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || null;
+const TTS_MODEL = process.env.TTS_MODEL || 'gpt-4o-mini-tts';
+const TTS_VOICE = process.env.TTS_VOICE || 'nova';
+
 // --- Paths ---
 const ADMIN_USER_HOME = os.homedir();
 const SANDBOX_USER_HOME = '/home/claude';
@@ -57,6 +63,11 @@ const UPGRADE_TIMEOUT_MS = 300_000;
 const DISCORD_MAX_MSG_LENGTH = 2000;
 const TYPING_INTERVAL_MS = 8000;
 
+// Voice assistant tuning: silence that ends an utterance, and inactivity
+// before the bot leaves the voice channel on its own.
+const VOICE_SILENCE_MS = 900;
+const VOICE_IDLE_TIMEOUT_MS = 900_000; // 15 min
+
 const VALID_MODELS = ['opus', 'sonnet'];
 const CHANNEL_DEFAULT_MODEL = 'sonnet';
 const VALID_AGENTS = ['claude', 'codex'];
@@ -71,6 +82,11 @@ module.exports = {
 	GROQ_API_KEY,
 	STT_MODEL,
 	STT_LANGUAGE,
+	OPENAI_API_KEY,
+	TTS_MODEL,
+	TTS_VOICE,
+	VOICE_SILENCE_MS,
+	VOICE_IDLE_TIMEOUT_MS,
 	ADMIN_USER_HOME,
 	SANDBOX_USER_HOME,
 	CONTAINER_NAME,

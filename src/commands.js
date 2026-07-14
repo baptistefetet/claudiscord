@@ -18,7 +18,14 @@ const { CODEX_AVAILABLE, getCodexUsage, startCodexLogin } = require('./codex');
 const { getClaudeUsage, startClaudeLogin } = require('./claude');
 const { runQueued, isBusy } = require('./queue');
 const { startRemote, stopRemote } = require('./remote');
-const { resolveChannelName, sendChunked } = require('./discord');
+const {
+	isVoiceModeAvailable,
+	isSupportedVoiceChannel,
+	getActiveVoiceChannelId,
+	joinVoice,
+	leaveVoice,
+} = require('./voice');
+const { getClient, resolveChannelName, sendChunked } = require('./discord');
 const { loadAllJobs } = require('./jobs-store');
 const scheduler = require('./scheduler');
 const log = require('./logger');
@@ -575,12 +582,53 @@ async function handleSandbox({ channel, channelId, mode }) {
 	return true;
 }
 
-async function handleStatus({ channel, mode, agent, model, remoteId }) {
+async function handleStatus({ channel, channelId, mode, agent, model, remoteId }) {
 	const dockerNote = DOCKER_AVAILABLE ? '' : '\nSandbox unavailable on this host.';
 	const remoteLine = remoteId ? `\nRemote: \`${remoteId}\`` : '';
 	const modelLine = agent === 'claude' ? `\nModel: **${model}**` : '';
 	const codexLine = isCodexAvailable(mode) ? '' : `\nCodex unavailable in **${mode}** mode.`;
-	await channel.send(`Channel mode: **${mode}**\nAgent: **${agent}**${modelLine}${remoteLine}${dockerNote}${codexLine}`);
+	const voiceLine = getActiveVoiceChannelId() === channelId ? '\nVoice assistant: **active**' : '';
+	await channel.send(`Channel mode: **${mode}**\nAgent: **${agent}**${modelLine}${voiceLine}${remoteLine}${dockerNote}${codexLine}`);
+	return true;
+}
+
+/**
+ * /voice — toggle the voice assistant in a guild voice channel (typed in its
+ * text-in-voice chat). Requires OPENAI_API_KEY (TTS) and GROQ_API_KEY (STT).
+ */
+async function handleVoice({ channel, channelId, agent }) {
+	if (!isVoiceModeAvailable()) {
+		await channel.send('Voice mode requires `OPENAI_API_KEY` and `GROQ_API_KEY` in `.env`.');
+		return true;
+	}
+	if (!isSupportedVoiceChannel(channel)) {
+		await channel.send('`/voice` only works in a voice channel’s text chat — it joins/leaves that voice channel.');
+		return true;
+	}
+	const activeId = getActiveVoiceChannelId();
+	if (activeId === channelId) {
+		leaveVoice();
+		await channel.send('🔇 Voice assistant left.');
+		return true;
+	}
+	if (activeId) {
+		await channel.send(`Voice assistant is already active in <#${activeId}>. Send \`/voice\` there to stop it first.`);
+		return true;
+	}
+	if (agent !== 'claude') {
+		await channel.send('Voice turns always run **claude** — send `/opus` or `/sonnet` first.');
+		return true;
+	}
+	try {
+		// The slash path hands us an interaction-scoped channel proxy; give
+		// voice.js the real channel so the session never outlives the token.
+		const realChannel = getClient().channels.cache.get(channelId) || channel;
+		await joinVoice(realChannel);
+		await channel.send(`🎙️ Voice assistant joined **${resolveChannelName(channel)}** (mode **${sessions.getMode(channelId)}**). Speak, then pause — I answer out loud. Send \`/voice\` again to stop.`);
+	} catch (err) {
+		log.error('voice join error:', err.message);
+		await channel.send(`Voice join failed: ${err.message?.slice(0, 300) || 'unknown'}`);
+	}
 	return true;
 }
 
@@ -602,6 +650,12 @@ async function handleModel({ channel, channelId, content, agent, model }) {
 }
 
 async function handleCodex({ channel, channelId, mode, agent }) {
+	// Voice channels are Claude-only: voice turns always run Claude, and a codex
+	// agent on the channel would break a later /voice.
+	if (isSupportedVoiceChannel(channel)) {
+		await channel.send('`/codex` is not available in voice channels — voice turns always run Claude.');
+		return true;
+	}
 	if (!isCodexAvailable(mode)) {
 		await channel.send(`Codex is not installed or not available in **${mode}** mode.`);
 		return true;
@@ -652,6 +706,7 @@ const COMMANDS = [
 	{ name: '/sonnet', help: 'Use Claude Sonnet for this channel', handler: handleModel },
 	{ name: '/codex', help: 'Use Codex for this channel', handler: handleCodex },
 	{ name: '/remote', help: 'Toggle this channel between Discord mode and remote mode (Claude mobile app)', remoteAllowed: true, handler: handleRemote },
+	{ name: '/voice', help: 'Toggle the voice assistant in this voice channel (join/leave)', handler: handleVoice },
 	{ name: '!<command>', help: 'Execute a shell command (host if admin, container if sandbox)', helpOnly: true },
 	{ name: '/upgrade', help: 'Update sandbox container (apt + Claude Code + Codex)', modes: ['sandbox'], modeError: '`/upgrade` is only available in sandbox mode.', handler: handleUpgrade },
 	{ name: '/restart', help: 'Restart the claudiscord service', modes: ['admin'], modeError: '`/restart` is only available in admin mode.', handler: handleRestart },

@@ -16,6 +16,7 @@ Works in both DMs and private guild channels. Each channel is an independent con
 - **Single-user authorization** — only the Discord user whose ID is in `AUTHORIZED_USER_ID` can talk to the bot; everyone else is silently dropped
 - **Optional Docker** — sandbox mode is disabled gracefully if Docker isn't installed; admin mode still works
 - **Voice messages** — Discord voice messages (mic button) are transcribed via Groq Whisper before being passed to the active agent
+- **Voice assistant** — talk to the bot in a guild voice channel (`/voice`): utterances are transcribed (Groq Whisper), answered by Claude, and spoken back (OpenAI TTS), with an ambient "thinking" pad masking the latency
 - **File uploads** — drop files/photos into a channel and the bot saves them to `.claudiscord/files/`; add text in the same message to have the active agent act on them right away, or send them alone and reference them by name later
 - **Scheduler** — cron-based jobs via `node-cron`, notifications delivered to the channel where the job was created
 
@@ -28,7 +29,7 @@ Works in both DMs and private guild channels. Each channel is an independent con
 - A Discord bot token ([Discord Developer Portal](https://discord.com/developers/applications))
 - On the portal **Bot** page: enable the **Message Content Intent**
 - When generating the bot's invite link (portal **OAuth2 → URL Generator**, or the **Installation** page), select **both** the `bot` and `applications.commands` scopes — without `applications.commands` the native slash commands cannot be registered
-- In that same invite step, grant the bot the **View Channels**, **Send Messages** and **Read Message History** permissions so it can read and reply in the channels you add it to (DMs need no extra permission). The `Guilds` / `Guild Messages` / `Direct Messages` gateway intents are non-privileged and already enabled in code — nothing to toggle on the portal for them
+- In that same invite step, grant the bot the **View Channels**, **Send Messages** and **Read Message History** permissions so it can read and reply in the channels you add it to (DMs need no extra permission). For the voice assistant, also grant **Connect** and **Speak** (or add them later on the bot's role / the voice channel). The `Guilds` / `Guild Messages` / `Direct Messages` / `Guild Voice States` gateway intents are non-privileged and already enabled in code — nothing to toggle on the portal for them
 - Claude Code CLI installed on the host (`curl -fsSL https://claude.ai/install.sh | bash`) — claudiscord defaults to `~/.local/bin/claude` (the install script's default location); set `CLAUDE_BIN` in `.env` only if it's elsewhere
 - **Optional**: Codex CLI installed and authenticated on the host; set `CODEX_BIN` only if it isn't available as `codex` in `PATH`
 - **Optional**: Docker (only required for sandbox mode)
@@ -150,9 +151,21 @@ Details:
 | `/sonnet` | Use Claude Sonnet for this channel (default) |
 | `/codex` | Use Codex for this channel |
 | `/remote` | Claude only — toggle the channel between Discord mode and remote control via the Claude mobile app |
+| `/voice` | Voice channels only — toggle the voice assistant in this voice channel (join/leave) |
 | `/upgrade` | Sandbox only — update the container (apt + Claude Code + Codex) |
 | `/restart` | Admin only — restart the claudiscord service |
 | `!<command>` | Run a shell command (host if the channel is admin, container if sandbox) |
+
+## Voice assistant
+
+Type `/voice` in a **voice channel's text chat** to make the bot join that channel. Speak, pause ~1 s, and the bot transcribes the utterance, runs it through Claude (same session as the channel's text chat) and answers out loud — half-duplex, walkie-talkie style. `/voice` again makes it leave; it also leaves by itself after 15 min of silence.
+
+- Requires `OPENAI_API_KEY` (TTS) and `GROQ_API_KEY` (STT) in `.env`, plus `ffmpeg` on the host.
+- The transcript (`🎙️ …`) and the reply are also posted to the voice channel's chat.
+- The voice channel is a regular channel: switch mode with `/admin` / `/sandbox` in its chat. Voice turns always run Claude (`/codex` is refused there).
+- Voice replies use a dedicated speakable system prompt (no markdown, confirmation questions when the transcript looks garbled).
+
+Note: `@discordjs/opus` has no prebuilt binary for some platforms (e.g. ARM64 + recent glibc) and its bundled libopus fails to compile with GCC ≥ 14; if `npm install` fails there, rerun it as `CFLAGS="-Wno-error=implicit-function-declaration" npm install`.
 
 ## Authentication
 
@@ -174,6 +187,9 @@ If an environment is not authenticated, the corresponding agent reports an authe
 | `GROQ_API_KEY` | Groq API key for transcribing Discord voice messages via Whisper | Optional (voice messages ignored if unset) |
 | `STT_MODEL` | Groq Whisper model id | Optional (defaults to `whisper-large-v3`) |
 | `STT_LANGUAGE` | Transcription language, ISO-639-1 | Optional (defaults to `fr`) |
+| `OPENAI_API_KEY` | OpenAI API key for the voice assistant's TTS | Optional (`/voice` unavailable if unset) |
+| `TTS_MODEL` | OpenAI TTS model id | Optional (defaults to `gpt-4o-mini-tts`) |
+| `TTS_VOICE` | OpenAI TTS voice | Optional (defaults to `nova`) |
 
 ## License
 

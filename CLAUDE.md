@@ -7,7 +7,7 @@ See `README.md` for installation, setup and Discord commands reference.
 ## Architecture
 
 ```
-Discord message (DM or guild text channel)
+Discord message (DM, guild text channel or text-in-voice chat)
   -> authorization filter (authorized user only)
   -> command dispatcher (/admin, /sandbox, /new, …)
   -> session lookup by channelId
@@ -53,13 +53,16 @@ src/
   jobs-store.js       # loadAllJobs (admin+sandbox), recordJobRun, jobKey
   sessions.js         # { channels: { channelId -> { mode, agent, sessionId, ... } } }
   scheduler.js        # minute-resolution ticker, reloadJobs, executeJob, per-key lock
-  commands.js         # COMMANDS registry → dispatch + native slash metadata; /new /status /usage /login /jobs /admin /sandbox /opus /sonnet /codex /remote /upgrade /restart !shell; transport-neutral dispatchSlashCommand + getRegisteredCommands (Discord plumbing stays in index.js)
+  commands.js         # COMMANDS registry → dispatch + native slash metadata; /new /status /usage /login /jobs /admin /sandbox /opus /sonnet /codex /remote /voice /upgrade /restart !shell; transport-neutral dispatchSlashCommand + getRegisteredCommands (Discord plumbing stays in index.js)
   remote.js           # /remote helpers: startRemote, stopRemote, reconcileRemotes
-  stt.js              # Groq Whisper transcription for Discord voice messages
+  stt.js              # Groq Whisper transcription (voice messages + voice-channel turns)
+  tts.js              # OpenAI TTS via REST fetch (voice assistant speech synthesis)
+  mixer.js            # Continuous PCM mixer: ambient thinking bed + speech ducking
+  voice.js            # Voice assistant: connection, turn capture, STT→Claude→TTS state machine
   uploads.js          # Save Discord file/photo attachments to .claudiscord/files
 scripts/
   rebuild-sandbox.sh  # Rebuild Docker sandbox image
-.env                  # AUTHORIZED_USER_ID, DISCORD_TOKEN, CLAUDE_BIN, CODEX_BIN, SANDBOX_HOME, GROQ_API_KEY
+.env                  # AUTHORIZED_USER_ID, DISCORD_TOKEN, CLAUDE_BIN, CODEX_BIN, SANDBOX_HOME, GROQ_API_KEY, OPENAI_API_KEY
 ```
 
 ## Slash commands
@@ -84,13 +87,26 @@ The text dispatcher (`handleCommand`, message content compared to `COMMANDS[].na
 
 Discord voice messages (the mic button — flag `MessageFlags.IsVoiceMessage`) are transcribed via Groq Whisper before being passed to the active agent. Plain audio attachments (`.mp3` etc.) are ignored on purpose — only the dedicated voice message UI triggers transcription.
 
-- Module: `src/stt.js` (single `transcribeVoiceMessage` function, no SDK).
+- Module: `src/stt.js`, no SDK. `transcribeAudio(buffer)` is the shared core (also used by the voice assistant); `transcribeVoiceMessage` downloads the attachment and delegates.
 - Endpoint: `POST https://api.groq.com/openai/v1/audio/transcriptions`.
 - Defaults: model `whisper-large-v3`, language `fr`. Override via `STT_MODEL` / `STT_LANGUAGE` in `.env`.
 - If `GROQ_API_KEY` is missing, voice messages are silently dropped (warn log).
 - Text wins if both text and voice are present in the same message — Groq is not called.
 - The transcription is echoed back to the channel as `🎙️ <text>` before the agent executes, so the user sees what Whisper understood.
 - API errors are surfaced to the channel and logged; the bot stays up.
+
+## Voice assistant (voice channels)
+
+`/voice` typed in a guild voice channel's text-in-voice chat toggles the assistant for THAT voice channel (one active session per process). Requires `OPENAI_API_KEY` (TTS) + `GROQ_API_KEY` (STT) — friendly error otherwise, same pattern as `/sandbox` without Docker. Design rationale: `docs/voice-assistant-plan.md`.
+
+- **Pipeline** (`src/voice.js`): `receiver.subscribe(AfterSilence 900ms)` → prism opus decode → ffmpeg → 16 kHz mono WAV → Groq Whisper (`stt.js::transcribeAudio`) → gate (min 300 ms, French Whisper hallucination patterns) → `executePrompt('claude', mode, text)` → OpenAI TTS (`tts.js`) → ffmpeg mp3→PCM → mixer playback. The session is keyed by the voice channel's own `channelId` (text-in-voice shares it), so voice and chat share one Claude conversation and `/admin`, `/sandbox`, `/status` typed in the chat apply.
+- **Half-duplex**: speaking-start events are ignored unless the state is `listening`. The bot never hears itself (per-user streams). The transcript (`🎙️ …`) and the reply are also posted to the chat.
+- **Mixer** (`src/mixer.js`): ONE permanent Readable (s16le 48 kHz stereo) plays for the whole session; a synthesized detuned-sine "thinking" bed (gain 0.18) is ducked to 0.06 under speech, gains smoothed per 20 ms frame. Always pushing frames doubles as the UDP keepalive. A player `Idle` means the pipeline broke → the mixer resource is rebuilt.
+- **Voice system prompt**: `prompts.js` flag `voice: true` swaps the Discord response-format section for speakable-text rules (no markdown, mangled-name caveat for local project names, confirm before acting on garbled transcripts).
+- **Gates mirrored from the text path**: `remoteId` set → turn dropped with a chat hint; sandbox-remote lockout enforced by the executor; `isBusy()` → spoken "un instant" notice. Canned spoken phrases are French (matches `STT_LANGUAGE` default) and their TTS output is cached.
+- `/codex` is refused in voice channels — voice turns always run Claude. The channel mode is announced out loud on join. Auto-leave after 15 min without a turn (`VOICE_IDLE_TIMEOUT_MS`); the idle timer is suspended during a turn.
+- **Discord requirements**: non-privileged `GuildVoiceStates` intent (enabled in `src/discord.js`), Connect + Speak permissions on the voice channel.
+- **ARM64 build note**: `@discordjs/opus` has no prebuilt for node 22 / glibc 2.41 and its bundled libopus trips GCC 14's implicit-declaration error; it was built with `CFLAGS="-Wno-error=implicit-function-declaration" npm install`.
 
 ## File uploads
 
