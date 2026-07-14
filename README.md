@@ -189,7 +189,7 @@ If an environment is not authenticated, the corresponding agent reports an authe
 | `STT_LANGUAGE` | Transcription language, ISO-639-1 | Optional (defaults to `fr`) |
 | `OPENAI_API_KEY` | OpenAI API key for the voice assistant's TTS | Optional (`/voice` unavailable if unset) |
 | `TTS_MODEL` | OpenAI TTS model id | Optional (defaults to `gpt-4o-mini-tts`) |
-| `TTS_VOICE` | OpenAI TTS voice | Optional (defaults to `nova`) |
+| `TTS_VOICE` | OpenAI TTS voice | Optional (defaults to `ash`) |
 
 ## License
 

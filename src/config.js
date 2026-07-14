@@ -33,7 +33,7 @@ const STT_LANGUAGE = process.env.STT_LANGUAGE || 'fr';
 // replies. Voice mode also needs GROQ_API_KEY for transcription.
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || null;
 const TTS_MODEL = process.env.TTS_MODEL || 'gpt-4o-mini-tts';
-const TTS_VOICE = process.env.TTS_VOICE || 'nova';
+const TTS_VOICE = process.env.TTS_VOICE || 'ash';
 
 // --- Paths ---
 const ADMIN_USER_HOME = os.homedir();
