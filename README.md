@@ -160,7 +160,7 @@ Details:
 
 Type `/voice` in a **voice channel's text chat** to make the bot join that channel. Speak, pause ~1 s, and the bot transcribes the utterance, runs it through Claude (same session as the channel's text chat) and answers out loud — half-duplex, walkie-talkie style. `/voice` again makes it leave; it also leaves by itself after 15 min of silence.
 
-- Requires `OPENAI_API_KEY` (TTS) and `GROQ_API_KEY` (STT) in `.env`, plus `ffmpeg` on the host.
+- Requires `OPENAI_API_KEY` (TTS) and `GROQ_API_KEY` (STT) in `.env`.
 - The transcript (`🎙️ …`) and the reply are also posted to the voice channel's chat.
 - The voice channel is a regular channel: switch mode with `/admin` / `/sandbox` in its chat. Voice turns run the channel's agent and model; switching the agent is locked while the assistant is active (`/voice` to stop it first).
 - Voice replies use a dedicated speakable system prompt (no markdown, confirmation questions when the transcript looks garbled).
@@ -190,6 +190,7 @@ If an environment is not authenticated, the corresponding agent reports an authe
 | `OPENAI_API_KEY` | OpenAI API key for the voice assistant's TTS | Optional (`/voice` unavailable if unset) |
 | `TTS_MODEL` | OpenAI TTS model id | Optional (defaults to `gpt-4o-mini-tts`) |
 | `TTS_VOICE` | OpenAI TTS voice | Optional (defaults to `ash`) |
+| `TTS_SPEED` | Speech rate multiplier, 0.25–4.0 | Optional (defaults to `1`) |
 
 ## License
 

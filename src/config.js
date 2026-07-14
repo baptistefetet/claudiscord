@@ -34,6 +34,8 @@ const STT_LANGUAGE = process.env.STT_LANGUAGE || 'fr';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || null;
 const TTS_MODEL = process.env.TTS_MODEL || 'gpt-4o-mini-tts';
 const TTS_VOICE = process.env.TTS_VOICE || 'ash';
+// Speech rate multiplier, clamped to the endpoint's accepted range (0.25–4).
+const TTS_SPEED = Math.min(4, Math.max(0.25, parseFloat(process.env.TTS_SPEED) || 1));
 
 // --- Paths ---
 const ADMIN_USER_HOME = os.homedir();
@@ -85,6 +87,7 @@ module.exports = {
 	OPENAI_API_KEY,
 	TTS_MODEL,
 	TTS_VOICE,
+	TTS_SPEED,
 	VOICE_SILENCE_MS,
 	VOICE_IDLE_TIMEOUT_MS,
 	ADMIN_USER_HOME,

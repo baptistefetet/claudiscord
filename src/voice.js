@@ -1,4 +1,3 @@
-const { spawn } = require('child_process');
 const { ChannelType } = require('discord.js');
 const {
 	joinVoiceChannel,
@@ -20,6 +19,8 @@ const { isBusy } = require('./queue');
 const { getSystemPrompt } = require('./prompts');
 const { transcribeAudio } = require('./stt');
 const { synthesizeSpeech } = require('./tts');
+const { ttsToMixer, captureToWav } = require('./pcm');
+const scheduler = require('./scheduler');
 const { getClient, sendChunked, resolveChannelName } = require('./discord');
 const { VoiceMixer, SAMPLE_RATE, CHANNELS } = require('./mixer');
 
@@ -40,10 +41,9 @@ const { VoiceMixer, SAMPLE_RATE, CHANNELS } = require('./mixer');
  *   LISTENING → (user speaks, silence ends the stream) CAPTURING →
  *   TRANSCRIBING (Groq Whisper) → [gate: length/hallucinations] →
  *   THINKING (channel agent via the global FIFO, ambient bed up) →
- *   SPEAKING (OpenAI TTS → ffmpeg → mixer) → LISTENING
+ *   SPEAKING (OpenAI TTS pcm → JS resample → mixer) → LISTENING
  */
 
-const FFMPEG_TIMEOUT_MS = 30_000;
 // PCM captured shorter than this is a click/cough, not an utterance.
 const MIN_TURN_MS = 300;
 const PCM_BYTES_PER_MS = (SAMPLE_RATE * CHANNELS * 2) / 1000;
@@ -84,62 +84,48 @@ function getActiveVoiceChannelId() {
 	return active ? active.channelId : null;
 }
 
-/** Run ffmpeg with stdin/stdout pipes, binary-safe. Returns stdout as a Buffer. */
-function runFfmpeg(args, input) {
-	return new Promise((resolve, reject) => {
-		const child = spawn('ffmpeg', ['-hide_banner', '-loglevel', 'error', ...args]);
-		const out = [];
-		let stderr = '';
-		const timer = setTimeout(() => {
-			try { child.kill('SIGKILL'); } catch (_) {}
-			reject(new Error('ffmpeg timeout'));
-		}, FFMPEG_TIMEOUT_MS);
-		child.stdout.on('data', c => out.push(c));
-		child.stderr.on('data', c => { stderr += c; });
-		child.stdin.on('error', () => {});
-		child.on('error', (err) => { clearTimeout(timer); reject(err); });
-		child.on('close', (code) => {
-			clearTimeout(timer);
-			if (code !== 0) return reject(new Error(`ffmpeg exit ${code}: ${stderr.slice(0, 200)}`));
-			resolve(Buffer.concat(out));
-		});
-		child.stdin.end(input);
-	});
-}
-
-// Captured 48 kHz stereo PCM → 16 kHz mono WAV for Whisper.
-function pcmToWav(pcm) {
-	return runFfmpeg([
-		'-f', 's16le', '-ar', String(SAMPLE_RATE), '-ac', String(CHANNELS), '-i', 'pipe:0',
-		'-ar', '16000', '-ac', '1', '-f', 'wav', 'pipe:1',
-	], pcm);
-}
-
-// TTS mp3 → 48 kHz stereo PCM for the mixer.
-function mp3ToPcm(mp3) {
-	return runFfmpeg([
-		'-i', 'pipe:0',
-		'-f', 's16le', '-ar', String(SAMPLE_RATE), '-ac', String(CHANNELS), 'pipe:1',
-	], mp3);
-}
-
 function isHallucination(text) {
 	return text.length < 2 || HALLUCINATION_PATTERNS.some(re => re.test(text));
+}
+
+/**
+ * playSpeech resolves when the mixer has GENERATED the last speech frame, but
+ * the opus encoder between mixer and player buffers a few seconds ahead —
+ * pausing the player at generation time would freeze that buffered tail
+ * (truncated replies). Wait until the player has actually sent the frame:
+ * resource.playbackDuration advances 20 ms per packet really read.
+ */
+function waitForPlayout(session, generatedMs) {
+	if (!generatedMs) return Promise.resolve();
+	const deadline = Date.now() + 15_000; // the tail is only ever buffer-sized
+	return new Promise((resolve) => {
+		const check = () => {
+			if (active !== session || !session.resource
+				|| session.resource.playbackDuration >= generatedMs
+				|| Date.now() > deadline) return resolve();
+			setTimeout(check, 100);
+		};
+		check();
+	});
 }
 
 /** TTS + decode + play through the session mixer; resolves when played out. */
 async function speak(session, text, { cache = false } = {}) {
 	let pcm = cache ? phraseCache.get(text) : null;
 	if (!pcm) {
-		const mp3 = await synthesizeSpeech(text, {
+		const raw = await synthesizeSpeech(text, {
 			apiKey: config.OPENAI_API_KEY,
 			model: config.TTS_MODEL,
 			voice: config.TTS_VOICE,
+			speed: config.TTS_SPEED,
+			format: 'pcm', // s16le 24 kHz mono, upsampled below — no decode step
 		});
-		pcm = await mp3ToPcm(mp3);
+		pcm = ttsToMixer(raw);
 		if (cache) phraseCache.set(text, pcm);
 	}
-	await session.mixer.playSpeech(pcm);
+	session.player.unpause();
+	const generatedMs = await session.mixer.playSpeech(pcm);
+	await waitForPlayout(session, generatedMs);
 }
 
 async function postToChat(session, text) {
@@ -205,7 +191,7 @@ async function handleTurn(session, pcm) {
 		return;
 	}
 
-	const wav = await pcmToWav(pcm);
+	const wav = captureToWav(pcm);
 	const text = (await transcribeAudio(wav, {
 		apiKey: config.GROQ_API_KEY,
 		model: config.STT_MODEL,
@@ -224,6 +210,7 @@ async function handleTurn(session, pcm) {
 	}
 
 	session.state = 'thinking';
+	session.player.unpause(); // make the thinking bed audible
 	session.mixer.setThinking(true);
 	let reply;
 	try {
@@ -237,6 +224,10 @@ async function handleTurn(session, pcm) {
 		reply = result.result || 'Réponse vide.';
 	} finally {
 		session.mixer.setThinking(false);
+		// The agent may have edited a jobs file — reload the scheduler right away
+		// (mirrors the text path in index.js) so a job scheduled by voice can fire
+		// on time instead of waiting for the next text prompt.
+		scheduler.reloadJobs();
 	}
 
 	await postToChat(session, reply);
@@ -264,6 +255,10 @@ function onSpeakingStart(session, userId) {
 			} finally {
 				if (active === session) {
 					session.state = 'listening';
+					// Pause the player while idle: after 5 silence frames the lib
+					// clears the speaking flag, so the green ring turns off between
+					// turns. The lib's own 5 s UDP keepalive keeps the session up.
+					session.player.pause();
 					resetIdleTimer(session);
 				}
 			}
@@ -293,6 +288,7 @@ async function joinVoice(channel) {
 		connection,
 		mixer: null,
 		player: null,
+		resource: null,
 		state: 'listening',
 		idleTimer: null,
 		botName: client.user.displayName || client.user.username,
@@ -322,10 +318,12 @@ async function joinVoice(channel) {
 		const old = session.mixer;
 		session.mixer = new VoiceMixer();
 		old.destroy();
-		session.player.play(createAudioResource(session.mixer, { inputType: StreamType.Raw }));
+		session.resource = createAudioResource(session.mixer, { inputType: StreamType.Raw });
+		session.player.play(session.resource);
 	});
 	connection.subscribe(session.player);
-	session.player.play(createAudioResource(session.mixer, { inputType: StreamType.Raw }));
+	session.resource = createAudioResource(session.mixer, { inputType: StreamType.Raw });
+	session.player.play(session.resource);
 
 	connection.receiver.speaking.on('start', userId => onSpeakingStart(session, userId));
 
@@ -351,7 +349,11 @@ async function joinVoice(channel) {
 
 	const mode = sessions.getMode(channel.id);
 	speak(session, PHRASES.joined(mode), { cache: true })
-		.catch(err => log.warn('voice join announcement failed:', err.message));
+		.catch(err => log.warn('voice join announcement failed:', err.message))
+		.finally(() => {
+			// Idle after the announcement → ring off; skip if a turn already started.
+			if (active === session && session.state === 'listening') session.player.pause();
+		});
 	return session;
 }
 

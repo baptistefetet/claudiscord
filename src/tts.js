@@ -6,10 +6,11 @@ const TTS_MAX_INPUT_CHARS = 4000;
 
 /**
  * Synthesize speech with OpenAI's speech endpoint (plain REST, no SDK — same
- * mold as src/stt.js). Returns the audio as a Buffer (mp3), decoded to PCM by
- * the caller (ffmpeg). Long texts are truncated to the endpoint's input limit.
+ * mold as src/stt.js). Returns the audio as a Buffer in the requested format
+ * (`pcm` = headerless s16le 24 kHz mono). Long texts are truncated to the
+ * endpoint's input limit.
  */
-async function synthesizeSpeech(text, { apiKey, model, voice, instructions = null }) {
+async function synthesizeSpeech(text, { apiKey, model, voice, speed = 1, format = 'mp3', instructions = null }) {
 	if (!apiKey) throw new Error('OPENAI_API_KEY missing');
 
 	let input = text.trim();
@@ -17,7 +18,8 @@ async function synthesizeSpeech(text, { apiKey, model, voice, instructions = nul
 		input = input.slice(0, TTS_MAX_INPUT_CHARS);
 	}
 
-	const body = { model, voice, input, response_format: 'mp3' };
+	const body = { model, voice, input, response_format: format };
+	if (speed !== 1) body.speed = speed;
 	if (instructions) body.instructions = instructions;
 
 	const t0 = Date.now();
@@ -36,7 +38,7 @@ async function synthesizeSpeech(text, { apiKey, model, voice, instructions = nul
 	}
 
 	const audio = Buffer.from(await res.arrayBuffer());
-	log.info(`TTS ok: ${input.length} chars -> ${audio.length}B mp3 (${Date.now() - t0}ms)`);
+	log.info(`TTS ok: ${input.length} chars -> ${audio.length}B ${format} (${Date.now() - t0}ms)`);
 	return audio;
 }
 

@@ -12,8 +12,9 @@ const { Readable } = require('stream');
  *   - speech — decoded TTS PCM played over the bed, which ducks down while
  *     speech is active and swells back after (never stop-and-swap).
  *
- * Always producing frames (silence included) doubles as the UDP keepalive:
- * Discord drops the voice UDP session after ~60 s without packets.
+ * The mixer always produces frames when pulled, but the audio player is paused
+ * between turns (voice.js) so the bot's speaking indicator turns off while
+ * idle; @discordjs/voice's own 5 s UDP keepalive keeps the session alive.
  *
  * Generation is pull-driven: the audio player requests a frame every 20 ms,
  * so there are no timers here.
@@ -40,6 +41,7 @@ class VoiceMixer extends Readable {
 		super({ highWaterMark: FRAME_BYTES * 2 });
 		this.thinking = false;
 		this.bedGain = 0;
+		this.generatedMs = 0; // 20 ms per generated frame; playout clock for voice.js
 		this.phases = BED_FREQS.map(() => Math.random() * 2 * Math.PI);
 		this.tremoloPhase = 0;
 		/** @type {{buf: Buffer, offset: number, resolve: Function}|null} */
@@ -60,9 +62,11 @@ class VoiceMixer extends Readable {
 	}
 
 	/**
-	 * Queue a decoded speech clip (s16le 48 kHz stereo). Resolves when the clip
-	 * has been fully consumed by the stream (i.e. played out, modulo the small
-	 * player buffer). Clips play back-to-back in queue order.
+	 * Queue a decoded speech clip (s16le 48 kHz stereo). Resolves with the
+	 * mixer's generatedMs when the clip has been fully GENERATED — not yet
+	 * played: the opus encoder downstream buffers seconds ahead, so callers
+	 * compare against resource.playbackDuration (voice.js waitForPlayout)
+	 * before pausing the player. Clips play back-to-back in queue order.
 	 */
 	playSpeech(pcm) {
 		return new Promise((resolve) => {
@@ -90,6 +94,7 @@ class VoiceMixer extends Readable {
 
 	_nextFrame() {
 		const out = Buffer.alloc(FRAME_BYTES);
+		this.generatedMs += 20;
 
 		// Pull up to one frame of speech PCM, chaining queued clips.
 		let speechFrame = null;
@@ -103,7 +108,7 @@ class VoiceMixer extends Readable {
 			speechFrame = buf.subarray(offset, end);
 			this.speech.offset = end;
 			if (end >= buf.length) {
-				this.speech.resolve();
+				this.speech.resolve(this.generatedMs);
 				this.speech = null;
 			}
 		}
