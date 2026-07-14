@@ -95,6 +95,33 @@ lossy cancel:
 
 Out of scope for v1.
 
+## Deferred to v3 — Realtime voice front-end (OpenAI Realtime)
+
+Optional north star, orthogonal to the current architecture; noted for
+completeness, not committed.
+
+Replace the STT → `executePrompt` → TTS turn loop with a persistent OpenAI
+Realtime WebSocket bridged onto the Discord voice connection (decode opus → PCM
+in, PCM → Discord out, as today). VAD, endpointing and barge-in are handled by
+the model itself. The realtime model is only a **voice façade**: real work is
+delegated back to the agent through a function-call that runs
+`executePrompt(claude|codex)` — Claude Code / Codex stays the brain. This is
+OpenClaw's `agent-proxy` mode, and the community `hermes-live-voice` plugin.
+
+Trade-offs:
+
+- Orthogonal to the one-shot `claude -p` + global FIFO model: a continuous,
+  stateful connection, with two conversational states to keep coherent (the
+  realtime conversation *and* the agent session → divergence risk).
+- Cost: continuous realtime audio tokens vs. today's pay-per-turn Whisper + TTS.
+- The latency win is on turn-taking / interruption; any turn that needs tools or
+  system access still round-trips to the agent (thinking bed / ack still useful).
+
+Note: neither Hermes core nor OpenClaw's `stt-tts` mode does this natively —
+Hermes core is STT → (streaming) TTS with the listener paused during playback
+(open request #35750); realtime lives in OpenClaw's `agent-proxy` / `bidi` modes
+and in the third-party `hermes-live-voice` plugin. Out of scope for v1/v2.
+
 ## References
 
 - OpenClaw — Discord channel (three voice modes, barge-in, wake word,
@@ -106,3 +133,7 @@ Out of scope for v1.
   <https://github.com/nousresearch/hermes-agent/blob/main/website/docs/user-guide/messaging/discord.md>
 - Hermes — `voice_mixer.py` (source of `src/mixer.js`, ambient bed / duck gains):
   <https://github.com/NousResearch/hermes-agent/blob/main/plugins/platforms/discord/voice_mixer.py>
+- Hermes — realtime voice feature request (#35750):
+  <https://github.com/NousResearch/hermes-agent/issues/35750>
+- `hermes-live-voice` — third-party realtime gateway (OpenAI Realtime + Gemini
+  Live), Hermes as the brain: <https://github.com/bielcarpi/hermes-live-voice>
