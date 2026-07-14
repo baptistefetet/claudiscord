@@ -36,7 +36,18 @@ function readJobsFile(file) {
 
 function writeJobsFile(file, jobs) {
 	const tmp = file + '.tmp';
+	// tmp+rename creates a file owned by the service user (root). The sandbox
+	// jobs file must stay writable by the container agent (in-place writes fail
+	// on a root-owned file), so re-apply the previous owner and mode.
+	let prev = null;
+	try { prev = fs.statSync(file); } catch { /* first write: keep defaults */ }
 	fs.writeFileSync(tmp, JSON.stringify(jobs, null, 2), 'utf8');
+	if (prev) {
+		try {
+			fs.chownSync(tmp, prev.uid, prev.gid);
+			fs.chmodSync(tmp, prev.mode & 0o7777);
+		} catch { /* non-root service: chown not permitted, keep defaults */ }
+	}
 	fs.renameSync(tmp, file);
 }
 
