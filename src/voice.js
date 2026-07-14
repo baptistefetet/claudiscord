@@ -52,6 +52,8 @@ const HALLUCINATION_PATTERNS = [
 	/amara\.org/i,
 	/merci d'avoir regardé/i,
 	/abonnez-vous/i,
+	// A bare pleasantry alone is a silence artifact, not a real turn.
+	/^(?:merci(?: beaucoup| à tous)?|au revoir|à bientôt)[\s.!?…]*$/i,
 	/^[\s.!?…-]*$/,
 ];
 
