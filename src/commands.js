@@ -615,16 +615,12 @@ async function handleVoice({ channel, channelId, agent }) {
 		await channel.send(`Voice assistant is already active in <#${activeId}>. Send \`/voice\` there to stop it first.`);
 		return true;
 	}
-	if (agent !== 'claude') {
-		await channel.send('Voice turns always run **claude** — send `/opus` or `/sonnet` first.');
-		return true;
-	}
 	try {
 		// The slash path hands us an interaction-scoped channel proxy; give
 		// voice.js the real channel so the session never outlives the token.
 		const realChannel = getClient().channels.cache.get(channelId) || channel;
 		await joinVoice(realChannel);
-		await channel.send(`🎙️ Voice assistant joined **${resolveChannelName(channel)}** (mode **${sessions.getMode(channelId)}**). Speak, then pause — I answer out loud. Send \`/voice\` again to stop.`);
+		await channel.send(`🎙️ Voice assistant joined **${resolveChannelName(channel)}** (mode **${sessions.getMode(channelId)}**, agent **${agent}**). Speak, then pause — I answer out loud. Send \`/voice\` again to stop.`);
 	} catch (err) {
 		log.error('voice join error:', err.message);
 		await channel.send(`Voice join failed: ${err.message?.slice(0, 300) || 'unknown'}`);
@@ -632,11 +628,20 @@ async function handleVoice({ channel, channelId, agent }) {
 	return true;
 }
 
+// Voice turns run the channel's agent, so switching agents mid-voice-session
+// would break the shared sessionId (Claude UUIDs vs Codex thread ids) and trip
+// the executor's context guard. Model switches (opus/sonnet) stay allowed.
+const VOICE_AGENT_LOCK = 'Agent switch is locked while the voice assistant is active here — send `/voice` to stop it first.';
+
 // Shared by /opus and /sonnet — the target model is the command name sans slash.
 async function handleModel({ channel, channelId, content, agent, model }) {
 	const target = content.slice(1);
 	if (agent === 'claude' && model === target) {
 		await channel.send(`This channel is already using **${target}**.`);
+		return true;
+	}
+	if (agent !== 'claude' && getActiveVoiceChannelId() === channelId) {
+		await channel.send(VOICE_AGENT_LOCK);
 		return true;
 	}
 	sessions.setModel(channelId, target);
@@ -650,18 +655,16 @@ async function handleModel({ channel, channelId, content, agent, model }) {
 }
 
 async function handleCodex({ channel, channelId, mode, agent }) {
-	// Voice channels are Claude-only: voice turns always run Claude, and a codex
-	// agent on the channel would break a later /voice.
-	if (isSupportedVoiceChannel(channel)) {
-		await channel.send('`/codex` is not available in voice channels — voice turns always run Claude.');
-		return true;
-	}
 	if (!isCodexAvailable(mode)) {
 		await channel.send(`Codex is not installed or not available in **${mode}** mode.`);
 		return true;
 	}
 	if (agent === 'codex') {
 		await channel.send('This channel is already using **codex**.');
+		return true;
+	}
+	if (getActiveVoiceChannelId() === channelId) {
+		await channel.send(VOICE_AGENT_LOCK);
 		return true;
 	}
 	sessions.setAgent(channelId, 'codex');

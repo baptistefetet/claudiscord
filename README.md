@@ -162,7 +162,7 @@ Type `/voice` in a **voice channel's text chat** to make the bot join that chann
 
 - Requires `OPENAI_API_KEY` (TTS) and `GROQ_API_KEY` (STT) in `.env`, plus `ffmpeg` on the host.
 - The transcript (`🎙️ …`) and the reply are also posted to the voice channel's chat.
-- The voice channel is a regular channel: switch mode with `/admin` / `/sandbox` in its chat. Voice turns always run Claude (`/codex` is refused there).
+- The voice channel is a regular channel: switch mode with `/admin` / `/sandbox` in its chat. Voice turns run the channel's agent and model; switching the agent is locked while the assistant is active (`/voice` to stop it first).
 - Voice replies use a dedicated speakable system prompt (no markdown, confirmation questions when the transcript looks garbled).
 
 Note: `@discordjs/opus` has no prebuilt binary for some platforms (e.g. ARM64 + recent glibc) and its bundled libopus fails to compile with GCC ≥ 14; if `npm install` fails there, rerun it as `CFLAGS="-Wno-error=implicit-function-declaration" npm install`.

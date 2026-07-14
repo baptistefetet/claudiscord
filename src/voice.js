@@ -26,9 +26,11 @@ const { VoiceMixer, SAMPLE_RATE, CHANNELS } = require('./mixer');
 /**
  * Voice assistant: talk to the bot in a guild voice channel. The voice layer is
  * only an I/O adapter around the unchanged core — one utterance = one
- * executePrompt('claude', mode, text) through the existing global FIFO queue,
+ * executePrompt(agent, mode, text) through the existing global FIFO queue,
  * with the session keyed by the voice channel's own channelId (shared with its
- * text-in-voice chat, so /admin, /sandbox, /status typed there apply).
+ * text-in-voice chat, so /admin, /sandbox, /status typed there apply). Turns
+ * run the channel's own agent/mode/model; agent switches are locked while the
+ * assistant is active (commands.js) so the shared sessionId stays coherent.
  *
  * v1 is half-duplex (walkie-talkie): input is ignored while a turn is being
  * transcribed, thought about, or spoken. The bot never hears its own output
@@ -37,7 +39,7 @@ const { VoiceMixer, SAMPLE_RATE, CHANNELS } = require('./mixer');
  * State machine:
  *   LISTENING → (user speaks, silence ends the stream) CAPTURING →
  *   TRANSCRIBING (Groq Whisper) → [gate: length/hallucinations] →
- *   THINKING (claude -p via the global FIFO, ambient bed up) →
+ *   THINKING (channel agent via the global FIFO, ambient bed up) →
  *   SPEAKING (OpenAI TTS → ffmpeg → mixer) → LISTENING
  */
 
@@ -169,7 +171,7 @@ function buildVoiceSystemPrompt(session) {
 		channelId: session.channelId,
 		channelName: session.channelName,
 		isDM: false,
-		channelAgent: 'claude',
+		channelAgent: sessions.getAgent(session.channelId),
 		channelModel: sessions.getModel(session.channelId),
 		voice: true,
 	});
@@ -226,7 +228,8 @@ async function handleTurn(session, pcm) {
 	let reply;
 	try {
 		const mode = sessions.getMode(channelId);
-		const result = await executePrompt('claude', mode, text, {
+		const agent = sessions.getAgent(channelId);
+		const result = await executePrompt(agent, mode, text, {
 			channelId,
 			systemPrompt: buildVoiceSystemPrompt(session),
 			model: sessions.getModel(channelId),
