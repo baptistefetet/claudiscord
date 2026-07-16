@@ -28,7 +28,7 @@ const FRAME_BYTES = FRAME_SAMPLES * CHANNELS * 2;
 // Bed levels relative to full scale, smoothed per frame. Base values inherited
 // from Hermes' voice_mixer.py (ambient_gain / duck_gain), scaled by BED_VOLUME:
 // https://github.com/NousResearch/hermes-agent/blob/d3d621f7c38bb801d9d734cb2898bd4f9b134709/plugins/platforms/discord/voice_mixer.py#L164-L165
-const BED_VOLUME = 0.75; // overall bed loudness relative to the Hermes reference
+const BED_VOLUME = 0.55; // overall bed loudness relative to the Hermes reference
 const BED_THINKING = 0.18 * BED_VOLUME;
 const BED_DUCKED = 0.06 * BED_VOLUME;
 const BED_IDLE = 0;
