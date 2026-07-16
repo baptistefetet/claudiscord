@@ -6,25 +6,21 @@ const { ADMIN_ENV } = require('./claude');
 const sessions = require('./sessions');
 const log = require('./logger');
 
-// Sandbox CPU is capped at 1 core; under load the claude daemon can take 15+s
-// to claim a spare worker, so we allow a generous window. `earlyMatch` keeps
-// the common case (instant agent ID on stdout) fast.
+// Sandbox CPU is capped at 1 core; under load the claude daemon can take 15+s to
+// claim a worker. `earlyMatch` keeps the common case fast.
 const START_TIMEOUT_MS = 30_000;
 const STOP_TIMEOUT_MS = 15_000;
 
-// `claude --bg ... --remote-control <name>` prints `backgrounded · <agentId>`
-// on stdout (8 lowercase hex chars). Anchored to start-of-line so a future
-// trailing message can't trip us up.
+// `claude --bg --remote-control <name>` prints `backgrounded · <agentId>` (8
+// lowercase hex). Anchored to start-of-line against future trailing output.
 const AGENT_ID_REGEX = /^backgrounded\s+·\s+([0-9a-f]{8})/m;
 
-// `claude stop <id>` prints one of these on success/no-op. We match early so a
-// sandbox `docker exec` that hangs on the wrapper pipe doesn't keep us waiting
-// the full timeout.
+// Matched early so a sandbox `docker exec` hanging on the wrapper pipe doesn't
+// keep us waiting the full timeout.
 const STOP_DONE_REGEX = /(?:^|\b)(stopped|couldn't confirm|not found|already stopped)\b/im;
 
-// Strict guard before any `rm -rf` on a jobs dir. agentId comes from
-// AGENT_ID_REGEX, so it's already 8 lowercase hex — this assert is
-// belt-and-suspenders in case a caller wires in a different source.
+// Strict guard before any `rm -rf` on a jobs dir: belt-and-suspenders in case a
+// caller ever sources agentId from something other than AGENT_ID_REGEX.
 const AGENT_ID_STRICT = /^[0-9a-f]{8}$/;
 
 /**

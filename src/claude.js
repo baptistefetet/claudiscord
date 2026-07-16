@@ -13,13 +13,10 @@ const { ensureContainer } = require('./container');
 const { spawnWithTimeout } = require('./spawn');
 const log = require('./logger');
 
-// Tool permissions for the Claude agent (host and sandbox). Claude-only — Codex
-// governs its tools via --yolo and ignores these. `claude -p` already drops the
-// interactive tools (AskUserQuestion, plan mode, …), so DISALLOWED_TOOLS only lists
-// what would actually conflict with claudiscord or make no sense in a Discord relay.
-// Bundled skills (update-config, loop, schedule, etc.) are excluded separately via
-// the disableBundledSkills setting below, so any new one Anthropic ships is excluded
-// automatically. Plugin skills and .claude/skills/ ones are unaffected by that setting.
+// Claude-only; Codex governs its tools via --yolo. `claude -p` already drops the
+// interactive tools, so DISALLOWED_TOOLS only lists what would conflict with
+// claudiscord. Bundled skills are excluded via disableBundledSkills below (so new
+// ones are covered automatically); plugin and .claude/skills/ ones are unaffected.
 const ALLOWED_TOOLS = 'Bash(*) Read Write Edit Glob Grep WebSearch WebFetch Task';
 
 // Native scheduling + remote session control — claudiscord owns the job and
@@ -206,11 +203,9 @@ function lastResultEvent(events) {
 	return null;
 }
 
-// Human-readable error text from a result event: its `result` field, falling
-// back to `subtype`. On a failed run (e.g. usage limit, credit balance) this
-// text lives near the START of the result event's JSON, so a naive
-// stdout.slice(-500) returns the metadata tail (usage stats) instead. Returns
-// null when nothing usable is found — the caller falls back to stderr/exit code.
+// On a failed run the text lives near the START of the result event's JSON, so a
+// naive stdout.slice(-500) returns the metadata tail instead. Null when nothing
+// usable is found — the caller falls back to stderr/exit code.
 function errorTextFromResultEvent(resultEvent) {
 	if (!resultEvent) return null;
 	return (typeof resultEvent.result === 'string' && resultEvent.result.trim())

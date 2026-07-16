@@ -26,29 +26,24 @@ process.on('uncaughtException', err => {
 
 const client = createClient();
 
-// Channels currently waiting for their turn in the global queue — used to
-// avoid flooding a channel with multiple "⏳ waiting…" notices.
+// One "⏳ waiting…" notice per channel, not one per queued message.
 const waitingNotice = new Set();
 
-// Threads whose first-turn starter-message fetch is in flight. Concurrent
-// messages await this promise so they cannot overtake the claimant when
-// enqueuing (executePrompt enqueues synchronously at call time).
+// Threads whose starter-message fetch is in flight. Siblings await it so they
+// cannot overtake the claimant (executePrompt enqueues synchronously).
 const starterGate = new Map();
 
 client.on(Events.MessageCreate, async message => {
 	if (message.author.bot) return;
-	// Skip system messages. Creating a thread posts a `ThreadCreated` system
-	// message in the parent whose `content` is the thread NAME (not empty), so
-	// it would otherwise be treated as a prompt. Also covers the thread-starter
-	// crosspost and other notices. Real prompts are Default/Reply (not system).
+	// Creating a thread posts a ThreadCreated system message whose `content` is
+	// the thread NAME, which would otherwise be treated as a prompt.
 	if (message.system) return;
 
 	const channel = message.channel;
 	const isDM = channel.type === ChannelType.DM;
 	const isGuildText = channel.type === ChannelType.GuildText;
 	const isPublicThread = channel.type === ChannelType.PublicThread;
-	// A voice channel's built-in text chat shares the voice channel's ID, so it
-	// behaves like any text channel (own session; /admin, /sandbox, /voice…).
+	// A voice channel's built-in text chat shares the voice channel's ID.
 	const isGuildVoice = channel.type === ChannelType.GuildVoice;
 	if (!isDM && !isGuildText && !isPublicThread && !isGuildVoice) return;
 
@@ -59,15 +54,11 @@ client.on(Events.MessageCreate, async message => {
 	// Strict authorization: silently ignore every other user.
 	if (message.author.id !== config.AUTHORIZED_USER_ID) return;
 
-	// First contact in a public thread snapshots the parent channel's
-	// mode/agent/model (not a live link); the thread keeps its own fresh session.
-	// Done before commands/uploads so they already see the inherited mode.
+	// Before commands/uploads, so they see the inherited mode.
 	if (isPublicThread) sessions.ensureFromParent(channel.id, channel.parentId);
 
-	// If the channel is in remote mode (or transitioning), a voice message is
-	// just as invalid as a text prompt. Drop it BEFORE paying for Groq STT and
-	// before echoing `🎙️ <transcript>` — `handleCommand` would reject it
-	// anyway, but the gate there only runs after transcription.
+	// Drop before paying for Groq STT: handleCommand would reject it anyway, but
+	// only after transcription.
 	if (isVoice && !content && sessions.getRemoteId(channel.id)) {
 		await channel.send(`\u{1F6F0}️ This channel is in remote mode — voice messages are ignored. Send \`/remote\` to return to Discord mode.`).catch(() => {});
 		return;
@@ -97,14 +88,8 @@ client.on(Events.MessageCreate, async message => {
 		}
 	}
 
-	// File/photo upload (not a voice message, whose lone attachment is the audio
-	// handled by STT above). We persist the files and echo their names. When the
-	// message also carries text, the files are saved first — same echo as an
-	// upload-only message — and then the text is processed as a normal prompt so
-	// the agent can reference them. With no text, the upload does NOT invoke the
-	// agent: we just persist the files for a later message. Placed before
-	// handleCommand so uploads work even in /remote mode (they don't spawn the
-	// agent; the files become available to the mobile session too).
+	// Before handleCommand, so uploads work in /remote mode too (they spawn no
+	// agent). A voice message's lone attachment is the audio, handled by STT above.
 	if (!isVoice && message.attachments.size > 0) {
 		try {
 			const saved = await saveUploads([...message.attachments.values()], sessions.getMode(channel.id));
@@ -115,19 +100,15 @@ client.on(Events.MessageCreate, async message => {
 			await channel.send(`Upload failed: ${err.message?.slice(0, 200) || 'unknown'}`).catch(() => {});
 			return;
 		}
-		// Upload-only: done, the agent is not invoked. With text, fall through and
-		// process the message as a normal prompt.
-		if (!prompt) return;
+		if (!prompt) return; // upload-only: the agent is not invoked
 	}
 
 	// Commands first (they manage their own responses).
 	if (await handleCommand(message)) return;
 
 	const channelId = channel.id;
-	// In a public thread, show both the parent channel name and the thread name
-	// in the system prompt; the topic falls back to the parent's (threads have none).
-	// The parent is normally cached (Guilds intent), but fetch it by parentId as a
-	// fallback so an uncached parent doesn't degrade the name/topic to <unknown>.
+	// Threads have no topic of their own, so both name and topic fall back to the
+	// parent. Normally cached (Guilds intent); fetch as a fallback.
 	let parentChannel = null;
 	if (isPublicThread) {
 		parentChannel = channel.parent;
@@ -151,19 +132,10 @@ client.on(Events.MessageCreate, async message => {
 		? (parentChannel?.topic || null)
 		: (!isDM ? (channel.topic || null) : null);
 
-	// On a thread's very first turn, if it was created FROM an existing message,
-	// prepend that anchor message as quoted context — otherwise the message the
-	// thread forks from is invisible (it lives in the parent and shows up in the
-	// thread only as a dropped system message). First turn only (sessionId still
-	// null), so it enters the conversation history and persists across --resume.
-	//
-	// Two guards make this race-safe against rapid concurrent first-turn messages
-	// (sessionId stays null until the first run completes):
-	//   - sessions.claimStarter() — synchronous atomic per-channel claim, so the
-	//     anchor is injected at most once.
-	//   - starterGate — while the claimant awaits fetchStarterMessage(), siblings
-	//     await the same promise instead of racing ahead, so they cannot enqueue
-	//     before it (executePrompt enqueues synchronously at call time).
+	// On a thread's first turn, prepend the message it was forked from — it lives
+	// in the parent and reaches the thread only as a dropped system message.
+	// claimStarter + starterGate make this race-safe against concurrent first
+	// turns, which all see a null sessionId.
 	if (isPublicThread) {
 		const pendingStarter = starterGate.get(channelId);
 		if (pendingStarter) {
@@ -190,9 +162,8 @@ client.on(Events.MessageCreate, async message => {
 		}
 	}
 
-	// sessionId is resolved inside executor.executePrompt, inside the global
-	// queue, so back-to-back messages cannot race before the first generated
-	// UUID has been persisted.
+	// sessionId is resolved inside executePrompt, within the global queue, so
+	// back-to-back messages cannot race the first generated UUID.
 	const promptOptions = {
 		channelId,
 		systemPrompt: getSystemPrompt({
@@ -252,18 +223,14 @@ client.on(Events.MessageCreate, async message => {
 		await channel.send(errMsg).catch(e => log.error('Failed to send error message:', e));
 	} finally {
 		waitingNotice.delete(channelId);
-		// Claude may have edited a jobs file even if the prompt errored — reload
-		// so the scheduler picks it up immediately rather than on the next prompt.
-		scheduler.reloadJobs();
+		scheduler.reloadJobs(); // the agent may have edited a jobs file, even on error
 	}
 });
 
-// Routes a command handler's `channel.send(...)` calls onto a SINGLE non-ephemeral
-// interaction response: the first send becomes the reply (Discord renders the
-// persistent "user used /command" marker above it), later sends become follow-ups.
-// A 2s safety net defers — only the few slow commands reach it — so the 3s ack
-// window is respected while fast commands reply directly, with no "thinking"
-// placeholder. The 15-min token lifetime bounds how long a command may run.
+// Routes a handler's channel.send() calls onto one non-ephemeral interaction
+// response: first send → reply, later ones → follow-ups. A 2 s timer defers so
+// Discord's 3 s ack window holds, without a "thinking" placeholder on fast
+// commands. The 15-min token lifetime bounds a command's runtime.
 function makeInteractionResponder(interaction) {
 	const realChannel = interaction.channel;
 	let acked = false;        // an initial response (reply or defer) was sent
@@ -278,11 +245,9 @@ function makeInteractionResponder(interaction) {
 		deferPromise = interaction.deferReply().then(() => {}, () => { broken = true; });
 	}, 2000);
 
-	// Post `text` through the interaction, falling back to a plain channel message if
-	// the interaction can no longer be used: the 15-min token may expire while a
-	// command sits in the global queue (a long agent prompt can hold it ~20 min), and
-	// any reply/edit/follow-up may fail. The fallback only loses the "used /command"
-	// grouping — output is never dropped.
+	// Falls back to a plain channel message once the interaction is unusable: the
+	// 15-min token can expire while a command waits in the global queue. The
+	// fallback only loses the "used /command" grouping — output is never dropped.
 	const send = async (text) => {
 		if (broken) { await realChannel.send(text); return; }
 		try {
@@ -322,19 +287,12 @@ function makeInteractionResponder(interaction) {
 	return { send, finish };
 }
 
-// Slash-command interactions (Discord Application Commands). This listener is the
-// Discord adapter: all Discord-specific plumbing lives here — authorization and the
-// interaction→response translation. Handler output is routed into the interaction's
-// own non-ephemeral response (via a channel Proxy whose `.send` maps to the
-// responder), so the channel shows Discord's persistent "user used /command" marker
-// + the result in one block, with no "thinking" on fast commands. The neutral
-// gate+dispatch lives in commands.js (dispatchSlashCommand), shared with the text
-// path, so commands.js stays free of any discord.js dependency.
+// Discord adapter for slash commands: authorization and interaction→response
+// translation live here, the neutral dispatch in commands.js.
 client.on(Events.InteractionCreate, async interaction => {
 	if (!interaction.isChatInputCommand()) return;
 
-	// Same strict authorization as the message path. Interactions must be acked, so
-	// reply ephemerally (errors stay private) instead of silently dropping.
+	// Interactions must be acked, so reject ephemerally rather than drop silently.
 	if (interaction.user.id !== config.AUTHORIZED_USER_ID) {
 		await interaction.reply({ content: '⛔ Not authorized.', flags: MessageFlags.Ephemeral }).catch(() => {});
 		return;
@@ -344,13 +302,11 @@ client.on(Events.InteractionCreate, async interaction => {
 		return;
 	}
 
-	// Inherit the parent channel's mode/agent/model on first contact in a thread,
-	// exactly like the message path does before dispatching commands.
+	// Like the message path, before dispatching.
 	if (interaction.channel.isThread?.()) sessions.ensureFromParent(interaction.channelId, interaction.channel.parentId);
 
 	const responder = makeInteractionResponder(interaction);
-	// Proxy the real channel so resolveChannelName() (and any other property) still
-	// resolves against it, but `.send` routes to the interaction response.
+	// Property reads still resolve against the real channel; only .send is routed.
 	const channel = new Proxy(interaction.channel, {
 		get(target, prop) {
 			if (prop === 'send') return responder.send;
@@ -369,10 +325,8 @@ client.on(Events.InteractionCreate, async interaction => {
 	}
 });
 
-// Autojoin adapter: forward the raw Discord event to voice.js, which owns all the
-// policy (who, which channel, follow vs leave). Same split as the slash path —
-// Discord plumbing stays in index.js. The listener is sync: discord.js does not
-// await handlers, so the rejection must be caught here.
+// Autojoin adapter: voice.js owns the policy. discord.js does not await
+// handlers, so the rejection must be caught here.
 client.on(Events.VoiceStateUpdate, (oldState, newState) => {
 	handleVoiceStateUpdate(oldState, newState)
 		.catch(err => log.error('voiceStateUpdate error:', err.message || err));
@@ -387,12 +341,9 @@ client.on(Events.ClientReady, async () => {
 	scheduler.start();
 });
 
-// Map the neutral command metadata (commands.js) to Discord's Application Command
-// shape and bulk-overwrite the global commands. The Discord-specific shape lives
-// here, not in commands.js. Idempotent: Discord only mutates what actually changed,
-// so this is safe on every boot. Names are lowercased (Discord constraint);
-// descriptions clamped to 100 chars; dmPermission keeps them usable in DMs. Global
-// scope covers guild channels + DMs; first-time propagation can take up to ~1h.
+// Bulk-overwrite the global commands from commands.js's neutral metadata.
+// Idempotent, so it is safe on every boot. Discord constraints: lowercase names,
+// descriptions ≤ 100 chars. First-time propagation can take up to ~1h.
 async function registerSlashCommands() {
 	const data = getRegisteredCommands().map(c => ({
 		name: c.name.slice(1).toLowerCase(),
@@ -404,14 +355,9 @@ async function registerSlashCommands() {
 	log.info(`Registered ${data.length} global slash command(s)`);
 }
 
-// Remove sessions.json entries whose Discord channel no longer exists (channel
-// deleted, bot kicked from guild, etc.). Strict on the error code: only
-// `Unknown Channel` (10003) triggers removal — transient errors (network,
-// rate limit, permissions) are skipped so a flaky boot doesn't nuke valid
-// entries. Runs after login (needs the gateway) and after reconcileRemotes
-// (which would otherwise lose its handle on stale remote agents). Scheduled
-// jobs attached to a purged channel are intentionally left alone — the user
-// manages job lifecycle by hand.
+// Drop sessions.json entries whose channel no longer exists. Strict on the error
+// code: only Unknown Channel (10003) removes, so a flaky boot cannot nuke valid
+// entries. Scheduled jobs are left alone — the user manages their lifecycle.
 async function purgeInvalidChannels() {
 	const ids = sessions.listChannelIds();
 	if (ids.length === 0) return;

@@ -24,36 +24,23 @@ const log = require('./logger');
  *   }
  * }
  *
- * A channelId is valid for both DM channels and guild text channels.
- * Default mode for an unknown channel is "admin", default agent is "claude",
- * and default model is "sonnet".
+ * A channelId covers DM, guild text and voice channels alike.
  *
- * The active agent allocates sessionId and emits it in its JSON output. The
- * executor persists it after the first spawn, including on timeout when the
- * ID was emitted before the process was killed.
+ * sessionId is allocated by the agent and emitted in its JSON output; the
+ * executor persists it after the first spawn, including on timeout.
  *
- * autojoin is the per-voice-channel policy: when true, the bot joins that voice
- * channel on its own as soon as the authorized user connects to it (src/voice.js).
- * It is only ever meaningful on a GuildVoice channel, defaults to false (opt-in,
- * so the bot never joins by surprise), and is deliberately orthogonal to the live
- * session: `/autojoin` off does not disconnect a bot that is already there, and
- * `/voice` off does not clear the policy.
+ * autojoin: per-voice-channel policy, see src/voice.js.
  *
- * remoteId, when non-null, means the session is currently driven from the
- * Claude mobile app via `claude --bg --remote-control`. While set, the channel
- * only accepts the commands marked remoteAllowed in `src/commands.js`; every
- * other message returns an invalidation hint. Entering remote mode wipes
- * `sessionId`: `claude --bg`
- * manages its own session UUID and we don't try to reconcile back, so the
- * next Discord message after `/remote` stop starts fresh.
+ * remoteId, when non-null, means the channel is driven from the Claude mobile app
+ * (`claude --bg --remote-control`) and only accepts remoteAllowed commands
+ * (src/commands.js). Entering remote mode wipes sessionId — `claude --bg` manages
+ * its own UUID and we don't reconcile back.
  */
 
-/** @type {Map<string, {mode?: string, agent?: string, model?: string, sessionId?: string, remoteId?: string|null, lastName?: string}>} */
+/** @type {Map<string, {mode?: string, agent?: string, model?: string, sessionId?: string, remoteId?: string|null, autojoin?: boolean, lastName?: string}>} */
 const channels = new Map();
 
-// Channels whose one-time thread-starter injection has been claimed this process.
-// In-memory only (never persisted); released once a sessionId exists, on clear,
-// or on removal. Used to atomically gate the starter injection against the race
+// In-memory only. Gates the one-time thread-starter injection against the race
 // where concurrent first-turn messages all see a null sessionId.
 const starterClaimed = new Set();
 
@@ -69,12 +56,10 @@ function load() {
 				let agent = VALID_AGENTS.includes(entry.agent) ? entry.agent : CHANNEL_DEFAULT_AGENT;
 				let sessionId = typeof entry.sessionId === 'string' ? entry.sessionId : null;
 				if (remoteId) agent = 'claude';
-				// Legacy entries preallocated Claude UUIDs before spawn. A false
-				// bit means that UUID may never have been created on disk.
+				// Legacy: a false bit means that UUID may never have been created.
 				if (entry.sessionStarted === false) sessionId = null;
-				// NOTE: entries are rebuilt field by field, not spread — any new
-				// persisted field must be added here too or it is silently dropped
-				// on the next boot.
+				// Rebuilt field by field, not spread: a new persisted field must be
+				// added here too or it is silently dropped on the next boot.
 				channels.set(id, {
 					mode,
 					agent,
@@ -105,10 +90,8 @@ function ensureChannel(channelId) {
 }
 
 /**
- * Lazily create a (thread) channel's session entry by snapshotting the parent
- * channel's mode/agent/model. Idempotent: a no-op once the entry exists, so the
- * inheritance happens once (at first contact) and is a snapshot, not a live
- * link. The thread always starts with a fresh agent session (sessionId: null).
+ * Snapshot a parent channel's mode/agent/model onto a thread. Idempotent, so the
+ * inheritance is a one-off at first contact, not a live link.
  */
 function ensureFromParent(channelId, parentId) {
 	if (channels.has(channelId)) return;
@@ -128,10 +111,8 @@ function ensureFromParent(channelId, parentId) {
 }
 
 /**
- * Atomically claim the one-time thread-starter injection for a channel. Returns
- * true exactly once per process (until released), false afterwards. Synchronous,
- * so it can gate the injection before any `await` and prevent concurrent
- * first-turn messages from each injecting the anchor.
+ * Claim the one-time thread-starter injection. Returns true exactly once per
+ * process. Synchronous, so it can gate the injection before any `await`.
  */
 function claimStarter(channelId) {
 	if (starterClaimed.has(channelId)) return false;
@@ -195,7 +176,6 @@ function setAutojoin(channelId, on) {
 	log.info(`Channel ${channelId} autojoin set to: ${next}`);
 }
 
-/** Voice channels opted in to autojoin. Used by the boot-time convergence scan. */
 function listAutojoinChannelIds() {
 	const out = [];
 	for (const [channelId, entry] of channels.entries()) {
@@ -204,9 +184,7 @@ function listAutojoinChannelIds() {
 	return out;
 }
 
-/**
- * Non-allocating read of the channel's active agent session.
- */
+/** Non-allocating read of the channel's active agent session. */
 function getSession(channelId) {
 	const entry = channels.get(channelId);
 	return {
@@ -260,12 +238,7 @@ function setRemoteId(channelId, remoteId) {
 	const next = typeof remoteId === 'string' && remoteId ? remoteId : null;
 	if (entry.remoteId === next) return;
 	entry.remoteId = next;
-	if (next) {
-		// Entering remote mode: forget the Discord session — `claude --bg`
-		// will manage its own UUID, and the next Discord message after stop
-		// allocates a fresh one.
-		entry.sessionId = null;
-	}
+	if (next) entry.sessionId = null; // `claude --bg` manages its own UUID
 	persist();
 	log.info(`Channel ${channelId} remoteId set to: ${next}`);
 }
@@ -281,11 +254,9 @@ function listRemoteChannels() {
 }
 
 /**
- * True when any channel currently has a sandbox-mode remote. Used to refuse
- * other sandbox agent executions (prompts, !shell, scheduled jobs) — those
- * would route through `killAgentProcessesInContainer` on timeout, which
- * pkills every non-essential PID in the container and would take the live
- * remote daemon with it.
+ * Gates other sandbox executions: their timeout path runs
+ * killAgentProcessesInContainer, which pkills every non-essential PID in the
+ * container and would take a live remote daemon with it.
  */
 function hasActiveSandboxRemote() {
 	for (const entry of channels.values()) {

@@ -36,13 +36,9 @@ const KILL_GRACE_MS = 5000;
 // Worst case: "```\n" (4) + output + "\n... (truncated)\n```" (21) = 25 overhead
 const SHELL_MAX_OUTPUT = DISCORD_MAX_MSG_LENGTH - 25;
 
-// Per-channel lock held for the whole duration of a `/remote` toggle (queue
-// wait + spawn + state persistence). Closes two races:
-//   1. While `/remote start` is queued, `remoteId` is not yet set on the
-//      session — without this lock, a concurrent plain message or
-//      `/new`/`/admin` would pass the remote gate and step on the session.
-//   2. Two back-to-back `/remote` calls could both pick the start branch
-//      before the first finished, spawning two agents and orphaning one.
+// Per-channel lock for a whole `/remote` toggle. `remoteId` is not set until the
+// spawn completes, so without it a concurrent message would pass the remote gate,
+// and two back-to-back toggles would both take the start branch.
 const remoteOpInFlight = new Set();
 let pendingLogin = null;
 
@@ -145,9 +141,8 @@ async function finishPendingLogin(channel, content) {
 }
 
 /**
- * Execute a shell command asynchronously and return output for Discord.
- * Uses spawn to avoid blocking the event loop (which would kill the Discord
- * WebSocket heartbeat on long-running commands). Implements SIGTERM→SIGKILL
+ * Execute a shell command and return output for Discord. spawn, not exec: a
+ * blocked event loop would kill the Discord WebSocket heartbeat. SIGTERM→SIGKILL
  * with process group kill (host) or container cleanup (sandbox).
  */
 function executeShell(command, { inContainer } = {}) {
@@ -590,7 +585,6 @@ async function handleStatus({ channel, channelId, mode, agent, model, remoteId }
 	const modelLine = agent === 'claude' ? `\nModel: **${model}**` : '';
 	const codexLine = isCodexAvailable(mode) ? '' : `\nCodex unavailable in **${mode}** mode.`;
 	const voiceLine = getActiveVoiceChannelId() === channelId ? '\nVoice assistant: **active**' : '';
-	// Only shown when on: meaningless (and always false) outside a voice channel.
 	const autojoinLine = sessions.getAutojoin(channelId) ? '\nAutojoin: **on**' : '';
 	await channel.send(`Channel mode: **${mode}**\nAgent: **${agent}**${modelLine}${voiceLine}${autojoinLine}${remoteLine}${dockerNote}${codexLine}`);
 	return true;
@@ -611,8 +605,7 @@ async function handleVoice({ channel, channelId, agent }) {
 	}
 	const activeId = getActiveVoiceChannelId();
 	if (activeId === channelId) {
-		// Explicit kick: hold autojoin off until the user leaves this channel,
-		// otherwise the bot would just walk back in on the next voice event.
+		// Explicit kick, so hold autojoin off until the user leaves the channel.
 		leaveVoice({ suppressAutojoin: true });
 		await channel.send(`🔇 Voice assistant left.${sessions.getAutojoin(channelId) ? ' Autojoin stays **on** — I rejoin next time you connect here.' : ''}`);
 		return true;
@@ -622,8 +615,8 @@ async function handleVoice({ channel, channelId, agent }) {
 		return true;
 	}
 	try {
-		// The slash path hands us an interaction-scoped channel proxy; give
-		// voice.js the real channel so the session never outlives the token.
+		// The real channel, not the slash path's interaction-scoped proxy: the
+		// session must never outlive the token.
 		const realChannel = getClient().channels.cache.get(channelId) || channel;
 		await joinVoice(realChannel);
 		await channel.send(`🎙️ Voice assistant joined **${resolveChannelName(channel)}** (mode **${sessions.getMode(channelId)}**, agent **${agent}**). Speak, then pause — I answer out loud. Send \`/voice\` again to stop.`);
@@ -635,10 +628,9 @@ async function handleVoice({ channel, channelId, agent }) {
 }
 
 /**
- * /autojoin — toggle this voice channel's autojoin policy (persisted per channel).
- * Deliberately orthogonal to `/voice`, which drives the live session: turning the
- * policy off leaves a connected bot alone, turning it on connects right away if
- * the user is already sitting in the channel (rather than making them reconnect).
+ * /autojoin — toggle this voice channel's autojoin policy. Orthogonal to
+ * `/voice`: off leaves a connected bot alone, on connects right away if the user
+ * is already there.
  */
 async function handleAutojoin({ channel, channelId }) {
 	if (!isVoiceModeAvailable()) {
@@ -661,21 +653,16 @@ async function handleAutojoin({ channel, channelId }) {
 	}
 
 	await channel.send(`🚪 Autojoin **on** for **${name}** — I join on my own when you connect here.`);
-	// Turning the policy on is an explicit re-arm: drop any suppression left by a
-	// `/voice` kick earlier in this same stay, which would otherwise silently
-	// swallow the immediate join below.
-	clearAutojoinSuppression(channelId);
-	// The slash path hands us an interaction-scoped channel proxy; voice.js needs
-	// the real channel (same reason as handleVoice). No-op unless the user is
-	// already in the channel and nothing else is active.
+	clearAutojoinSuppression(channelId); // an explicit enable is an explicit re-arm
+	// Real channel, not the proxy (as in handleVoice). No-op unless the user is
+	// already there.
 	const realChannel = getClient().channels.cache.get(channelId) || channel;
 	await maybeAutojoin(realChannel);
 	return true;
 }
 
-// Voice turns run the channel's agent, so switching agents mid-voice-session
-// would break the shared sessionId (Claude UUIDs vs Codex thread ids) and trip
-// the executor's context guard. Model switches (opus/sonnet) stay allowed.
+// Switching agents mid-session would break the shared sessionId (Claude UUIDs vs
+// Codex thread ids). Model switches stay allowed.
 const VOICE_AGENT_LOCK = 'Agent switch is locked while the voice assistant is active here — send `/voice` to stop it first.';
 
 // Shared by /opus and /sonnet — the target model is the command name sans slash.
@@ -837,10 +824,9 @@ async function handleCommand(message) {
 }
 
 /**
- * Remote-mode gate, transport-neutral. Returns a hint string to show the user
- * when the channel is driven by the Claude mobile app (or mid-toggle) and `key`
- * is not allowed in that state, else null. `key` is the raw content for the text
- * path or the command name for the slash path (both matched against REMOTE_ALLOWED).
+ * Remote-mode gate. Returns a hint to show the user when the channel is driven by
+ * the Claude mobile app and `key` is not allowed there, else null. `key` is the
+ * raw content (text path) or the command name (slash path).
  */
 function remoteGateHint(channelId, key) {
 	const remoteId = sessions.getRemoteId(channelId);
@@ -854,9 +840,8 @@ function remoteGateHint(channelId, key) {
 }
 
 /**
- * Registry dispatch, transport-neutral: mode-gate + lookup + handler call. The
- * only messaging primitive it touches is `channel.send`, so any transport can
- * drive it. Returns true if a command handled the input, false if `name` is not a
+ * Registry dispatch: mode-gate + lookup + handler call. Touches only
+ * `channel.send`, so any transport can drive it. False when `name` is not a
  * registered command (text path: fall through to a normal prompt).
  */
 async function runCommand({ channel, channelId, name, mode, agent, model, remoteId, message }) {
@@ -870,11 +855,9 @@ async function runCommand({ channel, channelId, name, mode, agent, model, remote
 }
 
 /**
- * Slash-command entry point, transport-neutral. The Discord adapter (index.js)
- * owns the interaction plumbing (3s ack + non-ephemeral response routing) and calls
- * this with the resolved channel and command name. Mirrors handleCommand's gating
- * but keyed on the command name; output goes to the channel via `channel.send`,
- * exactly like the text path. `name` includes the leading slash (e.g. `/jobs`).
+ * Slash-command entry point. The adapter (index.js) owns the interaction plumbing
+ * and calls this with the resolved channel and command name (leading slash
+ * included). Same gating as handleCommand, but keyed on the name.
  */
 async function dispatchSlashCommand({ channel, channelId, name }) {
 	const mode = sessions.getMode(channelId);
@@ -892,10 +875,9 @@ async function dispatchSlashCommand({ channel, channelId, name }) {
 }
 
 /**
- * Neutral command metadata for transports that register native commands (e.g.
- * Discord slash commands). Excludes `helpOnly` entries (the `!shell` prefix) and
- * any non-slash name. The transport maps { name, help } to its own shape; `name`
- * keeps the leading slash so it stays the registry's canonical identifier.
+ * Neutral metadata for transports that register native commands. Excludes
+ * `helpOnly` entries. `name` keeps its leading slash — the registry's canonical
+ * identifier.
  */
 function getRegisteredCommands() {
 	return COMMANDS
