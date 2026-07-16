@@ -18,6 +18,7 @@ const log = require('./logger');
  *       "model": "opus"|"sonnet",
  *       "sessionId": "<uuid>",
  *       "remoteId": null | "<agentId>",
+ *       "autojoin": true|false,
  *       "lastName": "..."
  *     }
  *   }
@@ -30,6 +31,13 @@ const log = require('./logger');
  * The active agent allocates sessionId and emits it in its JSON output. The
  * executor persists it after the first spawn, including on timeout when the
  * ID was emitted before the process was killed.
+ *
+ * autojoin is the per-voice-channel policy: when true, the bot joins that voice
+ * channel on its own as soon as the authorized user connects to it (src/voice.js).
+ * It is only ever meaningful on a GuildVoice channel, defaults to false (opt-in,
+ * so the bot never joins by surprise), and is deliberately orthogonal to the live
+ * session: `/autojoin` off does not disconnect a bot that is already there, and
+ * `/voice` off does not clear the policy.
  *
  * remoteId, when non-null, means the session is currently driven from the
  * Claude mobile app via `claude --bg --remote-control`. While set, the channel
@@ -64,12 +72,16 @@ function load() {
 				// Legacy entries preallocated Claude UUIDs before spawn. A false
 				// bit means that UUID may never have been created on disk.
 				if (entry.sessionStarted === false) sessionId = null;
+				// NOTE: entries are rebuilt field by field, not spread — any new
+				// persisted field must be added here too or it is silently dropped
+				// on the next boot.
 				channels.set(id, {
 					mode,
 					agent,
 					model: VALID_MODELS.includes(entry.model) ? entry.model : CHANNEL_DEFAULT_MODEL,
 					sessionId,
 					remoteId,
+					autojoin: entry.autojoin === true,
 					lastName: typeof entry.lastName === 'string' ? entry.lastName : null,
 				});
 			}
@@ -107,6 +119,8 @@ function ensureFromParent(channelId, parentId) {
 		model: VALID_MODELS.includes(parent?.model) ? parent.model : CHANNEL_DEFAULT_MODEL,
 		sessionId: null,
 		remoteId: null,
+		// Threads are never voice channels; kept for a uniform entry shape.
+		autojoin: false,
 		lastName: null,
 	});
 	persist();
@@ -166,6 +180,28 @@ function setModel(channelId, model) {
 	entry.model = model;
 	persist();
 	log.info(`Channel ${channelId} model set to: ${model}`);
+}
+
+function getAutojoin(channelId) {
+	return channels.get(channelId)?.autojoin === true;
+}
+
+function setAutojoin(channelId, on) {
+	const entry = ensureChannel(channelId);
+	const next = on === true;
+	if (entry.autojoin === next) return;
+	entry.autojoin = next;
+	persist();
+	log.info(`Channel ${channelId} autojoin set to: ${next}`);
+}
+
+/** Voice channels opted in to autojoin. Used by the boot-time convergence scan. */
+function listAutojoinChannelIds() {
+	const out = [];
+	for (const [channelId, entry] of channels.entries()) {
+		if (entry.autojoin === true) out.push(channelId);
+	}
+	return out;
 }
 
 /**
@@ -268,6 +304,9 @@ module.exports = {
 	setAgent,
 	getModel,
 	setModel,
+	getAutojoin,
+	setAutojoin,
+	listAutojoinChannelIds,
 	getSession,
 	setSessionId,
 	setLastName,

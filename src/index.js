@@ -12,7 +12,7 @@ const { createClient, login, sendChunked, startTypingIndicator, resolveChannelNa
 const { handleCommand, dispatchSlashCommand, getRegisteredCommands } = require('./commands');
 const { reconcileRemotes } = require('./remote');
 const { transcribeVoiceMessage } = require('./stt');
-const { leaveVoice } = require('./voice');
+const { leaveVoice, handleVoiceStateUpdate, scanAutojoinOnBoot } = require('./voice');
 const { saveUploads } = require('./uploads');
 const scheduler = require('./scheduler');
 const { Events, ChannelType, MessageFlags, ApplicationCommandType } = require('discord.js');
@@ -369,10 +369,21 @@ client.on(Events.InteractionCreate, async interaction => {
 	}
 });
 
+// Autojoin adapter: forward the raw Discord event to voice.js, which owns all the
+// policy (who, which channel, follow vs leave). Same split as the slash path —
+// Discord plumbing stays in index.js. The listener is sync: discord.js does not
+// await handlers, so the rejection must be caught here.
+client.on(Events.VoiceStateUpdate, (oldState, newState) => {
+	handleVoiceStateUpdate(oldState, newState)
+		.catch(err => log.error('voiceStateUpdate error:', err.message || err));
+});
+
 client.on(Events.ClientReady, async () => {
 	log.info(`Connected as ${client.user.tag}`);
 	try { await registerSlashCommands(); } catch (err) { log.warn('registerSlashCommands failed:', err.message); }
 	try { await purgeInvalidChannels(); } catch (err) { log.warn('purgeInvalidChannels failed:', err.message); }
+	// After purgeInvalidChannels: never try to join a channel that just got pruned.
+	try { await scanAutojoinOnBoot(); } catch (err) { log.warn('scanAutojoinOnBoot failed:', err.message); }
 	scheduler.start();
 });
 

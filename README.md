@@ -152,6 +152,7 @@ Details:
 | `/codex` | Use Codex for this channel |
 | `/remote` | Claude only — toggle the channel between Discord mode and remote control via the Claude mobile app |
 | `/voice` | Voice channels only — toggle the voice assistant in this voice channel (join/leave) |
+| `/autojoin` | Voice channels only — toggle autojoin for this voice channel (the bot joins on its own when you connect) |
 | `/upgrade` | Sandbox only — update the container (apt + Claude Code + Codex) |
 | `/restart` | Admin only — restart the claudiscord service |
 | `!<command>` | Run a shell command (host if the channel is admin, container if sandbox) |
@@ -164,6 +165,14 @@ Type `/voice` in a **voice channel's text chat** to make the bot join that chann
 - The transcript (`🎙️ …`) and the reply are also posted to the voice channel's chat.
 - The voice channel is a regular channel: switch mode with `/admin` / `/sandbox` in its chat. Voice turns run the channel's agent and model; switching the agent is locked while the assistant is active (`/voice` to stop it first).
 - Voice replies use a dedicated speakable system prompt (no markdown, confirmation questions when the transcript looks garbled).
+
+### Autojoin
+
+Type `/autojoin` in a voice channel's text chat and the bot connects on its own whenever you join that channel — no `/voice` needed. It is **per channel and off by default**: only the channels you opt in to are ever joined, so the bot never lands in a call with other people and turns what you say to them into prompts.
+
+- Move to another autojoin channel and the bot follows; move to a channel without autojoin and it just leaves. Each voice channel keeps its own session, so following = a different conversation (its own mode/agent/model), not a moved one.
+- `/autojoin` off does not disconnect a bot that is already there — use `/voice` for that. Conversely `/voice` to kick it out of an autojoin channel only holds until you leave the channel: reconnect and it comes back.
+- `/status` shows `Autojoin: on` when the current channel is opted in.
 
 Note: `@discordjs/opus` has no prebuilt binary for some platforms (e.g. ARM64 + recent glibc) and its bundled libopus fails to compile with GCC ≥ 14; if `npm install` fails there, rerun it as `CFLAGS="-Wno-error=implicit-function-declaration" npm install`.
 

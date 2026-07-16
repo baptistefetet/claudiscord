@@ -62,7 +62,6 @@ const HALLUCINATION_PATTERNS = [
 // Spoken canned phrases. French on purpose: single-user bot, matches the
 // whisper STT_LANGUAGE default. TTS clips for these are cached after first use.
 const PHRASES = {
-	joined: (mode) => `Mode vocal activé, canal en mode ${mode === 'sandbox' ? 'sandbox' : 'admin'}.`,
 	busy: 'Un instant, je termine une autre tâche.',
 	error: 'Désolé, une erreur est survenue pendant le traitement.',
 	timeout: 'Désolé, la réponse a pris trop de temps et a été interrompue.',
@@ -70,6 +69,14 @@ const PHRASES = {
 
 // Single active voice session (single-user bot, one process, one connection).
 let active = null;
+// Channel id whose join is in flight, or null. `active` alone cannot serialize
+// joins: it is only assigned at the very END of joinVoice, after entersState has
+// awaited readiness for up to 15 s. Within that window `active` is still null, so
+// a concurrent caller (autojoin firing while a manual /voice join is settling)
+// would start a second session — and @discordjs/voice reuses the connection for a
+// guild, so both would attach their own speaking handler to the same receiver
+// (duplicate turns) while the overwritten session leaks past leaveVoice's reach.
+let joining = null;
 const phraseCache = new Map(); // canned phrase text -> decoded PCM Buffer
 
 function isVoiceModeAvailable() {
@@ -269,9 +276,22 @@ function onSpeakingStart(session, userId) {
  * Join `channel` (a GuildVoice channel) and start the assistant. Caller has
  * already validated availability, channel type and agent. Announces the
  * channel mode out loud once ready.
+ *
+ * The `joining` guard is held here rather than in the callers so it covers EVERY
+ * path (/voice, autojoin, boot scan) — see the declaration for why `active` is
+ * not enough on its own.
  */
 async function joinVoice(channel) {
-	if (active) throw new Error('Voice assistant already active');
+	if (active || joining) throw new Error('Voice assistant already active');
+	joining = channel.id;
+	try {
+		return await connectAndStart(channel);
+	} finally {
+		joining = null;
+	}
+}
+
+async function connectAndStart(channel) {
 	const client = getClient();
 
 	const connection = joinVoiceChannel({
@@ -347,20 +367,38 @@ async function joinVoice(channel) {
 	active = session;
 	resetIdleTimer(session);
 
-	const mode = sessions.getMode(channel.id);
-	speak(session, PHRASES.joined(mode), { cache: true })
-		.catch(err => log.warn('voice join announcement failed:', err.message))
-		.finally(() => {
-			// Idle after the announcement → ring off; skip if a turn already started.
-			if (active === session && session.state === 'listening') session.player.pause();
-		});
+	// Join silently: the mode is already announced in the channel's chat, and a
+	// spoken greeting on every single connect gets old fast. Removing it also drops
+	// the whole class of "the greeting's first word is clipped" problems — autojoin
+	// fires the instant the user's own client connects, so it is still finishing its
+	// voice handshake while the bot is already Ready.
+	//
+	// Settle the player straight to Paused instead: the idle bed is silent
+	// (BED_IDLE = 0) but a live player keeps transmitting, which shows the bot as
+	// permanently speaking. pause() only works from Playing and play() starts in
+	// Buffering, so wait for the transition rather than pausing blind. The lib's 5
+	// silence frames on pause clear the speaking flag, and its own 5 s UDP keepalive
+	// keeps the session up. Skipped if a turn already claimed the player.
+	entersState(session.player, AudioPlayerStatus.Playing, 5_000)
+		.then(() => { if (active === session && session.state === 'listening') session.player.pause(); })
+		.catch(err => log.warn('voice: player never reached Playing:', err.message));
 	return session;
 }
 
-/** Tear down the active session, if any. Safe to call twice. */
-function leaveVoice() {
+/**
+ * Tear down the active session, if any. Safe to call twice.
+ *
+ * `suppressAutojoin` is set only by the explicit `/voice` toggle: kicking the
+ * bot out of an autojoin channel must not have it walk straight back in. The
+ * other callers (idle timeout, disconnect, shutdown) don't need it — autojoin is
+ * only ever re-triggered by a voiceStateUpdate, which none of them produce.
+ * Nothing to suppress when the policy is already off: recording it there would
+ * only linger and block a later `/autojoin` on during the same stay.
+ */
+function leaveVoice({ suppressAutojoin = false } = {}) {
 	const session = active;
 	if (!session) return false;
+	if (suppressAutojoin && sessions.getAutojoin(session.channelId)) suppressed.add(session.channelId);
 	active = null;
 	clearTimeout(session.idleTimer);
 	session.mixer.stopSpeech();
@@ -371,10 +409,150 @@ function leaveVoice() {
 	return true;
 }
 
+/* ---------------------------------------------------------------- autojoin */
+
+/**
+ * Autojoin: the bot connects on its own when the authorized user joins a voice
+ * channel whose `autojoin` flag is set (`/autojoin`, persisted per channel in
+ * sessions.json). Opt-in per channel — that IS the allowlist, so the bot never
+ * joins a call by surprise and turns every one of the user's sentences into a
+ * prompt.
+ *
+ * Policy vs session are orthogonal:
+ *   - `/autojoin` off does NOT disconnect a bot that is already connected.
+ *   - `/voice` off does NOT clear the policy — it suppresses it for this stay only.
+ *
+ * On a move, "following" is leave + join, never a connection move: the session is
+ * keyed by the voice channel's own id, so the destination brings its own
+ * mode/agent/model/sessionId and re-announces its mode. Moving to a channel
+ * without autojoin just leaves — a bot alone in a channel can do nothing anyway
+ * (onSpeakingStart only ever reacts to AUTHORIZED_USER_ID).
+ */
+
+// Channels the user kicked the bot out of with `/voice` while autojoin was on.
+// In-memory only, and cleared as soon as they leave the channel: the kick holds
+// for the current stay, then autojoin re-arms on the next connect.
+const suppressed = new Set();
+
+/** Explicitly re-arm autojoin for a channel (used when the policy is turned ON). */
+function clearAutojoinSuppression(channelId) {
+	suppressed.delete(channelId);
+}
+
+/** The authorized user's current voice channel in `guild`, straight from the gateway cache. */
+function userVoiceChannelId(guild) {
+	return guild?.voiceStates?.cache?.get(config.AUTHORIZED_USER_ID)?.channelId || null;
+}
+
+function isAutojoinTarget(channel) {
+	return isVoiceModeAvailable()
+		&& isSupportedVoiceChannel(channel)
+		&& sessions.getAutojoin(channel.id)
+		&& !suppressed.has(channel.id)
+		// The user must actually be in there: this makes the function safe to call
+		// from the boot scan and from `/autojoin` on, not just from the event path.
+		&& userVoiceChannelId(channel.guild) === channel.id;
+}
+
+/**
+ * Join `channel` if the autojoin policy, the live state and the user's presence
+ * all allow it, then converge on wherever the user actually ended up.
+ *
+ * `seen` carries the channels already attempted in the current convergence chain
+ * and guarantees termination: without it, a channel that keeps failing to join
+ * (missing Connect permission, say) would bounce between here and reconcile
+ * forever. Each fresh event starts a fresh chain, so a later retry still works.
+ */
+async function maybeAutojoin(channel, seen = new Set()) {
+	if (active || joining) return;
+	if (seen.has(channel.id)) return;
+	if (!isAutojoinTarget(channel)) return;
+	seen.add(channel.id);
+
+	try {
+		const session = await joinVoice(channel);
+		log.info(`voice: autojoined ${channel.id}`);
+		await postToChat(session, `🎙️ Autojoin — voice assistant joined **${resolveChannelName(channel)}** (mode **${sessions.getMode(channel.id)}**, agent **${sessions.getAgent(channel.id)}**). Send \`/voice\` to stop it.`);
+	} catch (err) {
+		log.error('voice autojoin failed:', err.message || err);
+	}
+
+	await reconcileAutojoin(channel.guild, seen);
+}
+
+/**
+ * Converge the live session on the user's current channel. Called after every
+ * autojoin attempt because that attempt is a wide async window (entersState up to
+ * 15 s, plus the chat post) during which the user may have left or moved on: their
+ * voiceStateUpdate was either dropped by the `joining` guard or found no session
+ * to tear down, so nothing else will fix it. Also recovers a failed join, whose
+ * destination event was swallowed the same way.
+ */
+async function reconcileAutojoin(guild, seen) {
+	const nowId = userVoiceChannelId(guild);
+	if (getActiveVoiceChannelId() === nowId) return; // already converged (both null included)
+	if (getActiveVoiceChannelId()) {
+		log.info('voice: user moved during a join, backing out');
+		leaveVoice();
+	}
+	if (!nowId) return;
+	const next = guild.channels.cache.get(nowId);
+	if (next) await maybeAutojoin(next, seen);
+}
+
+/**
+ * voiceStateUpdate handler. Discord fires this event for far more than channel
+ * changes (mute, deafen, streaming, camera, server-mute…), and for every member
+ * including the bot itself — whose own join/leave, plus the leave+join burst of a
+ * follow, would otherwise re-enter this logic. Both are filtered up front.
+ */
+async function handleVoiceStateUpdate(oldState, newState) {
+	if ((newState?.id || oldState?.id) !== config.AUTHORIZED_USER_ID) return;
+
+	const from = oldState?.channelId || null;
+	const to = newState?.channelId || null;
+	if (from === to) return; // mute/deafen/stream/camera: not a channel transition
+
+	// Leaving a channel re-arms autojoin there (see `suppressed`).
+	if (from) suppressed.delete(from);
+
+	// The user left the channel the bot is sitting in — whether they disconnected
+	// or moved elsewhere, the bot leaves. Checked before any availability gate: an
+	// active session must always be able to shut down.
+	if (from && from === getActiveVoiceChannelId()) {
+		log.info(`voice: user left ${from}, leaving`);
+		leaveVoice();
+	}
+
+	if (to) await maybeAutojoin(newState.channel);
+}
+
+/**
+ * The gateway only delivers voiceStateUpdate on CHANGES, so a user already
+ * sitting in an autojoin channel when the process boots (typical after
+ * `/restart`) would never trigger one. Converge once on ClientReady. Scoped to
+ * opted-in channels, so it can't produce a surprise join.
+ */
+async function scanAutojoinOnBoot() {
+	if (!isVoiceModeAvailable()) return;
+	const client = getClient();
+	for (const channelId of sessions.listAutojoinChannelIds()) {
+		const channel = client.channels.cache.get(channelId);
+		// isAutojoinTarget does the real check (is the user actually in there?).
+		if (!channel) continue;
+		await maybeAutojoin(channel);
+		if (active) return; // one voice channel at a time
+	}
+}
+
 module.exports = {
 	isVoiceModeAvailable,
 	isSupportedVoiceChannel,
 	getActiveVoiceChannelId,
 	joinVoice,
 	leaveVoice,
+	maybeAutojoin,
+	clearAutojoinSuppression,
+	handleVoiceStateUpdate,
+	scanAutojoinOnBoot,
 };

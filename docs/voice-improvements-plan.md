@@ -56,20 +56,6 @@ regex) into `HALLUCINATION_PATTERNS` (`voice.js`, currently ~6 FR patterns).
 
 Files: `src/voice.js`. Effort: low. Value: robustness.
 
-## Autojoin
-
-Goal: the bot joins the voice channel automatically when the authorized user
-joins one, without typing `/voice` (OpenClaw follow-users, simplified to the
-single authorized user).
-
-- Listen to `voiceStateUpdate`; when `AUTHORIZED_USER_ID` joins a supported
-  `GuildVoice` channel and no session is active, call `joinVoice`. Leave when
-  they leave (we already have `leaveVoice` + the idle timeout).
-- Gate behind config `VOICE_AUTOJOIN` (default off) to avoid surprise joins.
-
-Files: `src/index.js` (event), `src/voice.js`, `src/config.js`.
-Effort: medium. Value: convenience.
-
 ## Vocal ack before long tasks
 
 Goal: a brief spoken "je regarde ça" as soon as a turn enters THINKING, so the

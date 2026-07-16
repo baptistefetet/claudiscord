@@ -24,6 +24,8 @@ const {
 	getActiveVoiceChannelId,
 	joinVoice,
 	leaveVoice,
+	maybeAutojoin,
+	clearAutojoinSuppression,
 } = require('./voice');
 const { getClient, resolveChannelName, sendChunked } = require('./discord');
 const { loadAllJobs } = require('./jobs-store');
@@ -588,7 +590,9 @@ async function handleStatus({ channel, channelId, mode, agent, model, remoteId }
 	const modelLine = agent === 'claude' ? `\nModel: **${model}**` : '';
 	const codexLine = isCodexAvailable(mode) ? '' : `\nCodex unavailable in **${mode}** mode.`;
 	const voiceLine = getActiveVoiceChannelId() === channelId ? '\nVoice assistant: **active**' : '';
-	await channel.send(`Channel mode: **${mode}**\nAgent: **${agent}**${modelLine}${voiceLine}${remoteLine}${dockerNote}${codexLine}`);
+	// Only shown when on: meaningless (and always false) outside a voice channel.
+	const autojoinLine = sessions.getAutojoin(channelId) ? '\nAutojoin: **on**' : '';
+	await channel.send(`Channel mode: **${mode}**\nAgent: **${agent}**${modelLine}${voiceLine}${autojoinLine}${remoteLine}${dockerNote}${codexLine}`);
 	return true;
 }
 
@@ -607,8 +611,10 @@ async function handleVoice({ channel, channelId, agent }) {
 	}
 	const activeId = getActiveVoiceChannelId();
 	if (activeId === channelId) {
-		leaveVoice();
-		await channel.send('🔇 Voice assistant left.');
+		// Explicit kick: hold autojoin off until the user leaves this channel,
+		// otherwise the bot would just walk back in on the next voice event.
+		leaveVoice({ suppressAutojoin: true });
+		await channel.send(`🔇 Voice assistant left.${sessions.getAutojoin(channelId) ? ' Autojoin stays **on** — I rejoin next time you connect here.' : ''}`);
 		return true;
 	}
 	if (activeId) {
@@ -625,6 +631,45 @@ async function handleVoice({ channel, channelId, agent }) {
 		log.error('voice join error:', err.message);
 		await channel.send(`Voice join failed: ${err.message?.slice(0, 300) || 'unknown'}`);
 	}
+	return true;
+}
+
+/**
+ * /autojoin — toggle this voice channel's autojoin policy (persisted per channel).
+ * Deliberately orthogonal to `/voice`, which drives the live session: turning the
+ * policy off leaves a connected bot alone, turning it on connects right away if
+ * the user is already sitting in the channel (rather than making them reconnect).
+ */
+async function handleAutojoin({ channel, channelId }) {
+	if (!isVoiceModeAvailable()) {
+		await channel.send('Voice mode requires `OPENAI_API_KEY` and `GROQ_API_KEY` in `.env`.');
+		return true;
+	}
+	if (!isSupportedVoiceChannel(channel)) {
+		await channel.send('`/autojoin` only works in a voice channel’s text chat — it controls whether I join that voice channel on my own.');
+		return true;
+	}
+
+	const next = !sessions.getAutojoin(channelId);
+	sessions.setAutojoin(channelId, next);
+	const name = resolveChannelName(channel);
+
+	if (!next) {
+		const stillIn = getActiveVoiceChannelId() === channelId ? ' I stay connected for now — send `/voice` to disconnect me.' : '';
+		await channel.send(`🚪 Autojoin **off** for **${name}**.${stillIn}`);
+		return true;
+	}
+
+	await channel.send(`🚪 Autojoin **on** for **${name}** — I join on my own when you connect here.`);
+	// Turning the policy on is an explicit re-arm: drop any suppression left by a
+	// `/voice` kick earlier in this same stay, which would otherwise silently
+	// swallow the immediate join below.
+	clearAutojoinSuppression(channelId);
+	// The slash path hands us an interaction-scoped channel proxy; voice.js needs
+	// the real channel (same reason as handleVoice). No-op unless the user is
+	// already in the channel and nothing else is active.
+	const realChannel = getClient().channels.cache.get(channelId) || channel;
+	await maybeAutojoin(realChannel);
 	return true;
 }
 
@@ -710,6 +755,7 @@ const COMMANDS = [
 	{ name: '/codex', help: 'Use Codex for this channel', handler: handleCodex },
 	{ name: '/remote', help: 'Toggle this channel between Discord mode and remote mode (Claude mobile app)', remoteAllowed: true, handler: handleRemote },
 	{ name: '/voice', help: 'Toggle the voice assistant in this voice channel (join/leave)', handler: handleVoice },
+	{ name: '/autojoin', help: 'Toggle autojoin for this voice channel (join on my own when you connect)', handler: handleAutojoin },
 	{ name: '!<command>', help: 'Execute a shell command (host if admin, container if sandbox)', helpOnly: true },
 	{ name: '/upgrade', help: 'Update sandbox container (apt + Claude Code + Codex)', modes: ['sandbox'], modeError: '`/upgrade` is only available in sandbox mode.', handler: handleUpgrade },
 	{ name: '/restart', help: 'Restart the claudiscord service', modes: ['admin'], modeError: '`/restart` is only available in admin mode.', handler: handleRestart },
