@@ -3,14 +3,13 @@ const path = require('path');
 const { spawn, execFileSync } = require('child_process');
 const {
 	CLAUDE_BIN,
-	PROMPT_TIMEOUT_MS,
 	ADMIN_USER_HOME,
 	SANDBOX_HOST_HOME,
 	CONTAINER_NAME,
 	SANDBOX_USER_HOME,
 } = require('./config');
 const { ensureContainer } = require('./container');
-const { spawnWithTimeout } = require('./spawn');
+const { spawnCollect } = require('./spawn');
 const log = require('./logger');
 
 // Claude-only; Codex governs its tools via --yolo. `claude -p` already drops the
@@ -298,7 +297,7 @@ function finalizeClaudeResult(result, label) {
  * and how the process runs, so host and sandbox share this one executor:
  *   - label:     log / diagnostic label
  *   - extraArgs: extra CLI flags (e.g. --dangerously-skip-permissions in sandbox)
- *   - spawn:     (args, { timeoutMs }) => Promise<{ stdout, stderr, code }>
+ *   - spawn:     (args) => Promise<{ stdout, stderr, code }>
  * On spawn rejection the partial session id is attached; otherwise the
  * stream-json output is parsed once and finalized (or thrown).
  */
@@ -307,7 +306,6 @@ async function executeClaude(prompt, options = {}, env) {
 		sessionId = null,
 		systemPrompt = null,
 		model = null,
-		timeoutMs = PROMPT_TIMEOUT_MS,
 	} = options;
 
 	if (!systemPrompt) {
@@ -324,7 +322,7 @@ async function executeClaude(prompt, options = {}, env) {
 
 	let result;
 	try {
-		result = await env.spawn(args, { timeoutMs });
+		result = await env.spawn(args);
 	} catch (err) {
 		err.sessionId = sessionIdFromEvents(parseStreamJsonEvents(err.stdout));
 		throw err;
@@ -336,9 +334,9 @@ async function executeClaude(prompt, options = {}, env) {
 const hostClaudeEnv = {
 	label: 'Claude',
 	extraArgs: [],
-	spawn: (args, { timeoutMs }) => spawnWithTimeout(
+	spawn: args => spawnCollect(
 		CLAUDE_BIN, args,
-		{ timeoutMs, cwd: ADMIN_USER_HOME, env: ADMIN_ENV, label: 'Claude' },
+		{ cwd: ADMIN_USER_HOME, env: ADMIN_ENV, label: 'Claude' },
 	),
 };
 

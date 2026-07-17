@@ -29,8 +29,7 @@ const AGENT_ID_STRICT = /^[0-9a-f]{8}$/;
  * for `docker exec claude --bg ...` (and `claude stop` in sandbox), where the
  * in-container daemon inherits the docker exec pipe and keeps the wrapper
  * alive until we hit the timeout. SIGTERMing the docker exec wrapper does
- * NOT kill the in-container daemon (same mechanism leveraged by
- * `spawnInContainer`), so the started session survives.
+ * NOT kill the in-container daemon, so the started session survives.
  */
 function spawnOnce(cmd, args, { timeoutMs, label, cwd, env, earlyMatch }) {
 	return new Promise((resolve) => {

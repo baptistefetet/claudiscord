@@ -58,7 +58,6 @@ const CONTAINER_NAME = 'claudiscord-sandbox';
 const DOCKER_IMAGE = 'claudiscord-sandbox';
 const CONTAINER_CPUS = 1;
 
-const PROMPT_TIMEOUT_MS = 1_200_000; // 20 min — room for large dev prompts
 const SHELL_TIMEOUT_MS = 300_000;
 const DOCKER_CMD_TIMEOUT = 30_000;
 const UPGRADE_TIMEOUT_MS = 300_000;
@@ -102,7 +101,6 @@ module.exports = {
 	SANDBOX_FILES_DIR,
 	STATE_DIR,
 	JOBS_FILENAME,
-	PROMPT_TIMEOUT_MS,
 	SHELL_TIMEOUT_MS,
 	DISCORD_MAX_MSG_LENGTH,
 	TYPING_INTERVAL_MS,

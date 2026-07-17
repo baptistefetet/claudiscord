@@ -1,20 +1,19 @@
 const { spawn } = require('child_process');
-const { PROMPT_TIMEOUT_MS } = require('./config');
 const log = require('./logger');
 
 /**
- * Spawn a command with timeout, stdout/stderr collection, and SIGTERM→SIGKILL.
- * Returns { stdout, stderr, code }. Waits for the process to exit naturally —
- * if the child launches a background task (e.g. forced by the harness when a
- * `sleep` is too long), we wait for it to complete rather than killing early.
- * The trade-off is that truly interactive commands (`gws auth login`, ssh to
- * an unknown host, `apt install` without `-y`) will hang until PROMPT_TIMEOUT_MS.
+ * Spawn a command with stdout/stderr collection, resolving on exit.
+ * Returns { stdout, stderr, code }.
+ *
+ * Deliberately unbounded: only the operator knows how long a given prompt should
+ * take, so a stuck agent holds the global queue until they intervene rather than
+ * being killed mid-operation. Interactive commands (`apt install` without `-y`,
+ * ssh to an unknown host) therefore hang until the operator kills them.
  *
  * Agent-agnostic: used by the Claude, Codex and container executors alike.
  */
-function spawnWithTimeout(cmd, args, options = {}) {
+function spawnCollect(cmd, args, options = {}) {
 	const {
-		timeoutMs = PROMPT_TIMEOUT_MS,
 		cwd,
 		env,
 		label = 'process',
@@ -37,31 +36,12 @@ function spawnWithTimeout(cmd, args, options = {}) {
 		child.stdout.on('data', chunk => { stdout += chunk; });
 		child.stderr.on('data', chunk => { stderr += chunk; });
 
-		let killed = false;
-		let killTimer = null;
-		const timer = setTimeout(() => {
-			killed = true;
-			log.warn(`${label} timeout after ${timeoutMs}ms, sending SIGTERM`);
-			child.kill('SIGTERM');
-			killTimer = setTimeout(() => {
-				try { child.kill('SIGKILL'); } catch (_) {}
-			}, 5000);
-		}, timeoutMs);
-
 		child.on('close', (code) => {
-			clearTimeout(timer);
-			if (killTimer) clearTimeout(killTimer);
-			if (killed) {
-				reject(Object.assign(new Error('timeout'), { code: 124, stdout, stderr }));
-				return;
-			}
 			if (stderr) log.warn(`${label} stderr:`, stderr.slice(0, 500));
 			resolve({ stdout, stderr, code });
 		});
 
 		child.on('error', (err) => {
-			clearTimeout(timer);
-			if (killTimer) clearTimeout(killTimer);
 			err.stdout = stdout;
 			err.stderr = stderr;
 			reject(err);
@@ -69,4 +49,4 @@ function spawnWithTimeout(cmd, args, options = {}) {
 	});
 }
 
-module.exports = { spawnWithTimeout };
+module.exports = { spawnCollect };

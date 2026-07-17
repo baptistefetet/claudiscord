@@ -52,7 +52,6 @@ const HALLUCINATION_PATTERNS = [
 const PHRASES = {
 	busy: 'Un instant, je termine une autre tâche.',
 	error: 'Désolé, une erreur est survenue pendant le traitement.',
-	timeout: 'Désolé, la réponse a pris trop de temps et a été interrompue.',
 };
 
 let active = null;
@@ -229,9 +228,8 @@ function onSpeakingStart(session, userId) {
 				await handleTurn(session, pcm);
 			} catch (err) {
 				log.error('voice turn error:', err.message || err);
-				const spoken = err.code === 124 ? PHRASES.timeout : PHRASES.error;
 				await postToChat(session, `Voice turn failed: ${err.message?.slice(0, 300) || 'unknown'}`);
-				await speak(session, spoken, { cache: true }).catch(() => {});
+				await speak(session, PHRASES.error, { cache: true }).catch(() => {});
 			} finally {
 				if (active === session) {
 					session.state = 'listening';

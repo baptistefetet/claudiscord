@@ -45,7 +45,7 @@ src/
   logger.js           # stdout/stderr logging (journald-friendly)
   discord.js          # Client, sendToChannel, sendChunked (splitMessage now private), typing indicator
   queue.js            # Single global FIFO (runQueued, isBusy)
-  spawn.js            # spawnWithTimeout: generic subprocess runner (timeout, SIGTERM→SIGKILL)
+  spawn.js            # spawnCollect: generic subprocess runner (unbounded, no timeout)
   claude.js           # Claude exec/login (host + sandbox), stream-json parse, OAuth usage (getClaudeUsage)
   codex.js            # Codex exec/login (host + sandbox), JSONL parse, account usage (getCodexUsage)
   container.js        # Docker: image/container, sandbox env factories (sandboxClaudeEnv/sandboxCodexEnv)
@@ -216,7 +216,7 @@ SANDBOX_HOST_HOME/
 
 ### Background tasks
 
-`spawnWithTimeout` (`src/spawn.js`) waits for the active CLI to exit naturally. After 20 minutes, the process is killed and the user receives a timeout error; partial output is not recovered. The channel session remains resumable.
+`spawnCollect` (`src/spawn.js`) waits for the active CLI to exit naturally, with no timeout: a prompt has no predictable duration and only the operator knows what a given one should take. A stuck agent therefore holds the global queue indefinitely — every channel and scheduled job blocks behind it, which is the intended fail-stop. Recovery is manual: inspect from a host shell, kill the offending process, then resume the channel session.
 
 ### Image rebuild
 
@@ -232,7 +232,7 @@ bash scripts/rebuild-sandbox.sh
 - Model follows the channel/job snapshot; reasoning effort is hardcoded by model (`opus` → `xhigh`, `sonnet` → `medium`)
 - Host cwd: `os.homedir()` of the user running the service (auto-loads `$HOME/CLAUDE.md`) — typically `/root` on Linux when the service runs as root, `/var/root` on macOS
 - Sandbox cwd: `/home/claude`
-- Timeout: 1200s (SIGTERM then SIGKILL after 5s, no partial-answer recovery)
+- Timeout: none — the CLI runs until it exits on its own
 
 ## Codex CLI usage
 
@@ -276,7 +276,7 @@ bash scripts/rebuild-sandbox.sh
 - `agent` is `"claude"` or `"codex"`. Snapshot of the channel's agent at scheduling time. Optional for backward compatibility — fallback is `"claude"`.
 - `model` is `"opus"` or `"sonnet"`. Snapshot of the channel's Claude model at scheduling time and ignored by Codex. Optional for backward compatibility — fallback is `"sonnet"`.
 - `remaining`: `0` = infinite, `>0` = decremented each run, job removed when it hits `0`.
-- `lastSessionId`: diagnostic-only. Scheduler writes the agent session UUID of the last run (set even on error/timeout via `err.sessionId`). Jobs always run with a fresh session (`sessionId: null`), so this is never resumed — it just locates the run's transcript on disk: Claude at `<home>/.claude/projects/<cwd-hash>/<uuid>.jsonl` (admin cwd `/root` → `-root`, sandbox `/home/claude` → `-home-claude`), Codex via `find <home>/.codex/sessions -name "*<uuid>*"`.
+- `lastSessionId`: diagnostic-only. Scheduler writes the agent session UUID of the last run (set even on error via `err.sessionId`). Jobs always run with a fresh session (`sessionId: null`), so this is never resumed — it just locates the run's transcript on disk: Claude at `<home>/.claude/projects/<cwd-hash>/<uuid>.jsonl` (admin cwd `/root` → `-root`, sandbox `/home/claude` → `-home-claude`), Codex via `find <home>/.codex/sessions -name "*<uuid>*"`.
 - Unique key: `mode:id` (the mode is implicit from the file the job lives in).
 
 ### Storage
@@ -297,7 +297,7 @@ bash scripts/rebuild-sandbox.sh
 ### Notifications
 
 - When `notify: true` and the output matches `notifyPattern` (regex, dotall flag `s`, fallback `includes()` on invalid regex), the output is sent to `channelId`.
-- Timeouts and errors are also announced on the channel when `notify: true`.
+- Errors are also announced on the channel when `notify: true`.
 
 ## Sessions
 
@@ -306,7 +306,7 @@ bash scripts/rebuild-sandbox.sh
   { "channels": { "<channelId>": { "mode": "admin"|"sandbox", "agent": "claude"|"codex", "model": "opus"|"sonnet", "sessionId": "<uuid>", "remoteId": null|"<agentId>", "lastName": "..." } } }
   ```
 - `sessionId` belongs to the active agent. Both Claude and Codex allocate it on the first invocation and emit it early in JSON output; `executor.js` persists it inside the global queue.
-- Timeout errors retain partial stdout so the agent adapter can attach an already-emitted UUID before the error is surfaced. The next prompt can therefore resume even when the first timed out after session initialization.
+- Spawn errors retain partial stdout so the agent adapter can attach an already-emitted UUID before the error is surfaced. The next prompt can therefore resume even when the first failed after session initialization.
 - Legacy entries without `agent` load as Claude. A legacy `sessionStarted: false` drops its possibly uncreated UUID; the field disappears on the next persistence.
 - `remoteId` is `null` when the channel is in Discord mode (default), or an 8-hex agent ID when the channel is currently driven from the Claude mobile app via `/remote`. See "Remote control" below.
 - `lastName` is a display snapshot to make the sessions file readable during debugging.
@@ -322,7 +322,7 @@ bash scripts/rebuild-sandbox.sh
 - Asymmetric continuity: `--resume` makes `claude --bg` copy the existing Discord conversation into the bg session's JSONL, so the mobile user picks up where Discord left off. But `--bg` manages its own UUID and we don't reconcile back — `setRemoteId` wipes the channel's `sessionId`, so the next Discord message after `/remote` stop starts a fresh session. Going Discord → mobile keeps history; coming back Discord → fresh.
 - Naming: the mobile app shows each session under `<channelName>` (DM = username), so multiple channels can run in parallel and stay discoverable.
 - Gating (`src/commands.js`): while `remoteId` is set, only `/remote`, `/status`, `/jobs`, `/usage`, `/login` are accepted in that channel. Every other input (plain text, `!shell`, other slash commands) returns an invalidation hint and does **not** spawn `claude -p` — this prevents two concurrent processes touching the same session. Voice messages are also dropped *before* Groq STT (`src/index.js`), so a vocal in remote mode neither pays for transcription nor leaks the `🎙️ <transcript>` echo.
-- Cross-channel sandbox lockout: while *any* channel holds a sandbox remote, every other sandbox prompt / `!shell` / scheduled job is refused (`hasActiveSandboxRemote()` check in `executor.js`, `commands.js`, `scheduler.js`). Reason: `killAgentProcessesInContainer` pkills every non-init PID in the container on timeout, which would scoop up the live remote daemon. Admin channels are unaffected.
+- Sandbox `!shell` lockout: while *any* channel holds a sandbox remote, sandbox `!shell` is refused (`hasActiveSandboxRemote()` check in `commands.js`). Reason: `executeShell`'s timeout pkills by command pattern inside the container, which can match the live remote daemon. Prompts and scheduled jobs are unaffected — they run concurrently with a remote by design.
 - Stop: `/remote` while active runs `claude stop <agentId>` (host or container), then deletes `~/.claude/jobs/<agentId>/` so the agent stops showing up in `claude agents` as a stopped session (`claude stop` keeps the conversation around by design). Strict 8-hex guard on the agentId before any `rm -rf`. Finally clears `remoteId` and calls `scheduler.reloadJobs()` — Claude may have edited the jobs files during the mobile session, and we did not go through the executor path that normally triggers a reload.
 - Startup reconciliation: `reconcileRemotes()` runs after `sessions.load()` and best-effort-stops every persisted `remoteId` (also doing the jobs/ cleanup). After a machine reboot the daemon is gone and the stop fails harmlessly; the channel reverts to Discord mode either way.
 - Sandbox prerequisite: the in-container claude daemon needs valid sandbox Claude credentials. Run `/sandbox`, select Claude with `/opus` or `/sonnet`, then `/login` before using sandbox `/remote`.

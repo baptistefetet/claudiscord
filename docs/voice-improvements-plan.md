@@ -67,17 +67,17 @@ Files: `src/voice.js`. Effort: low. Value: UX polish.
 ## Deferred to v2 — Case B: interrupt while THINKING (agent cancel)
 
 Cutting the bot *while the agent is still running* requires killing the
-`claude -p` / `codex exec` child. The mechanism exists (`spawnWithTimeout`
-already does SIGTERM→SIGKILL on timeout) but it needs new plumbing and accepts a
-lossy cancel:
+`claude -p` / `codex exec` child. No kill mechanism exists anymore (`spawnCollect`
+is unbounded), so this needs one built from scratch, plus new plumbing, and it
+accepts a lossy cancel:
 
 - Thread an `AbortController` from `voice.js` → `executor.js` → `spawn.js` to kill
   the specific in-flight FIFO item (`queue.js` is a bare promise chain today, no
   cancel API).
 - Hard kill, no partial recovery; the session stays resumable (UUID persisted on
   error) but the interrupted turn's assistant message is partial.
-- Sandbox caveat: `killAgentProcessesInContainer` pkills all non-init PIDs →
-  interacts with the sandbox-remote lockout.
+- Sandbox caveat: killing the `docker exec` client severs the host-side pipe only
+  — the in-container agent keeps running and would need an explicit kill.
 
 Out of scope for v1.
 

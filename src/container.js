@@ -12,7 +12,7 @@ const {
 	DOCKER_CMD_TIMEOUT,
 } = require('./config');
 const { getDefaultClaudeMd } = require('./prompts');
-const { spawnWithTimeout } = require('./spawn');
+const { spawnCollect } = require('./spawn');
 const log = require('./logger');
 
 const DOCKERFILE_DIR = path.resolve(__dirname, '..');
@@ -160,33 +160,6 @@ function ensureContainer() {
 	log.info(`Created and started container '${CONTAINER_NAME}'`);
 }
 
-/**
- * Kill all non-essential processes inside the container (cleanup after timeout).
- * Killing docker exec only kills the host-side pipe, not the container process.
- * With --init, PID 1 is tini; we also spare the 'sleep' process that keeps the container alive.
- */
-function killAgentProcessesInContainer(label) {
-	try {
-		execFileSync('docker', ['exec', CONTAINER_NAME, 'sh', '-c',
-			'for proc in /proc/[0-9]*; do pid=${proc#/proc/}; [ "$pid" = 1 ] && continue; [ "$pid" = "$$" ] && continue; comm=$(cat "$proc/comm" 2>/dev/null || true); [ "$comm" = "sleep" ] && continue; kill -9 "$pid" 2>/dev/null || true; done; true',
-		], { timeout: 5000 });
-		log.info(`${label}: killed orphaned processes`);
-	} catch {
-		// Process already dead or nothing to kill — either way, fine
-	}
-}
-
-// docker exec wrapper shared by both sandbox agents: on a timeout (code 124)
-// kill the orphaned in-container processes — killing docker exec only severs the
-// host-side pipe, not the process still running inside the container.
-function spawnInContainer(argv, { timeoutMs, label, input = null }) {
-	return spawnWithTimeout('docker', argv, { timeoutMs, label, input })
-		.catch((err) => {
-			if (err.code === 124) killAgentProcessesInContainer(label);
-			throw err;
-		});
-}
-
 // Sandbox environment for Claude: run `claude` inside the container with
 // permissions skipped (the container IS the sandbox boundary). A factory because
 // ensureContainer() must run before each use.
@@ -196,9 +169,9 @@ function sandboxClaudeEnv() {
 	return {
 		label,
 		extraArgs: ['--dangerously-skip-permissions'],
-		spawn: (args, { timeoutMs }) => spawnInContainer(
-			['exec', '-i', CONTAINER_NAME, 'claude', ...args],
-			{ timeoutMs, label },
+		spawn: args => spawnCollect(
+			'docker', ['exec', '-i', CONTAINER_NAME, 'claude', ...args],
+			{ label },
 		),
 	};
 }
@@ -222,18 +195,18 @@ function isCodexAvailableInContainer() {
 
 // Sandbox environment for Codex: run `codex` inside the container with CODEX_HOME
 // pointing at the sandbox user's config. Missing-binary detection is env-specific
-// (docker exec exits non-zero with a "not found" stderr rather than ENOENT); the
-// timeout-kill is handled by spawnInContainer.
+// (docker exec exits non-zero with a "not found" stderr rather than ENOENT).
 function sandboxCodexEnv() {
 	ensureContainer();
 	const label = `Codex container [${CONTAINER_NAME}]`;
 	const codexHome = path.posix.join(SANDBOX_USER_HOME, '.codex');
 	return {
 		label,
-		spawn: (args, { timeoutMs, input }) => spawnInContainer(
+		spawn: (args, { input }) => spawnCollect(
+			'docker',
 			['exec', '-i', '-e', `CODEX_HOME=${codexHome}`, '-w', SANDBOX_USER_HOME,
 				CONTAINER_NAME, 'codex', ...args],
-			{ timeoutMs, label, input },
+			{ label, input },
 		),
 		isUnavailable: (execution) => execution.stderr.includes('executable file not found')
 			|| execution.stderr.includes('codex: not found'),

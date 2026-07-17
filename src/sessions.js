@@ -27,7 +27,7 @@ const log = require('./logger');
  * A channelId covers DM, guild text and voice channels alike.
  *
  * sessionId is allocated by the agent and emitted in its JSON output; the
- * executor persists it after the first spawn, including on timeout.
+ * executor persists it after the first spawn, including on error.
  *
  * autojoin: per-voice-channel policy, see src/voice.js.
  *
@@ -254,9 +254,8 @@ function listRemoteChannels() {
 }
 
 /**
- * Gates other sandbox executions: their timeout path runs
- * killAgentProcessesInContainer, which pkills every non-essential PID in the
- * container and would take a live remote daemon with it.
+ * Gates sandbox `!shell`: its timeout path pkills by command pattern inside the
+ * container, which can match and kill a live remote daemon.
  */
 function hasActiveSandboxRemote() {
 	for (const entry of channels.values()) {

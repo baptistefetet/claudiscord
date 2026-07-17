@@ -1,7 +1,6 @@
 const cron = require('node-cron');
 const {
 	AUTHORIZED_USER_ID,
-	PROMPT_TIMEOUT_MS,
 	VALID_MODELS,
 	CHANNEL_DEFAULT_MODEL,
 	VALID_AGENTS,
@@ -11,7 +10,6 @@ const { getSystemPrompt } = require('./prompts');
 const { executePrompt } = require('./executor');
 const { loadAllJobs, jobKey, recordJobRun } = require('./jobs-store');
 const { sendToChannel, getClient } = require('./discord');
-const sessions = require('./sessions');
 const log = require('./logger');
 
 /** @type {Map<string, {matcher: object, job: object}>} jobKey -> matcher + job */
@@ -86,14 +84,6 @@ async function executeJob(job) {
 	const { id, prompt, channelId, notify, notifyPattern } = job;
 	const key = jobKey(job);
 
-	// While a sandbox remote is live we cannot run another sandbox agent:
-	// `killAgentProcessesInContainer` on timeout would also kill the remote
-	// daemon. Skip silently — the next cron tick will pick it back up.
-	if (job.mode === 'sandbox' && sessions.hasActiveSandboxRemote()) {
-		log.warn(`Job '${key}' skipped (sandbox remote active)`);
-		return;
-	}
-
 	const nowMinute = new Date().toISOString().slice(0, 16);
 
 	if (!acquireJobLock(key)) {
@@ -146,7 +136,6 @@ async function executeJob(job) {
 			sessionId: null,
 			systemPrompt: jobSystemPrompt,
 			model: jobModel,
-			timeoutMs: PROMPT_TIMEOUT_MS,
 		};
 		const { result: output, sessionId } = await executePrompt(jobAgent, job.mode, prompt, jobOptions);
 		lastSessionId = sessionId || null;
@@ -170,20 +159,11 @@ async function executeJob(job) {
 		}
 	} catch (err) {
 		lastSessionId = err.sessionId || lastSessionId;
-		if (err.code === 124) {
-			log.error(`Job '${key}': TIMEOUT`);
-			if (notify && promptContext?.channelId) {
-				await sendToChannel(channelId, `\u{1F6A8} **Job '${id}' \u2014 TIMEOUT**\nNo response after ${PROMPT_TIMEOUT_MS / 1000}s.`).catch(e => log.error('Notify failed:', e.message));
-			} else if (notify) {
-				log.warn(`Job '${key}': timeout notification skipped (unresolved channelId '${channelId}')`);
-			}
-		} else {
-			log.error(`Job '${key}': ERROR (code ${err.code || 'unknown'})`, err.message);
-			if (notify && promptContext?.channelId) {
-				await sendToChannel(channelId, `\u{1F6A8} **Job '${id}' \u2014 ERROR**\nAgent failed with code ${err.code || 'unknown'}.`).catch(e => log.error('Notify failed:', e.message));
-			} else if (notify) {
-				log.warn(`Job '${key}': error notification skipped (unresolved channelId '${channelId}')`);
-			}
+		log.error(`Job '${key}': ERROR (code ${err.code || 'unknown'})`, err.message);
+		if (notify && promptContext?.channelId) {
+			await sendToChannel(channelId, `\u{1F6A8} **Job '${id}' \u2014 ERROR**\nAgent failed with code ${err.code || 'unknown'}.`).catch(e => log.error('Notify failed:', e.message));
+		} else if (notify) {
+			log.warn(`Job '${key}': error notification skipped (unresolved channelId '${channelId}')`);
 		}
 	} finally {
 		try {

@@ -2,13 +2,12 @@ const path = require('path');
 const { execFileSync, spawn } = require('child_process');
 const {
 	CODEX_BIN,
-	PROMPT_TIMEOUT_MS,
 	ADMIN_USER_HOME,
 	CONTAINER_NAME,
 	SANDBOX_USER_HOME,
 } = require('./config');
 const { ensureContainer, isCodexAvailableInContainer } = require('./container');
-const { spawnWithTimeout } = require('./spawn');
+const { spawnCollect } = require('./spawn');
 const log = require('./logger');
 
 const CODEX_USAGE_TIMEOUT_MS = 10000;
@@ -398,7 +397,7 @@ async function getCodexUsage(mode = 'admin') {
  * abstracts where/how the process runs and the environment-specific error
  * mapping:
  *   - label:         log / diagnostic label
- *   - spawn:         (args, { timeoutMs, input }) => Promise<{ stdout, stderr, code }>
+ *   - spawn:         (args, { input }) => Promise<{ stdout, stderr, code }>
  *   - precheck?:     () => void — throw before spawning if the env is unusable
  *   - onSpawnError?: (err) => void — mutate a spawn rejection (e.g. ENOENT remap)
  *   - isUnavailable?:(execution) => bool — true when a non-zero exit means the
@@ -410,7 +409,6 @@ async function executeCodex(prompt, options = {}, env) {
 	const {
 		sessionId = null,
 		systemPrompt = null,
-		timeoutMs = PROMPT_TIMEOUT_MS,
 	} = options;
 
 	if (env.precheck) env.precheck();
@@ -425,7 +423,7 @@ async function executeCodex(prompt, options = {}, env) {
 	try {
 		execution = await env.spawn(
 			buildCodexArgs({ sessionId, systemPrompt }),
-			{ timeoutMs, input: prompt },
+			{ input: prompt },
 		);
 	} catch (err) {
 		err.sessionId = parseCodexOutput(err.stdout).sessionId;
@@ -470,9 +468,9 @@ const hostCodexEnv = {
 			throw Object.assign(new Error('CODEX_NOT_AVAILABLE'), { code: 'CODEX_NOT_AVAILABLE' });
 		}
 	},
-	spawn: (args, { timeoutMs, input }) => spawnWithTimeout(
+	spawn: (args, { input }) => spawnCollect(
 		CODEX_BIN, args,
-		{ timeoutMs, cwd: ADMIN_USER_HOME, env: process.env, label: 'Codex', input },
+		{ cwd: ADMIN_USER_HOME, env: process.env, label: 'Codex', input },
 	),
 	onSpawnError: (err) => {
 		if (err.code === 'ENOENT') {

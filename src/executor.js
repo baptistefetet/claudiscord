@@ -18,14 +18,6 @@ const sessions = require('./sessions');
  */
 function executePrompt(agent, mode, prompt, options = {}) {
 	const { channelId, ...rest } = options;
-	// Refuse sandbox executions while another channel holds a sandbox remote:
-	// a timeout here triggers `killAgentProcessesInContainer`, which
-	// pkills every non-init PID in the container and would take the live
-	// remote daemon with it. The channel hosting the remote is already gated
-	// inside `handleCommand`, so this only blocks *other* sandbox traffic.
-	if (mode === 'sandbox' && sessions.hasActiveSandboxRemote()) {
-		throw Object.assign(new Error('SANDBOX_REMOTE_ACTIVE'), { code: 'SANDBOX_REMOTE_ACTIVE' });
-	}
 	return runQueued(async () => {
 		if (
 			channelId

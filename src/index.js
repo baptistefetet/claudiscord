@@ -204,11 +204,7 @@ client.on(Events.MessageCreate, async message => {
 		log.error('Message handling error:', err.message || err);
 
 		let errMsg;
-		if (err.code === 124) {
-			errMsg = `${agent === 'codex' ? 'Codex' : 'Claude Code'} took too long, timeout!`;
-		} else if (err.code === 'SANDBOX_REMOTE_ACTIVE') {
-			errMsg = '\u{1F6F0}️ A sandbox `/remote` session is active on another channel — sandbox prompts are paused until it stops.';
-		} else if (err.code === 'CODEX_NOT_AVAILABLE') {
+		if (err.code === 'CODEX_NOT_AVAILABLE') {
 			errMsg = `Codex is not installed or no longer available in **${mode}** mode.`;
 		} else if (err.code === 'CODEX_NOT_AUTHENTICATED') {
 			errMsg = 'Codex authentication failed. Select Codex in this channel and run `/login`.';
