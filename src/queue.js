@@ -86,9 +86,7 @@ function isBusy(key) {
 }
 
 function isScopeBusy(scope) {
-	const lock = locks.get(scope);
-	return (scopePending.get(scope) || 0) > 0
-		|| Boolean(lock?.writer || lock?.readers > 0 || lock?.waiters.length > 0);
+	return (scopePending.get(scope) || 0) > 0;
 }
 
 function runQueued(key, fn, { locks: requestedLocks = [] } = {}) {
@@ -103,14 +101,14 @@ function runQueued(key, fn, { locks: requestedLocks = [] } = {}) {
 	totalPending++;
 	trackScopes(requestedLocks, 1);
 
-	const execution = entry.tail.catch(() => {}).then(
+	const execution = entry.tail.then(
 		() => runWithLocks(requestedLocks, fn),
 	);
 	const settled = execution.finally(() => {
 		entry.pending--;
 		totalPending--;
 		trackScopes(requestedLocks, -1);
-		if (entry.pending === 0 && queues.get(key) === entry) queues.delete(key);
+		if (entry.pending === 0) queues.delete(key);
 	});
 	entry.tail = settled.catch(() => {});
 	return settled;
