@@ -1,7 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 const config = require('./config');
-const { ADMIN_USER_HOME, STATE_DIR } = config;
+const { ADMIN_USER_HOME, STATE_DIR, ADMIN_JOBS_FILE } = config;
+const { ensureDb } = require('./jobs-store');
 const { getSystemPrompt } = require('./prompts');
 const log = require('./logger');
 const sessions = require('./sessions');
@@ -386,6 +387,8 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 
 async function start() {
 	fs.mkdirSync(path.join(ADMIN_USER_HOME, STATE_DIR), { recursive: true });
+	// Also fail-fast when the sqlite3 CLI is missing (spawn ENOENT aborts boot).
+	ensureDb(ADMIN_JOBS_FILE);
 	sessions.load();
 	if (DOCKER_AVAILABLE) {
 		try { ensureImage(); } catch (err) { log.warn('ensureImage failed:', err.message); }

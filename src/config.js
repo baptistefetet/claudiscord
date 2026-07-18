@@ -41,7 +41,7 @@ const TTS_SPEED = Math.min(4, Math.max(0.25, parseFloat(process.env.TTS_SPEED) |
 const ADMIN_USER_HOME = os.homedir();
 const SANDBOX_USER_HOME = '/home/claude';
 const STATE_DIR = '.claudiscord';
-const JOBS_FILENAME = 'jobs.json';
+const JOBS_FILENAME = 'jobs.db';
 const ADMIN_SESSIONS_FILENAME = 'sessions.json';
 
 const ADMIN_JOBS_FILE = path.join(ADMIN_USER_HOME, STATE_DIR, JOBS_FILENAME);
@@ -49,7 +49,7 @@ const SANDBOX_HOST_JOBS_FILE = SANDBOX_HOST_HOME ? path.join(SANDBOX_HOST_HOME, 
 const ADMIN_SESSIONS_FILE = path.join(ADMIN_USER_HOME, STATE_DIR, ADMIN_SESSIONS_FILENAME);
 const SANDBOX_JOBS_FILE = path.posix.join(SANDBOX_USER_HOME, STATE_DIR, JOBS_FILENAME);
 
-// Uploaded files dropped by the user (see src/uploads.js). Sibling of jobs.json.
+// Uploaded files dropped by the user (see src/uploads.js). Sibling of jobs.db.
 const ADMIN_FILES_DIR = path.join(ADMIN_USER_HOME, STATE_DIR, 'files');
 const SANDBOX_HOST_FILES_DIR = SANDBOX_HOST_HOME ? path.join(SANDBOX_HOST_HOME, STATE_DIR, 'files') : null;
 const SANDBOX_FILES_DIR = path.posix.join(SANDBOX_USER_HOME, STATE_DIR, 'files'); // path seen inside the container (system prompt)

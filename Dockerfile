@@ -7,7 +7,7 @@ ARG SANDBOX_UID=1001
 ARG SANDBOX_GID=1001
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl ca-certificates git openssh-client chromium && rm -rf /var/lib/apt/lists/*
+    curl ca-certificates git openssh-client chromium sqlite3 && rm -rf /var/lib/apt/lists/*
 RUN curl -fsSL https://claude.ai/install.sh | bash \
     && cp /root/.local/share/claude/versions/$(ls -t /root/.local/share/claude/versions/ | head -1) /usr/local/bin/claude \
     && chmod 755 /usr/local/bin/claude \

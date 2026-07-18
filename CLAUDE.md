@@ -28,11 +28,11 @@ Scheduled jobs
 - Public threads are handled like any other channel (own `channelId` → own session). On first contact, a thread snapshots its parent channel's mode/agent/model (`sessions.ensureFromParent`, not a live link) but starts a fresh session. The system prompt shows both the parent channel name and the thread name (`prompts.js` `thread`/`threadName`); the topic falls back to the parent's. Jobs/uploads attach to the thread itself like any channel. System messages are dropped early (`if (message.system) return;`): creating a thread posts a `ThreadCreated` system message in the parent whose `content` is the thread NAME (not empty), which would otherwise be answered as a prompt. On a thread's first turn (sessionId still null), if it was created from an existing message, that anchor message (`channel.fetchStarterMessage()`) is prepended to the prompt as quoted context — otherwise the message the thread forks from would be invisible (it lives in the parent and appears in the thread only as a dropped system message).
 - The authorized user is stored in `.env` (`AUTHORIZED_USER_ID`) and is required at startup — without it the process refuses to boot.
 - Global queue (`src/queue.js`): every prompt (interactive or scheduled) goes through a single FIFO. `isBusy()` is used to show a one-time "⏳ waiting" hint per channel.
-- Jobs live in two separate files — never merged, never watched:
-  - `ADMIN_USER_HOME/.claudiscord/jobs.json` for admin jobs
-  - `SANDBOX_HOST_HOME/.claudiscord/jobs.json` for sandbox jobs
+- Jobs live in two separate SQLite databases — never merged, never watched:
+  - `ADMIN_USER_HOME/.claudiscord/jobs.db` for admin jobs
+  - `SANDBOX_HOST_HOME/.claudiscord/jobs.db` for sandbox jobs
 - Sessions live in `ADMIN_USER_HOME/.claudiscord/sessions.json`.
-- Scheduler reloads both files after each prompt (no `fs.watch`).
+- Scheduler reloads both databases after each prompt (no `fs.watch`).
 
 ## Files
 
@@ -50,7 +50,7 @@ src/
   codex.js            # Codex exec/login (host + sandbox), JSONL parse, account usage (getCodexUsage)
   container.js        # Docker: image/container, sandbox env factories (sandboxClaudeEnv/sandboxCodexEnv)
   executor.js         # executePrompt(agent, mode) → pick env (host const / sandbox factory) → executeClaude|executeCodex; queue
-  jobs-store.js       # loadAllJobs (admin+sandbox), recordJobRun, jobKey
+  jobs-store.js       # SQLite jobs store via sqlite3 CLI: loadAllJobs (admin+sandbox), recordJobRun, ensureDb, jobKey
   sessions.js         # { channels: { channelId -> { mode, agent, sessionId, ... } } }
   scheduler.js        # minute-resolution ticker, reloadJobs, executeJob, per-key lock
   commands.js         # COMMANDS registry → dispatch + native slash metadata; /new /status /usage /login /jobs /admin /sandbox /opus /sonnet /codex /remote /voice /upgrade /restart !shell; transport-neutral dispatchSlashCommand + getRegisteredCommands (Discord plumbing stays in index.js)
@@ -126,7 +126,7 @@ The event filters, the join race and the convergence loop are documented at thei
 The user can drop files/photos into a channel (with no text). An upload does NOT spawn an agent: the bot saves the attachments and echoes their names. The user then references them by name in a later message.
 
 - Module: `src/uploads.js` (single `saveUploads(attachments, mode)` function; download pattern borrowed from `src/stt.js`).
-- Target dir, per channel mode, sibling of `jobs.json`:
+- Target dir, per channel mode, sibling of `jobs.db`:
   - admin → `ADMIN_USER_HOME/.claudiscord/files/`
   - sandbox → `SANDBOX_HOST_HOME/.claudiscord/files/`, bind-mounted as `/home/claude/.claudiscord/files/`. Files are `chown`'d to the container's `claude` user (`container.js::writeSandboxUpload`) so the non-root process can read them.
 - Naming: original Discord `attachment.name` (basename), de-duplicated within a single batch (`image.png`, `image-2.png`). Across messages the same name is overwritten — no automatic cleanup.
@@ -163,7 +163,7 @@ The user can drop files/photos into a channel (with no text). An upload does NOT
 
 ## Global queue
 
-All executions — interactive prompts and scheduled jobs, Claude and Codex — go through `src/queue.js::runQueued`. Only one agent process runs at a time. If a new message arrives while something is running, `src/index.js` sends a one-shot "⏳ Waiting for previous prompt..." notice to the concerned channel. This sequentiality simplifies invariants around concurrent file writes (jobs files, sessions file).
+All executions — interactive prompts and scheduled jobs, Claude and Codex — go through `src/queue.js::runQueued`. Only one agent process runs at a time. If a new message arrives while something is running, `src/index.js` sends a one-shot "⏳ Waiting for previous prompt..." notice to the concerned channel. This sequentiality simplifies invariants around shared state (sessions file, container execs); jobs writes are additionally arbitrated by SQLite itself, agents included.
 
 ## Docker sandbox (optional)
 
@@ -190,12 +190,12 @@ Both modes store runtime state under `<home>/.claudiscord/`:
 
 ```
 ADMIN_USER_HOME/.claudiscord/     # /root/.claudiscord on this host
-  jobs.json                       # admin scheduled jobs
+  jobs.db                         # admin scheduled jobs (SQLite)
   sessions.json                   # per-channel state (shared across modes)
   files/                          # uploaded files (admin channels)
 
 SANDBOX_HOST_HOME/.claudiscord/   # bind-mounted as /home/claude/.claudiscord
-  jobs.json                       # sandbox scheduled jobs
+  jobs.db                         # sandbox scheduled jobs (SQLite)
   files/                          # uploaded files (sandbox channels)
 ```
 
@@ -251,47 +251,52 @@ bash scripts/rebuild-sandbox.sh
 
 ### Format
 
-```json
-{
-  "id": "check-system",
-  "channelId": "1234567890",
-  "channelName": "ops-admin",
-  "prompt": "…",
-  "cron": "0 7 * * *",
-  "enabled": true,
-  "notify": true,
-  "notifyPattern": "STATUT: PROBLEME",
-  "remaining": 0,
-  "agent": "claude",
-  "model": "sonnet",
-  "created": "2026-02-21T10:00:00Z",
-  "lastRun": null,
-  "lastSessionId": null,
-  "description": "Daily health check at 7am"
-}
+Table `jobs`, one row per job (`src/jobs-store.js::SCHEMA`, `PRAGMA user_version = 1`):
+
+```sql
+CREATE TABLE jobs (
+  id              TEXT PRIMARY KEY,
+  channel_id      TEXT NOT NULL,
+  channel_name    TEXT,
+  prompt          TEXT NOT NULL,
+  cron            TEXT NOT NULL,
+  enabled         INTEGER NOT NULL,
+  notify          INTEGER NOT NULL DEFAULT 0,
+  notify_pattern  TEXT,
+  remaining       INTEGER NOT NULL DEFAULT 0,
+  agent           TEXT,
+  model           TEXT,
+  created         TEXT,
+  last_run        TEXT,
+  last_session_id TEXT,
+  description     TEXT
+) STRICT;
 ```
 
-- `channelId` is **required** — it's where the notification is sent. DM channels have an ID too, so a DM-bound job works identically.
-- `channelName` is a display-only snapshot of the channel name at job creation time. The scheduler refreshes it on every run.
-- `agent` is `"claude"` or `"codex"`. Snapshot of the channel's agent at scheduling time. Optional for backward compatibility — fallback is `"claude"`.
-- `model` is `"opus"` or `"sonnet"`. Snapshot of the channel's Claude model at scheduling time and ignored by Codex. Optional for backward compatibility — fallback is `"sonnet"`.
+- `STRICT` because agents write rows through the CLI, outside claudiscord's validation — mistyped values fail at insert instead of loading as junk.
+- `channel_id` is **required** — it's where the notification is sent. DM channels have an ID too, so a DM-bound job works identically.
+- `channel_name` is a display-only snapshot of the channel name at job creation time. The scheduler refreshes it on every run.
+- `agent` is `'claude'` or `'codex'`. Snapshot of the channel's agent at scheduling time. NULL falls back to `claude`.
+- `model` is `'opus'` or `'sonnet'`. Snapshot of the channel's Claude model at scheduling time and ignored by Codex. NULL falls back to `sonnet`.
 - `remaining`: `0` = infinite, `>0` = decremented each run, job removed when it hits `0`.
-- `lastSessionId`: diagnostic-only. Scheduler writes the agent session UUID of the last run (set even on error via `err.sessionId`). Jobs always run with a fresh session (`sessionId: null`), so this is never resumed — it just locates the run's transcript on disk: Claude at `<home>/.claude/projects/<cwd-hash>/<uuid>.jsonl` (admin cwd `/root` → `-root`, sandbox `/home/claude` → `-home-claude`), Codex via `find <home>/.codex/sessions -name "*<uuid>*"`.
-- Unique key: `mode:id` (the mode is implicit from the file the job lives in).
+- `last_session_id`: diagnostic-only. Scheduler writes the agent session UUID of the last run (set even on error via `err.sessionId`). Jobs always run with a fresh session (`sessionId: null`), so this is never resumed — it just locates the run's transcript on disk: Claude at `<home>/.claude/projects/<cwd-hash>/<uuid>.jsonl` (admin cwd `/root` → `-root`, sandbox `/home/claude` → `-home-claude`), Codex via `find <home>/.codex/sessions -name "*<uuid>*"`.
+- Unique key: `mode:id` (the mode is implicit from the database the job lives in).
 
 ### Storage
 
-- **Admin jobs**: `ADMIN_USER_HOME/.claudiscord/jobs.json` (readable/writable by the host agent).
-- **Sandbox jobs**: `SANDBOX_HOST_HOME/.claudiscord/jobs.json` (readable/writable by the container; the same path is readable from the host as well since the volume is a bind-mount).
-- Both modes use the same `<home>/.claudiscord/` layout.
-- **No merge**: an admin prompt only sees admin jobs, a sandbox prompt only sees sandbox jobs. The scheduler loads both files and runs everything.
+- **Admin jobs**: `ADMIN_USER_HOME/.claudiscord/jobs.db` (readable/writable by the host agent).
+- **Sandbox jobs**: `SANDBOX_HOST_HOME/.claudiscord/jobs.db` (readable/writable by the container; the same path is accessible from the host as well since the volume is a bind-mount).
+- All access goes through the `sqlite3` CLI — claudiscord shells out (`execFileSync`, no Node driver), agents run it from their prompt instructions. Every invocation starts with `.timeout 5000` (the dot-command, not `PRAGMA busy_timeout`, which emits a result row that corrupts `-json` output).
+- Default rollback journal, no WAL: no persistent `-wal`/`-shm` sidecars, so in-place writes never change the db file's ownership (the sandbox db must stay owned by the container user while root also writes it via `recordJobRun`).
+- `recordJobRun` is a single atomic transaction (update + decrement + delete-at-0) — concurrent agent writes can no longer be lost, even from `/remote` sessions.
+- **No merge**: an admin prompt only sees admin jobs, a sandbox prompt only sees sandbox jobs. The scheduler loads both databases and runs everything.
 
 ### Execution & reload
 
 - A single minute-resolution ticker (`setInterval`, `TICK_MS`) fires every job whose cron matches the current minute, using node-cron only to parse/validate the expression and build its time matcher. This tolerates sub-minute timer/clock drift and never replays a missed minute — unlike node-cron's per-job `setTimeout`, which aimed at an exact second and silently dropped a run when the first heartbeat after a (re)start landed off that second.
-- `src/scheduler.js::reloadJobs()` rebuilds the in-memory schedule (one matcher per job) from both files.
-- Called at startup, after every interactive prompt, and at the end of every scheduled job — so any change to the jobs files is picked up within one prompt.
-- No `fs.watch` — only claudiscord writes to these files (directly via the active agent), so polling after each prompt is enough.
+- `src/scheduler.js::reloadJobs()` rebuilds the in-memory schedule (one matcher per job) from both databases.
+- Called at startup, after every interactive prompt, and at the end of every scheduled job — so any change to the jobs databases is picked up within one prompt.
+- No `fs.watch` — polling after each prompt is enough.
 - In-memory lock per job key (plus a per-minute guard) prevents duplicate runs (including the "same wall-clock minute" edge case).
 
 ### Notifications
@@ -323,6 +328,6 @@ bash scripts/rebuild-sandbox.sh
 - Naming: the mobile app shows each session under `<channelName>` (DM = username), so multiple channels can run in parallel and stay discoverable.
 - Gating (`src/commands.js`): while `remoteId` is set, only `/remote`, `/status`, `/jobs`, `/usage`, `/login` are accepted in that channel. Every other input (plain text, `!shell`, other slash commands) returns an invalidation hint and does **not** spawn `claude -p` — this prevents two concurrent processes touching the same session. Voice messages are also dropped *before* Groq STT (`src/index.js`), so a vocal in remote mode neither pays for transcription nor leaks the `🎙️ <transcript>` echo.
 - Sandbox `!shell` lockout: while *any* channel holds a sandbox remote, sandbox `!shell` is refused (`hasActiveSandboxRemote()` check in `commands.js`). Reason: `executeShell`'s timeout pkills by command pattern inside the container, which can match the live remote daemon. Prompts and scheduled jobs are unaffected — they run concurrently with a remote by design.
-- Stop: `/remote` while active runs `claude stop <agentId>` (host or container), then deletes `~/.claude/jobs/<agentId>/` so the agent stops showing up in `claude agents` as a stopped session (`claude stop` keeps the conversation around by design). Strict 8-hex guard on the agentId before any `rm -rf`. Finally clears `remoteId` and calls `scheduler.reloadJobs()` — Claude may have edited the jobs files during the mobile session, and we did not go through the executor path that normally triggers a reload.
+- Stop: `/remote` while active runs `claude stop <agentId>` (host or container), then deletes `~/.claude/jobs/<agentId>/` so the agent stops showing up in `claude agents` as a stopped session (`claude stop` keeps the conversation around by design). Strict 8-hex guard on the agentId before any `rm -rf`. Finally clears `remoteId` and calls `scheduler.reloadJobs()` — Claude may have edited the jobs databases during the mobile session, and we did not go through the executor path that normally triggers a reload.
 - Startup reconciliation: `reconcileRemotes()` runs after `sessions.load()` and best-effort-stops every persisted `remoteId` (also doing the jobs/ cleanup). After a machine reboot the daemon is gone and the stop fails harmlessly; the channel reverts to Discord mode either way.
 - Sandbox prerequisite: the in-container claude daemon needs valid sandbox Claude credentials. Run `/sandbox`, select Claude with `/opus` or `/sonnet`, then `/login` before using sandbox `/remote`.

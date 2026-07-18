@@ -1,4 +1,5 @@
 const fs = require('fs');
+const { execFileSync } = require('child_process');
 const cron = require('node-cron');
 const {
 	ADMIN_JOBS_FILE,
@@ -10,6 +11,29 @@ const log = require('./logger');
 
 const REQUIRED_FIELDS = ['id', 'prompt', 'cron', 'enabled', 'channelId'];
 
+// STRICT rejects mistyped values at insert time — the table is also written
+// by agents through the sqlite3 CLI, outside claudiscord's validation.
+const SCHEMA = `
+PRAGMA user_version = 1;
+CREATE TABLE IF NOT EXISTS jobs (
+	id              TEXT PRIMARY KEY,
+	channel_id      TEXT NOT NULL,
+	channel_name    TEXT,
+	prompt          TEXT NOT NULL,
+	cron            TEXT NOT NULL,
+	enabled         INTEGER NOT NULL,
+	notify          INTEGER NOT NULL DEFAULT 0,
+	notify_pattern  TEXT,
+	remaining       INTEGER NOT NULL DEFAULT 0,
+	agent           TEXT,
+	model           TEXT,
+	created         TEXT,
+	last_run        TEXT,
+	last_session_id TEXT,
+	description     TEXT
+) STRICT;
+`;
+
 function fileFor(mode) {
 	if (mode === 'admin') return ADMIN_JOBS_FILE;
 	if (mode === 'sandbox') {
@@ -19,36 +43,60 @@ function fileFor(mode) {
 	throw new Error(`Unknown job mode: ${mode}`);
 }
 
-function readJobsFile(file) {
-	try {
-		const raw = fs.readFileSync(file, 'utf8');
-		const data = JSON.parse(raw);
-		if (!Array.isArray(data)) {
-			log.warn(`Jobs file ${file} is not an array, ignoring`);
-			return [];
-		}
-		return data;
-	} catch (err) {
-		if (err.code !== 'ENOENT') log.warn(`Failed to read jobs file ${file}: ${err.message}`);
-		return [];
-	}
+// busy_timeout is per-connection, so every invocation must set it. The
+// .timeout dot-command (unlike PRAGMA busy_timeout) emits no result row,
+// which would corrupt -json output.
+function runSqlite(file, sql, { json = false } = {}) {
+	const args = json ? ['-bail', '-json', file] : ['-bail', file];
+	return execFileSync('sqlite3', args, {
+		input: `.timeout 5000\n${sql}`,
+		encoding: 'utf8',
+	});
 }
 
-function writeJobsFile(file, jobs) {
-	const tmp = file + '.tmp';
-	// tmp+rename creates a file owned by the service user (root). The sandbox
-	// jobs file must stay writable by the container agent (in-place writes fail
-	// on a root-owned file), so re-apply the previous owner and mode.
-	let prev = null;
-	try { prev = fs.statSync(file); } catch { /* first write: keep defaults */ }
-	fs.writeFileSync(tmp, JSON.stringify(jobs, null, 2), 'utf8');
-	if (prev) {
-		try {
-			fs.chownSync(tmp, prev.uid, prev.gid);
-			fs.chmodSync(tmp, prev.mode & 0o7777);
-		} catch { /* non-root service: chown not permitted, keep defaults */ }
+function sqlLit(value) {
+	if (value === null || value === undefined) return 'NULL';
+	return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function ensureDb(file) {
+	runSqlite(file, SCHEMA);
+}
+
+function rowToJob(row) {
+	return {
+		id: row.id,
+		prompt: row.prompt,
+		cron: row.cron,
+		enabled: row.enabled === 1,
+		notify: row.notify === 1,
+		notifyPattern: row.notify_pattern,
+		remaining: row.remaining,
+		channelId: row.channel_id,
+		channelName: row.channel_name,
+		// NULL maps to undefined so validateJob's optional-field checks pass.
+		agent: row.agent ?? undefined,
+		model: row.model ?? undefined,
+		created: row.created,
+		lastRun: row.last_run,
+		lastSessionId: row.last_session_id,
+		description: row.description,
+	};
+}
+
+function readJobsDb(file) {
+	// Opening a missing database would create an empty root-owned file (the
+	// sandbox db must stay owned by the container user), so bail out first.
+	if (!fs.existsSync(file)) return [];
+	try {
+		// sqlite3 -json prints nothing at all for an empty result set.
+		const out = runSqlite(file, 'SELECT * FROM jobs;', { json: true });
+		const rows = out.trim() ? JSON.parse(out) : [];
+		return rows.map(rowToJob);
+	} catch (err) {
+		log.warn(`Failed to read jobs db ${file}: ${err.message}`);
+		return [];
 	}
-	fs.renameSync(tmp, file);
 }
 
 function validateJob(job) {
@@ -67,12 +115,12 @@ function validateJob(job) {
 }
 
 /**
- * Load jobs from both admin and sandbox files. Each returned job has
+ * Load jobs from both admin and sandbox databases. Each returned job has
  * `mode` stamped on it so the scheduler knows where to run and which
- * file to update.
+ * database to update.
  */
 function loadAllJobs() {
-	const admin = readJobsFile(ADMIN_JOBS_FILE)
+	const admin = readJobsDb(ADMIN_JOBS_FILE)
 		.filter(j => {
 			if (validateJob(j)) return true;
 			log.warn(`Skipping invalid admin job: ${JSON.stringify(j)?.slice(0, 200)}`);
@@ -80,7 +128,7 @@ function loadAllJobs() {
 		})
 		.map(j => ({ ...j, mode: 'admin' }));
 	const sandbox = SANDBOX_HOST_JOBS_FILE
-		? readJobsFile(SANDBOX_HOST_JOBS_FILE)
+		? readJobsDb(SANDBOX_HOST_JOBS_FILE)
 			.filter(j => {
 				if (validateJob(j)) return true;
 				log.warn(`Skipping invalid sandbox job: ${JSON.stringify(j)?.slice(0, 200)}`);
@@ -96,39 +144,36 @@ function jobKey(job) {
 }
 
 /**
- * Update lastRun / remaining / channelName for a job. Writes back to the
- * matching file (admin or sandbox). If remaining reaches 0, removes the job.
+ * Update lastRun / remaining / channelName for a job, atomically in a single
+ * sqlite3 transaction. If remaining reaches 0, the job row is deleted.
  * Returns true if the job was removed.
  */
 function recordJobRun(job, { channelName = null, lastSessionId = null } = {}) {
 	const file = fileFor(job.mode);
-	const jobs = readJobsFile(file);
-	const idx = jobs.findIndex(j => j.id === job.id);
-	if (idx === -1) return false;
-
-	jobs[idx].lastRun = new Date().toISOString();
-	if (channelName && jobs[idx].channelName !== channelName) {
-		jobs[idx].channelName = channelName;
-	}
+	const id = sqlLit(job.id);
+	const sets = [`last_run = ${sqlLit(new Date().toISOString())}`];
+	if (channelName) sets.push(`channel_name = ${sqlLit(channelName)}`);
 	// Diagnostic only: UUID of the agent session for this run (Claude/Codex
 	// transcript on disk). Jobs always start fresh, so this is never resumed
 	// automatically — it lets a later conversation inspect what happened.
-	if (lastSessionId) {
-		jobs[idx].lastSessionId = lastSessionId;
-	}
+	if (lastSessionId) sets.push(`last_session_id = ${sqlLit(lastSessionId)}`);
 
-	let removed = false;
-	if (typeof jobs[idx].remaining === 'number' && jobs[idx].remaining > 0) {
-		jobs[idx].remaining--;
-		if (jobs[idx].remaining === 0) {
-			jobs.splice(idx, 1);
-			removed = true;
-			log.info(`Job '${jobKey(job)}' removed (remaining reached 0)`);
-		}
-	}
+	// changes() inside the DELETE's WHERE still reports the decrement UPDATE
+	// (it only refreshes once the DELETE completes), so an infinite job
+	// (remaining = 0, never decremented) is not swept up. The final SELECT
+	// reads the DELETE's own count.
+	const out = runSqlite(file, `
+BEGIN IMMEDIATE;
+UPDATE jobs SET ${sets.join(', ')} WHERE id = ${id};
+UPDATE jobs SET remaining = remaining - 1 WHERE id = ${id} AND remaining > 0;
+DELETE FROM jobs WHERE id = ${id} AND remaining = 0 AND changes() > 0;
+COMMIT;
+SELECT changes() AS removed;
+`, { json: true });
 
-	writeJobsFile(file, jobs);
+	const removed = JSON.parse(out)[0].removed > 0;
+	if (removed) log.info(`Job '${jobKey(job)}' removed (remaining reached 0)`);
 	return removed;
 }
 
-module.exports = { loadAllJobs, jobKey, recordJobRun };
+module.exports = { loadAllJobs, jobKey, recordJobRun, ensureDb };

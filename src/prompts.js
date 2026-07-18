@@ -85,34 +85,37 @@ Scheduled tasks (recurring or one-shot) that execute prompts or display messages
 user MUST use this Discord scheduling system.
 
 System:
-- File: {{jobsPath}}
-- Format: a JSON array of objects
-- Runtime: a scheduler (node-cron) continuously executes jobs at the defined times
-- Your job: only write to this file
+- Database: {{jobsPath}} — SQLite, single table \`jobs\`
+- Access it with the \`sqlite3\` CLI only
+- ALWAYS pass \`.timeout 5000\` as a separate argument before the SQL (the scheduler
+  may hold a brief write lock)
+- Write in ONE statement when possible; wrap any read-then-write sequence in
+  \`BEGIN IMMEDIATE; ... COMMIT;\` — the scheduler writes to this database too
+- Runtime: a scheduler continuously executes enabled jobs at the defined times
 - Forbidden alternatives: crontab, at, setTimeout, setInterval, sleep, direct node-cron,
   systemd timer
 
-Fields:
-- id: unique string
+Columns:
+- id: unique string, PRIMARY KEY
 - prompt: the prompt that will be executed by the selected agent
 - cron: standard cron expression, timezone Europe/Paris
-- enabled: boolean
-- notify: boolean
-- notifyPattern: optional string
+- enabled: 1 or 0
+- notify: 1 or 0
+- notify_pattern: optional string
 - remaining: number of remaining executions
-- channelId: Discord channel ID where the notification is sent
-- channelName: display snapshot, updated automatically
-- agent: "claude" or "codex" — MUST be set to the current channel agent shown above
-  ("Current channel agent"). This freezes the agent at scheduling time. If absent, the
-  scheduler falls back to "claude" for backward compatibility.
+- channel_id: Discord channel ID where the notification is sent
+- channel_name: display snapshot, updated automatically
+- agent: 'claude' or 'codex' — MUST be set to the current channel agent shown above
+  ("Current channel agent"). This freezes the agent at scheduling time. If NULL, the
+  scheduler falls back to 'claude'.
 {{#claude}}
-- model: "opus" or "sonnet" — MUST be set to the current channel model shown above
+- model: 'opus' or 'sonnet' — MUST be set to the current channel model shown above
   ("Current channel model"). This freezes the model at scheduling time; do not
-  change it later. If absent, the scheduler falls back to "sonnet".
+  change it later. If NULL, the scheduler falls back to 'sonnet'.
 {{/claude}}
 - created: ISO date
-- lastRun: null or ISO date, do not modify
-- lastSessionId: auto-managed, do not set or modify. The scheduler writes here the
+- last_run: auto-managed, do not modify
+- last_session_id: auto-managed, do not set or modify. The scheduler writes here the
   agent session UUID of the job's last run (including failed runs) so a later
   conversation can inspect that run's transcript on disk to debug it. Jobs always start a
   fresh session, so this is never resumed automatically.
@@ -126,46 +129,31 @@ Remaining:
 - use 0 for a regular recurring job
 
 Channel:
-- channelId is REQUIRED
+- channel_id is REQUIRED
 - set it to the Discord channel where the user is talking to you now (DM or guild channel)
 - notifications are sent there
-- channelName can be left empty; the scheduler updates it automatically
+- channel_name can be left NULL; the scheduler updates it automatically
 
 Notifications:
-- if notify=true, the job output is sent to the job's channel
-- if notifyPattern is set, it is interpreted as a regular expression and the notification
+- if notify=1, the job output is sent to the job's channel
+- if notify_pattern is set, it is interpreted as a regular expression and the notification
   is only sent if the output matches it
-- IMPORTANT: conditional notifications require notifyPattern
-- without notifyPattern, notify=true ALWAYS sends the notification
+- IMPORTANT: conditional notifications require notify_pattern
+- without notify_pattern, notify=1 ALWAYS sends the notification
 - examples:
-  - "PROBLEM" -> notify if the word appears
-  - "^(?!.*OK).*$" -> notify if OK is absent
+  - 'PROBLEM' -> notify if the word appears
+  - '^(?!.*OK).*$' -> notify if OK is absent
 - the dotall flag (s) is enabled by default (\`.\` matches newlines)
 
 Inspection:
-To view the list of scheduled jobs, simply read this file. It always contains the
-complete and up-to-date state of all jobs from the current execution mode.
+sqlite3 -json {{jobsPath}} ".timeout 5000" "SELECT * FROM jobs;"
+It always returns the complete and up-to-date state of all jobs from the current
+execution mode.
 
 Minimal example:
-[
-  {
-    "id": "weather",
-    "prompt": "Give me the weather in Lyon",
-    "cron": "0 8 * * *",
-    "enabled": true,
-    "notify": true,
-    "remaining": 0,
-    "channelId": "1234567890",
-    "channelName": "meteo",
-    "agent": "{{channelAgent}}",
-{{#claude}}
-    "model": "sonnet",
-{{/claude}}
-    "created": "2026-01-01T00:00:00Z",
-    "lastRun": null,
-    "description": "Daily weather"
-  }
-]
+sqlite3 {{jobsPath}} ".timeout 5000" "
+INSERT INTO jobs (id, prompt, cron, enabled, notify, remaining, channel_id, agent, {{#claude}}model, {{/claude}}created, description)
+VALUES ('weather', 'Give me the weather in Lyon', '0 8 * * *', 1, 1, 0, '1234567890', '{{channelAgent}}', {{#claude}}'sonnet', {{/claude}}'2026-01-01T00:00:00Z', 'Daily weather');"
 
 {{#textFormat}}
 --- Response format ---

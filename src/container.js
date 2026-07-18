@@ -12,6 +12,7 @@ const {
 	DOCKER_CMD_TIMEOUT,
 } = require('./config');
 const { getDefaultClaudeMd } = require('./prompts');
+const { ensureDb } = require('./jobs-store');
 const { spawnCollect } = require('./spawn');
 const log = require('./logger');
 
@@ -125,7 +126,7 @@ function ensureStorage() {
 	if (claudiscordDirIsNew) chownContainerUser(claudiscordDir);
 	const jobsFile = path.join(home, STATE_DIR, JOBS_FILENAME);
 	if (!fs.existsSync(jobsFile)) {
-		fs.writeFileSync(jobsFile, '[]', 'utf8');
+		ensureDb(jobsFile);
 		chownContainerUser(jobsFile);
 	}
 }
