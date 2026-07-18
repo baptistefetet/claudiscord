@@ -27,7 +27,7 @@ Scheduled jobs
 - Each Discord channel has its own mode (`admin` / `sandbox`), agent (`claude` / `codex`, default `claude`), Claude model (`opus` / `sonnet`, default `sonnet`) and active-agent session. A DM channel is treated exactly like any other channel.
 - Public threads are handled like any other channel (own `channelId` → own session). On first contact, a thread snapshots its parent channel's mode/agent/model (`sessions.ensureFromParent`, not a live link) but starts a fresh session. The system prompt shows both the parent channel name and the thread name (`prompts.js` `thread`/`threadName`); the topic falls back to the parent's. Jobs/uploads attach to the thread itself like any channel. System messages are dropped early (`if (message.system) return;`): creating a thread posts a `ThreadCreated` system message in the parent whose `content` is the thread NAME (not empty), which would otherwise be answered as a prompt. On a thread's first turn (sessionId still null), if it was created from an existing message, that anchor message (`channel.fetchStarterMessage()`) is prepended to the prompt as quoted context — otherwise the message the thread forks from would be invisible (it lives in the parent and appears in the thread only as a dropped system message).
 - The authorized user is stored in `.env` (`AUTHORIZED_USER_ID`) and is required at startup — without it the process refuses to boot.
-- Per-channel queues (`src/queue.js`): prompts sharing a `channelId` are FIFO; different channels run concurrently. Shared/exclusive environment locks protect login, shell and upgrades. `isBusy(channelId)` drives the one-time "⏳ waiting" hint.
+- Per-channel queues (`src/queue.js`): prompts sharing a `channelId` are FIFO; different channels run concurrently. One global maintenance gate protects login, shell, upgrades and remote transitions. `isBusy(channelId)` drives the one-time "⏳ waiting" hint.
 - Jobs live in two separate SQLite databases — never merged, never watched:
   - `ADMIN_USER_HOME/.claudiscord/jobs.db` for admin jobs
   - `SANDBOX_HOST_HOME/.claudiscord/jobs.db` for sandbox jobs
@@ -44,7 +44,7 @@ src/
   prompts.js          # Shared system prompt builder with Claude-only sections
   logger.js           # stdout/stderr logging (journald-friendly)
   discord.js          # Client, sendToChannel, sendChunked (splitMessage now private), typing indicator
-  queue.js            # Per-channel FIFOs + shared/exclusive environment locks
+  queue.js            # Per-channel FIFOs + global maintenance gate
   spawn.js            # spawnCollect: generic subprocess runner (unbounded, no timeout)
   claude.js           # Claude exec/login (host + sandbox), stream-json parse, OAuth usage (getClaudeUsage)
   codex.js            # Codex exec/login (host + sandbox), JSONL parse, account usage (getCodexUsage)
@@ -163,7 +163,7 @@ The user can drop files/photos into a channel (with no text). An upload does NOT
 
 ## Execution queues
 
-Interactive prompts, voice turns and scheduled jobs go through `src/queue.js::runQueued(channelId, ...)`. A channel or thread stays strictly FIFO, including its fresh-session job runs, while distinct IDs may execute without a global concurrency limit. `src/index.js` sends the one-shot "⏳ Waiting for previous prompt..." notice only when that same channel is busy. Login holds a global exclusive lock; `!shell` and `/upgrade` hold an environment-exclusive lock. The single sandbox container accepts concurrent `docker exec` processes, so sandbox channels share its 1 CPU, home and filesystem. SQLite arbitrates concurrent jobs writes.
+Interactive prompts, voice turns and scheduled jobs go through `src/queue.js::runQueued(channelId, ...)`. A channel or thread stays strictly FIFO, including its fresh-session job runs, while distinct IDs may execute without a global concurrency limit. `src/index.js` sends the one-shot "⏳ Waiting for previous prompt..." notice only when that same channel is busy. Rare operations (`/login`, `!shell`, `/upgrade`, `/remote` transitions) use `runMaintenance`: they are refused while any execution is pending, then briefly stop new queue work while they run. The single sandbox container accepts concurrent `docker exec` processes, so sandbox channels share its 1 CPU, home and filesystem. SQLite arbitrates concurrent jobs writes.
 
 ## Docker sandbox (optional)
 
@@ -216,7 +216,7 @@ SANDBOX_HOST_HOME/
 
 ### Background tasks
 
-`spawnCollect` (`src/spawn.js`) waits for the active CLI to exit naturally, with no timeout: a prompt has no predictable duration and only the operator knows what a given one should take. A stuck agent therefore holds its channel queue indefinitely; other channels continue unless it holds an exclusive maintenance lock. Recovery is manual: inspect from a host shell, kill the offending process, then resume the channel session.
+`spawnCollect` (`src/spawn.js`) waits for the active CLI to exit naturally, with no timeout: a prompt has no predictable duration and only the operator knows what a given one should take. A stuck agent therefore holds its channel queue indefinitely; other channels continue, while maintenance commands are refused until all queues are idle. Recovery is manual: inspect from a host shell, kill the offending process, then resume the channel session.
 
 ### Image rebuild
 

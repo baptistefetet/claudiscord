@@ -4,7 +4,7 @@ const {
 	sandboxClaudeEnv,
 	sandboxCodexEnv,
 } = require('./container');
-const { runQueued, executionLocks } = require('./queue');
+const { runQueued } = require('./queue');
 const sessions = require('./sessions');
 
 /**
@@ -69,7 +69,7 @@ function executePrompt(agent, mode, prompt, options = {}) {
 			}
 			throw err;
 		}
-	}, { locks: executionLocks(mode) });
+	});
 }
 
 module.exports = { executePrompt };

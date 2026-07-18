@@ -16,13 +16,7 @@ const {
 } = require('./container');
 const { CODEX_AVAILABLE, getCodexUsage, startCodexLogin } = require('./codex');
 const { getClaudeUsage, startClaudeLogin } = require('./claude');
-const {
-	runQueued,
-	runWithLocks,
-	isBusy,
-	isScopeBusy,
-	executionLocks,
-} = require('./queue');
+const { runMaintenance, isBusy } = require('./queue');
 const { startRemote, stopRemote } = require('./remote');
 const {
 	isVoiceModeAvailable,
@@ -78,9 +72,9 @@ function clearLogin(login) {
 	if (!login || pendingLogin !== login) return;
 	clearTimeout(login.timeout);
 	clearTimeout(login.urlTimeout);
-	if (login.releaseQueue) {
-		login.releaseQueue();
-		login.releaseQueue = null;
+	if (login.releaseMaintenance) {
+		login.releaseMaintenance();
+		login.releaseMaintenance = null;
 	}
 	pendingLogin = null;
 }
@@ -257,13 +251,14 @@ async function handleRemote({ channel, channelId, mode, agent, remoteId }) {
 	try {
 		const existing = remoteId;
 		if (existing) {
-			if (isBusy(channelId)) await channel.send('⏳ Waiting for previous prompt...');
+			if (isBusy()) {
+				await channel.send('⏳ An execution or maintenance operation is running. Retry `/remote` when the bot is idle.');
+				return true;
+			}
 			let stoppedCleanly = false;
 			try {
-				stoppedCleanly = await runQueued(
-					channelId,
+				stoppedCleanly = await runMaintenance(
 					() => stopRemote({ mode, remoteId: existing }),
-					{ locks: executionLocks(mode) },
 				);
 			} catch (err) {
 				log.error('remote stop error:', err.message);
@@ -283,9 +278,12 @@ async function handleRemote({ channel, channelId, mode, agent, remoteId }) {
 		}
 
 		const channelName = resolveChannelName(channel);
-		if (isBusy(channelId)) await channel.send('⏳ Waiting for previous prompt...');
+		if (isBusy()) {
+			await channel.send('⏳ An execution or maintenance operation is running. Retry `/remote` when the bot is idle.');
+			return true;
+		}
 		try {
-			const agentId = await runQueued(channelId, async () => {
+			const agentId = await runMaintenance(async () => {
 				if (mode === 'sandbox') ensureContainer();
 				// Hand the existing Discord session to `claude --bg --resume`
 				// so the mobile user starts with the channel's history. Read
@@ -294,7 +292,7 @@ async function handleRemote({ channel, channelId, mode, agent, remoteId }) {
 				const id = await startRemote({ mode, sessionId, channelName });
 				sessions.setRemoteId(channelId, id);
 				return id;
-			}, { locks: executionLocks(mode) });
+			});
 			await channel.send(`\u{1F6F0}️ Remote control enabled for **${channelName}** (agent \`${agentId}\`). Open the Claude mobile app to continue. Send \`/remote\` again to return to Discord mode.`);
 		} catch (err) {
 			log.error('remote start error:', err.message);
@@ -355,7 +353,7 @@ async function handleUsage({ channel, mode }) {
 
 /**
  * /login — start the selected agent's browser login flow in the selected
- * environment. Only one login can be pending because it holds the global lock.
+ * environment. Only one login can be pending because it holds maintenance.
  */
 async function handleLogin({ channel, channelId, mode, agent }) {
 	if (pendingLogin) {
@@ -395,15 +393,15 @@ async function handleLogin({ channel, channelId, mode, agent }) {
 		closed: false,
 		timeout: null,
 		urlTimeout: null,
-		releaseQueue: null,
+		releaseMaintenance: null,
 		startResolved: false,
 		resolveStart: null,
 	};
-	const queueHold = new Promise((resolve) => { login.releaseQueue = resolve; });
+	const maintenanceHold = new Promise((resolve) => { login.releaseMaintenance = resolve; });
 	const startPromise = new Promise((resolve) => { login.resolveStart = resolve; });
 	pendingLogin = login;
-	runWithLocks([{ scope: 'global', mode: 'exclusive' }], () => queueHold)
-		.catch(err => log.warn(`${flow.label} login lock failed: ${err.message}`));
+	runMaintenance(() => maintenanceHold)
+		.catch(err => log.warn(`${flow.label} login maintenance failed: ${err.message}`));
 
 	login.child.stdin.on('error', () => {});
 	login.child.stdout.on('data', (chunk) => {
@@ -487,9 +485,9 @@ async function handleJobs({ channel }) {
 
 /**
  * /upgrade — sandbox only. Update container packages + Claude Code + Codex.
- * Takes the sandbox's exclusive lock so it never overwrites a binary mid-prompt.
+ * Runs as global maintenance so it never overwrites a binary mid-prompt.
  */
-async function handleUpgrade({ channel, channelId, mode }) {
+async function handleUpgrade({ channel, mode }) {
 	if (mode !== 'sandbox') {
 		await channel.send('`/upgrade` is only available in sandbox mode.');
 		return true;
@@ -502,18 +500,12 @@ async function handleUpgrade({ channel, channelId, mode }) {
 		await channel.send('🛰️ A sandbox `/remote` session is active — stop it before upgrading the container.');
 		return true;
 	}
-	// Overwriting /usr/local/bin/claude while another prompt is running
-	// inside the container would crash that prompt. The exclusive sandbox lock
-	// waits for current work and prevents new work from overtaking the upgrade.
-	if (isScopeBusy('sandbox')) {
-		await channel.send('⏳ The sandbox is busy, upgrade will start after.');
+	if (isBusy()) {
+		await channel.send('⏳ An execution or maintenance operation is running. Retry `/upgrade` when the bot is idle.');
+		return true;
 	}
-	await runQueued(channelId, async () => {
+	await runMaintenance(async () => {
 		try {
-			if (sessions.hasActiveSandboxRemote()) {
-				await channel.send('🛰️ A sandbox `/remote` session became active — upgrade cancelled.');
-				return;
-			}
 			ensureContainer();
 			await execFileAsync('docker', [
 				'exec', '-u', 'root', CONTAINER_NAME, 'bash', '-c',
@@ -555,8 +547,7 @@ async function handleUpgrade({ channel, channelId, mode }) {
 			log.error('Upgrade error:', err.message);
 			await channel.send(`Upgrade error: ${err.message.slice(0, 300)}`);
 		}
-	}, { locks: executionLocks('sandbox', 'exclusive') })
-		.catch(err => log.error('Queued upgrade error:', err.message));
+	}).catch(err => log.error('Upgrade maintenance error:', err.message));
 	return true;
 }
 
@@ -805,23 +796,21 @@ async function handleCommand(message) {
 			await channel.send('Sandbox is not available — shell requires either admin mode or a working sandbox.');
 			return true;
 		}
-		// A shell may mutate arbitrary shared files, and its sandbox timeout uses
-		// pkill by command prefix. Give it exclusive access to its environment.
-		if (isScopeBusy(mode)) {
-			await channel.send(`⏳ The **${mode}** environment is busy, shell will start after.`);
+		if (mode === 'sandbox' && sessions.hasActiveSandboxRemote()) {
+			await channel.send('\u{1F6F0}️ A sandbox `/remote` session is active — sandbox `!shell` is paused to avoid killing it. Stop the remote first.');
+			return true;
 		}
-		const output = await runQueued(channelId, async () => {
+		if (isBusy()) {
+			await channel.send('⏳ An execution or maintenance operation is running. Retry the shell command when the bot is idle.');
+			return true;
+		}
+		const output = await runMaintenance(async () => {
 			if (mode === 'sandbox') {
-				if (sessions.hasActiveSandboxRemote()) return null;
 				ensureContainer();
 				return executeShell(command, { inContainer: true });
 			}
 			return executeShell(command);
-		}, { locks: executionLocks(mode, 'exclusive') });
-		if (output === null) {
-			await channel.send('\u{1F6F0}️ A sandbox `/remote` session is active — sandbox `!shell` is paused to avoid killing it. Stop the remote first.');
-			return true;
-		}
+		});
 
 		let truncated = false;
 		if (output.length > SHELL_MAX_OUTPUT) {
