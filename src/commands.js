@@ -804,7 +804,7 @@ async function handleCommand(message) {
 			await channel.send('⏳ An execution or maintenance operation is running. Retry the shell command when the bot is idle.');
 			return true;
 		}
-		const output = await runMaintenance(async () => {
+		let output = await runMaintenance(async () => {
 			if (mode === 'sandbox') {
 				ensureContainer();
 				return executeShell(command, { inContainer: true });
