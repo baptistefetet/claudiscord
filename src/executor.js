@@ -16,7 +16,7 @@ const sessions = require('./sessions');
  * can run. Scheduled jobs pass no channelId and get a fresh session every run.
  */
 function executePrompt(agent, mode, prompt, options = {}) {
-	const { channelId, queueKey = channelId || Symbol('detached-execution'), ...rest } = options;
+	const { channelId, queueKey = channelId, ...rest } = options;
 	return runQueued(queueKey, async () => {
 		if (
 			channelId
