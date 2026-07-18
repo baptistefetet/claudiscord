@@ -12,7 +12,7 @@ Works in both DMs and private guild channels. Each channel is an independent con
 - **Channel topic = mini CLAUDE.md** — renaming or rewriting the topic immediately changes the agent's context
 - **Two execution modes per channel** — `admin` runs the selected agent on the host, `sandbox` runs it in the Docker container
 - **Per-channel Claude model** — pick `opus` or `sonnet` per channel with `/opus` / `/sonnet` (default `sonnet`); scheduled jobs snapshot the channel's agent and model at scheduling time
-- **Global queue** — one agent prompt at a time across every channel and scheduled job
+- **Per-channel queues** — prompts stay FIFO within a channel or thread while different channels can run concurrently
 - **Single-user authorization** — only the Discord user whose ID is in `AUTHORIZED_USER_ID` can talk to the bot; everyone else is silently dropped
 - **Optional Docker** — sandbox mode is disabled gracefully if Docker isn't installed; admin mode still works
 - **Voice messages** — Discord voice messages (mic button) are transcribed via Groq Whisper before being passed to the active agent

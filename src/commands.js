@@ -16,7 +16,13 @@ const {
 } = require('./container');
 const { CODEX_AVAILABLE, getCodexUsage, startCodexLogin } = require('./codex');
 const { getClaudeUsage, startClaudeLogin } = require('./claude');
-const { runQueued, isBusy } = require('./queue');
+const {
+	runQueued,
+	runWithLocks,
+	isBusy,
+	isScopeBusy,
+	executionLocks,
+} = require('./queue');
 const { startRemote, stopRemote } = require('./remote');
 const {
 	isVoiceModeAvailable,
@@ -251,10 +257,14 @@ async function handleRemote({ channel, channelId, mode, agent, remoteId }) {
 	try {
 		const existing = remoteId;
 		if (existing) {
-			if (isBusy()) await channel.send('⏳ Waiting for previous prompt...');
+			if (isBusy(channelId)) await channel.send('⏳ Waiting for previous prompt...');
 			let stoppedCleanly = false;
 			try {
-				stoppedCleanly = await runQueued(() => stopRemote({ mode, remoteId: existing }));
+				stoppedCleanly = await runQueued(
+					channelId,
+					() => stopRemote({ mode, remoteId: existing }),
+					{ locks: executionLocks(mode) },
+				);
 			} catch (err) {
 				log.error('remote stop error:', err.message);
 			}
@@ -273,9 +283,9 @@ async function handleRemote({ channel, channelId, mode, agent, remoteId }) {
 		}
 
 		const channelName = resolveChannelName(channel);
-		if (isBusy()) await channel.send('⏳ Waiting for previous prompt...');
+		if (isBusy(channelId)) await channel.send('⏳ Waiting for previous prompt...');
 		try {
-			const agentId = await runQueued(async () => {
+			const agentId = await runQueued(channelId, async () => {
 				if (mode === 'sandbox') ensureContainer();
 				// Hand the existing Discord session to `claude --bg --resume`
 				// so the mobile user starts with the channel's history. Read
@@ -284,7 +294,7 @@ async function handleRemote({ channel, channelId, mode, agent, remoteId }) {
 				const id = await startRemote({ mode, sessionId, channelName });
 				sessions.setRemoteId(channelId, id);
 				return id;
-			});
+			}, { locks: executionLocks(mode) });
 			await channel.send(`\u{1F6F0}️ Remote control enabled for **${channelName}** (agent \`${agentId}\`). Open the Claude mobile app to continue. Send \`/remote\` again to return to Discord mode.`);
 		} catch (err) {
 			log.error('remote start error:', err.message);
@@ -345,7 +355,7 @@ async function handleUsage({ channel, mode }) {
 
 /**
  * /login — start the selected agent's browser login flow in the selected
- * environment. Only one login can be pending because it holds the global queue.
+ * environment. Only one login can be pending because it holds the global lock.
  */
 async function handleLogin({ channel, channelId, mode, agent }) {
 	if (pendingLogin) {
@@ -392,8 +402,8 @@ async function handleLogin({ channel, channelId, mode, agent }) {
 	const queueHold = new Promise((resolve) => { login.releaseQueue = resolve; });
 	const startPromise = new Promise((resolve) => { login.resolveStart = resolve; });
 	pendingLogin = login;
-	runQueued(() => queueHold)
-		.catch(err => log.warn(`${flow.label} login queue hold failed: ${err.message}`));
+	runWithLocks([{ scope: 'global', mode: 'exclusive' }], () => queueHold)
+		.catch(err => log.warn(`${flow.label} login lock failed: ${err.message}`));
 
 	login.child.stdin.on('error', () => {});
 	login.child.stdout.on('data', (chunk) => {
@@ -477,9 +487,9 @@ async function handleJobs({ channel }) {
 
 /**
  * /upgrade — sandbox only. Update container packages + Claude Code + Codex.
- * Routed through the global queue so it never overwrites a binary mid-prompt.
+ * Takes the sandbox's exclusive lock so it never overwrites a binary mid-prompt.
  */
-async function handleUpgrade({ channel, mode }) {
+async function handleUpgrade({ channel, channelId, mode }) {
 	if (mode !== 'sandbox') {
 		await channel.send('`/upgrade` is only available in sandbox mode.');
 		return true;
@@ -488,14 +498,22 @@ async function handleUpgrade({ channel, mode }) {
 		await channel.send('Docker is not installed — cannot upgrade.');
 		return true;
 	}
-	// Overwriting /usr/local/bin/claude while another prompt is running
-	// inside the container would crash that prompt. Go through the global
-	// queue so we wait for any in-flight prompt (and warn the user).
-	if (isBusy()) {
-		await channel.send('⏳ A prompt is currently running, upgrade will start after.');
+	if (sessions.hasActiveSandboxRemote()) {
+		await channel.send('🛰️ A sandbox `/remote` session is active — stop it before upgrading the container.');
+		return true;
 	}
-	await runQueued(async () => {
+	// Overwriting /usr/local/bin/claude while another prompt is running
+	// inside the container would crash that prompt. The exclusive sandbox lock
+	// waits for current work and prevents new work from overtaking the upgrade.
+	if (isScopeBusy('sandbox')) {
+		await channel.send('⏳ The sandbox is busy, upgrade will start after.');
+	}
+	await runQueued(channelId, async () => {
 		try {
+			if (sessions.hasActiveSandboxRemote()) {
+				await channel.send('🛰️ A sandbox `/remote` session became active — upgrade cancelled.');
+				return;
+			}
 			ensureContainer();
 			await execFileAsync('docker', [
 				'exec', '-u', 'root', CONTAINER_NAME, 'bash', '-c',
@@ -537,7 +555,8 @@ async function handleUpgrade({ channel, mode }) {
 			log.error('Upgrade error:', err.message);
 			await channel.send(`Upgrade error: ${err.message.slice(0, 300)}`);
 		}
-	}).catch(err => log.error('Queued upgrade error:', err.message));
+	}, { locks: executionLocks('sandbox', 'exclusive') })
+		.catch(err => log.error('Queued upgrade error:', err.message));
 	return true;
 }
 
@@ -782,23 +801,26 @@ async function handleCommand(message) {
 		const command = content.slice(1).trim();
 		if (!command) return false;
 
-		let output;
-		if (mode === 'admin') {
-			output = await executeShell(command);
-		} else {
-			if (!DOCKER_AVAILABLE) {
-				await channel.send('Sandbox is not available — shell requires either admin mode or a working sandbox.');
-				return true;
+		if (mode === 'sandbox' && !DOCKER_AVAILABLE) {
+			await channel.send('Sandbox is not available — shell requires either admin mode or a working sandbox.');
+			return true;
+		}
+		// A shell may mutate arbitrary shared files, and its sandbox timeout uses
+		// pkill by command prefix. Give it exclusive access to its environment.
+		if (isScopeBusy(mode)) {
+			await channel.send(`⏳ The **${mode}** environment is busy, shell will start after.`);
+		}
+		const output = await runQueued(channelId, async () => {
+			if (mode === 'sandbox') {
+				if (sessions.hasActiveSandboxRemote()) return null;
+				ensureContainer();
+				return executeShell(command, { inContainer: true });
 			}
-			// A live sandbox remote shares the container with us. `executeShell`
-			// times out via `pkill -9 -f <prefix>` which can scoop up the remote
-			// daemon. Refuse rather than risk killing the user's mobile session.
-			if (sessions.hasActiveSandboxRemote()) {
-				await channel.send('\u{1F6F0}️ A sandbox `/remote` session is active — sandbox `!shell` is paused to avoid killing it. Stop the remote first.');
-				return true;
-			}
-			ensureContainer();
-			output = await executeShell(command, { inContainer: true });
+			return executeShell(command);
+		}, { locks: executionLocks(mode, 'exclusive') });
+		if (output === null) {
+			await channel.send('\u{1F6F0}️ A sandbox `/remote` session is active — sandbox `!shell` is paused to avoid killing it. Stop the remote first.');
+			return true;
 		}
 
 		let truncated = false;

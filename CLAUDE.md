@@ -11,7 +11,7 @@ Discord message (DM, guild text channel or text-in-voice chat)
   -> authorization filter (authorized user only)
   -> command dispatcher (/admin, /sandbox, /new, …)
   -> session lookup by channelId
-  -> executePrompt(agent, mode, prompt) [global queue — one agent at a time]
+  -> executePrompt(agent, mode, prompt) [FIFO queue keyed by channelId]
        claude + admin   -> host Claude
        claude + sandbox -> single container
        codex  + admin   -> host Codex
@@ -20,14 +20,14 @@ Discord message (DM, guild text channel or text-in-voice chat)
 Scheduled jobs
   -> minute-resolution ticker
   -> executeJob(job)
-  -> executePrompt(job.agent, job.mode, …) [same global queue]
+  -> executePrompt(job.agent, job.mode, …) [queue keyed by job.channelId]
   -> notification sent back to job.channelId
 ```
 
 - Each Discord channel has its own mode (`admin` / `sandbox`), agent (`claude` / `codex`, default `claude`), Claude model (`opus` / `sonnet`, default `sonnet`) and active-agent session. A DM channel is treated exactly like any other channel.
 - Public threads are handled like any other channel (own `channelId` → own session). On first contact, a thread snapshots its parent channel's mode/agent/model (`sessions.ensureFromParent`, not a live link) but starts a fresh session. The system prompt shows both the parent channel name and the thread name (`prompts.js` `thread`/`threadName`); the topic falls back to the parent's. Jobs/uploads attach to the thread itself like any channel. System messages are dropped early (`if (message.system) return;`): creating a thread posts a `ThreadCreated` system message in the parent whose `content` is the thread NAME (not empty), which would otherwise be answered as a prompt. On a thread's first turn (sessionId still null), if it was created from an existing message, that anchor message (`channel.fetchStarterMessage()`) is prepended to the prompt as quoted context — otherwise the message the thread forks from would be invisible (it lives in the parent and appears in the thread only as a dropped system message).
 - The authorized user is stored in `.env` (`AUTHORIZED_USER_ID`) and is required at startup — without it the process refuses to boot.
-- Global queue (`src/queue.js`): every prompt (interactive or scheduled) goes through a single FIFO. `isBusy()` is used to show a one-time "⏳ waiting" hint per channel.
+- Per-channel queues (`src/queue.js`): prompts sharing a `channelId` are FIFO; different channels run concurrently. Shared/exclusive environment locks protect login, shell and upgrades. `isBusy(channelId)` drives the one-time "⏳ waiting" hint.
 - Jobs live in two separate SQLite databases — never merged, never watched:
   - `ADMIN_USER_HOME/.claudiscord/jobs.db` for admin jobs
   - `SANDBOX_HOST_HOME/.claudiscord/jobs.db` for sandbox jobs
@@ -44,7 +44,7 @@ src/
   prompts.js          # Shared system prompt builder with Claude-only sections
   logger.js           # stdout/stderr logging (journald-friendly)
   discord.js          # Client, sendToChannel, sendChunked (splitMessage now private), typing indicator
-  queue.js            # Single global FIFO (runQueued, isBusy)
+  queue.js            # Per-channel FIFOs + shared/exclusive environment locks
   spawn.js            # spawnCollect: generic subprocess runner (unbounded, no timeout)
   claude.js           # Claude exec/login (host + sandbox), stream-json parse, OAuth usage (getClaudeUsage)
   codex.js            # Codex exec/login (host + sandbox), JSONL parse, account usage (getCodexUsage)
@@ -161,9 +161,9 @@ The user can drop files/photos into a channel (with no text). An upload does NOT
 
 `src/prompts.js` builds the system prompt from `{ channelAgent, channelModel, mode, channelName, threadName, channelTopic, isDM, botName, userName }`. The shared prompt always includes channel context, uploads, scheduling and Discord response rules. Claude-specific CLI and skill-filtering instructions live inside `{{#claude}}...{{/claude}}` and are omitted for Codex.
 
-## Global queue
+## Execution queues
 
-All executions — interactive prompts and scheduled jobs, Claude and Codex — go through `src/queue.js::runQueued`. Only one agent process runs at a time. If a new message arrives while something is running, `src/index.js` sends a one-shot "⏳ Waiting for previous prompt..." notice to the concerned channel. This sequentiality simplifies invariants around shared state (sessions file, container execs); jobs writes are additionally arbitrated by SQLite itself, agents included.
+Interactive prompts, voice turns and scheduled jobs go through `src/queue.js::runQueued(channelId, ...)`. A channel or thread stays strictly FIFO, including its fresh-session job runs, while distinct IDs may execute without a global concurrency limit. `src/index.js` sends the one-shot "⏳ Waiting for previous prompt..." notice only when that same channel is busy. Login holds a global exclusive lock; `!shell` and `/upgrade` hold an environment-exclusive lock. The single sandbox container accepts concurrent `docker exec` processes, so sandbox channels share its 1 CPU, home and filesystem. SQLite arbitrates concurrent jobs writes.
 
 ## Docker sandbox (optional)
 
@@ -216,7 +216,7 @@ SANDBOX_HOST_HOME/
 
 ### Background tasks
 
-`spawnCollect` (`src/spawn.js`) waits for the active CLI to exit naturally, with no timeout: a prompt has no predictable duration and only the operator knows what a given one should take. A stuck agent therefore holds the global queue indefinitely — every channel and scheduled job blocks behind it, which is the intended fail-stop. Recovery is manual: inspect from a host shell, kill the offending process, then resume the channel session.
+`spawnCollect` (`src/spawn.js`) waits for the active CLI to exit naturally, with no timeout: a prompt has no predictable duration and only the operator knows what a given one should take. A stuck agent therefore holds its channel queue indefinitely; other channels continue unless it holds an exclusive maintenance lock. Recovery is manual: inspect from a host shell, kill the offending process, then resume the channel session.
 
 ### Image rebuild
 
@@ -310,7 +310,7 @@ CREATE TABLE jobs (
   ```json
   { "channels": { "<channelId>": { "mode": "admin"|"sandbox", "agent": "claude"|"codex", "model": "opus"|"sonnet", "sessionId": "<uuid>", "remoteId": null|"<agentId>", "lastName": "..." } } }
   ```
-- `sessionId` belongs to the active agent. Both Claude and Codex allocate it on the first invocation and emit it early in JSON output; `executor.js` persists it inside the global queue.
+- `sessionId` belongs to the active agent. Both Claude and Codex allocate it on the first invocation and emit it early in JSON output; `executor.js` persists it inside the channel queue. A process-local context revision prevents a late result from restoring a session cleared by `/new` or a mode/agent transition.
 - Spawn errors retain partial stdout so the agent adapter can attach an already-emitted UUID before the error is surfaced. The next prompt can therefore resume even when the first failed after session initialization.
 - Legacy entries without `agent` load as Claude. A legacy `sessionStarted: false` drops its possibly uncreated UUID; the field disappears on the next persistence.
 - `remoteId` is `null` when the channel is in Discord mode (default), or an 8-hex agent ID when the channel is currently driven from the Claude mobile app via `/remote`. See "Remote control" below.

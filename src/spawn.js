@@ -6,9 +6,9 @@ const log = require('./logger');
  * Returns { stdout, stderr, code }.
  *
  * Deliberately unbounded: only the operator knows how long a given prompt should
- * take, so a stuck agent holds the global queue until they intervene rather than
- * being killed mid-operation. Interactive commands (`apt install` without `-y`,
- * ssh to an unknown host) therefore hang until the operator kills them.
+ * take, so a stuck agent holds its channel queue until they intervene rather
+ * than being killed mid-operation. Interactive commands (`apt install` without
+ * `-y`, ssh to an unknown host) therefore hang until the operator kills them.
  *
  * Agent-agnostic: used by the Claude, Codex and container executors alike.
  */

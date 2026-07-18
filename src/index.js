@@ -163,7 +163,7 @@ client.on(Events.MessageCreate, async message => {
 		}
 	}
 
-	// sessionId is resolved inside executePrompt, within the global queue, so
+	// sessionId is resolved inside executePrompt, within the channel queue, so
 	// back-to-back messages cannot race the first generated UUID.
 	const promptOptions = {
 		channelId,
@@ -183,7 +183,7 @@ client.on(Events.MessageCreate, async message => {
 	};
 
 	// Surface the wait once per channel if another prompt is already running.
-	if (isBusy() && !waitingNotice.has(channelId)) {
+	if (isBusy(channelId) && !waitingNotice.has(channelId)) {
 		waitingNotice.add(channelId);
 		channel.send('\u23F3 Waiting for previous prompt...').catch(() => {});
 	}
@@ -219,7 +219,7 @@ client.on(Events.MessageCreate, async message => {
 		}
 		await channel.send(errMsg).catch(e => log.error('Failed to send error message:', e));
 	} finally {
-		waitingNotice.delete(channelId);
+		if (!isBusy(channelId)) waitingNotice.delete(channelId);
 		scheduler.reloadJobs(); // the agent may have edited a jobs file, even on error
 	}
 });
@@ -243,7 +243,7 @@ function makeInteractionResponder(interaction) {
 	}, 2000);
 
 	// Falls back to a plain channel message once the interaction is unusable: the
-	// 15-min token can expire while a command waits in the global queue. The
+	// 15-min token can expire while a command waits in an execution queue. The
 	// fallback only loses the "used /command" grouping — output is never dropped.
 	const send = async (text) => {
 		if (broken) { await realChannel.send(text); return; }

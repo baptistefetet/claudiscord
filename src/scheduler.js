@@ -133,6 +133,7 @@ async function executeJob(job) {
 			channelModel: jobModel,
 		});
 		const jobOptions = {
+			queueKey: channelId,
 			sessionId: null,
 			systemPrompt: jobSystemPrompt,
 			model: jobModel,

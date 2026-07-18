@@ -26,7 +26,7 @@ const { VoiceMixer, SAMPLE_RATE, CHANNELS } = require('./mixer');
 
 /**
  * Voice assistant: an I/O adapter around the unchanged core. One utterance = one
- * executePrompt through the global FIFO, session keyed by the voice channel's own
+ * executePrompt through its channel FIFO, session keyed by the voice channel's own
  * id (shared with its text-in-voice chat).
  *
  * Half-duplex: input is ignored unless the state is `listening`.
@@ -188,7 +188,7 @@ async function handleTurn(session, pcm) {
 	await postToChat(session, `🎙️ ${text}`);
 
 	// Voice equivalent of the text "⏳ waiting" hint.
-	if (isBusy()) {
+	if (isBusy(channelId)) {
 		session.state = 'speaking';
 		await speak(session, PHRASES.busy, { cache: true }).catch(err => log.warn('voice busy notice failed:', err.message));
 	}
