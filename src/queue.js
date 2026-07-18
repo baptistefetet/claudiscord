@@ -57,25 +57,10 @@ function release(scope, mode) {
 	if (!lock.writer && lock.readers === 0 && lock.waiters.length === 0) locks.delete(scope);
 }
 
-function normalizeLocks(requested = []) {
-	const byScope = new Map();
-	for (const request of requested) {
-		if (!request?.scope) throw new Error('Lock scope is required');
-		const mode = request.mode || 'shared';
-		if (mode !== 'shared' && mode !== 'exclusive') throw new Error(`Invalid lock mode: ${mode}`);
-		const previous = byScope.get(request.scope);
-		if (!previous || mode === 'exclusive') byScope.set(request.scope, mode);
-	}
-	return [...byScope.entries()]
-		.map(([scope, mode]) => ({ scope, mode }))
-		.sort((a, b) => a.scope.localeCompare(b.scope));
-}
-
 async function runWithLocks(requested, fn) {
-	const normalized = normalizeLocks(requested);
 	const acquired = [];
 	try {
-		for (const request of normalized) {
+		for (const request of requested) {
 			await acquire(request.scope, request.mode);
 			acquired.push(request);
 		}
@@ -88,7 +73,7 @@ async function runWithLocks(requested, fn) {
 }
 
 function trackScopes(requested, delta) {
-	for (const { scope } of normalizeLocks(requested)) {
+	for (const { scope } of requested) {
 		const next = (scopePending.get(scope) || 0) + delta;
 		if (next > 0) scopePending.set(scope, next);
 		else scopePending.delete(scope);
