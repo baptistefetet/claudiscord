@@ -104,7 +104,8 @@ Columns:
 - notify_pattern: optional string
 - remaining: number of remaining executions
 - channel_id: Discord channel ID where the notification is sent
-- channel_name: display snapshot, updated automatically
+- channel_name: REQUIRED — set it to the current channel name shown above ("{{channelName}}").
+  The scheduler refreshes it on each run.
 - agent: 'claude' or 'codex' — MUST be set to the current channel agent shown above
   ("Current channel agent"). This freezes the agent at scheduling time. If NULL, the
   scheduler falls back to 'claude'.
@@ -132,7 +133,7 @@ Channel:
 - channel_id is REQUIRED
 - set it to the Discord channel where the user is talking to you now (DM or guild channel)
 - notifications are sent there
-- channel_name can be left NULL; the scheduler updates it automatically
+- channel_name is REQUIRED too: set it to the current channel name shown above ("{{channelName}}")
 
 Notifications:
 - if notify=1, the job output is sent to the job's channel
@@ -152,8 +153,8 @@ execution mode.
 
 Minimal example:
 sqlite3 {{jobsPath}} ".timeout 5000" "
-INSERT INTO jobs (id, prompt, cron, enabled, notify, remaining, channel_id, agent, {{#claude}}model, {{/claude}}created, description)
-VALUES ('weather', 'Give me the weather in Lyon', '0 8 * * *', 1, 1, 0, '1234567890', '{{channelAgent}}', {{#claude}}'sonnet', {{/claude}}'2026-01-01T00:00:00Z', 'Daily weather');"
+INSERT INTO jobs (id, prompt, cron, enabled, notify, remaining, channel_id, channel_name, agent, {{#claude}}model, {{/claude}}created, description)
+VALUES ('weather', 'Give me the weather in Lyon', '0 8 * * *', 1, 1, 0, '1234567890', '{{channelName}}', '{{channelAgent}}', {{#claude}}'sonnet', {{/claude}}'2026-01-01T00:00:00Z', 'Daily weather');"
 
 {{#textFormat}}
 --- Response format ---
