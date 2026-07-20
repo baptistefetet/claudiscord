@@ -334,11 +334,13 @@ async function getCodexUsage(mode = 'admin') {
 				const limits = message.result?.rateLimitsByLimitId?.codex
 					|| message.result?.rateLimits;
 				const windows = [limits?.primary, limits?.secondary].filter(Boolean);
-				const fiveHour = windows.find(window => window.windowDurationMins === 300)
-					|| limits?.primary;
-				const weekly = windows.find(window => window.windowDurationMins === 10080)
-					|| limits?.secondary;
-				if (!Number.isFinite(fiveHour?.usedPercent) || !Number.isFinite(weekly?.usedPercent)) {
+				// Match windows by their duration, no positional fallback: the API may
+				// omit the 5h window entirely (OpenAI dropped it), leaving only weekly.
+				const fiveHour = windows.find(window => window.windowDurationMins === 300);
+				const weekly = windows.find(window => window.windowDurationMins === 10080);
+				const hasFiveHour = Number.isFinite(fiveHour?.usedPercent);
+				const hasWeekly = Number.isFinite(weekly?.usedPercent);
+				if (!hasFiveHour && !hasWeekly) {
 					finish({ available: false, reason: 'no-subscription' });
 					return;
 				}
@@ -348,10 +350,10 @@ async function getCodexUsage(mode = 'admin') {
 					: null;
 				finish({
 					available: true,
-					fiveHour: fiveHour.usedPercent,
-					weekly: weekly.usedPercent,
-					fiveHourResetAt: resetAt(fiveHour.resetsAt),
-					weeklyResetAt: resetAt(weekly.resetsAt),
+					fiveHour: hasFiveHour ? fiveHour.usedPercent : null,
+					weekly: hasWeekly ? weekly.usedPercent : null,
+					fiveHourResetAt: hasFiveHour ? resetAt(fiveHour.resetsAt) : null,
+					weeklyResetAt: hasWeekly ? resetAt(weekly.resetsAt) : null,
 				});
 				return;
 			}

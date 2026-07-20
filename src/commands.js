@@ -329,9 +329,14 @@ async function handleUsage({ channel, mode }) {
 		if (!usage.available) {
 			return `📊 **${label} usage**\n▫️ ${reasons[usage.reason] || reasons.error}`;
 		}
-		return `📊 **${label} usage**\n`
-			+ `▫️ 5h window: **${Math.round(usage.fiveHour)}%**${fmtReset(usage.fiveHourResetAt)}\n`
-			+ `▫️ Weekly: **${Math.round(usage.weekly)}%**${fmtReset(usage.weeklyResetAt)}`;
+		const lines = [`📊 **${label} usage**`];
+		if (Number.isFinite(usage.fiveHour)) {
+			lines.push(`▫️ 5h window: **${Math.round(usage.fiveHour)}%**${fmtReset(usage.fiveHourResetAt)}`);
+		}
+		if (Number.isFinite(usage.weekly)) {
+			lines.push(`▫️ Weekly: **${Math.round(usage.weekly)}%**${fmtReset(usage.weeklyResetAt)}`);
+		}
+		return lines.join('\n');
 	};
 	const claudeReasons = {
 		'no-oauth': 'Not available (no OAuth credentials in this environment).',
