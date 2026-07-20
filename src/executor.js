@@ -30,14 +30,12 @@ function executePrompt(agent, mode, prompt, options = {}) {
 		const sessionId = channelId
 			? sessions.getSession(channelId).sessionId
 			: (rest.sessionId || null);
-		const contextRevision = channelId ? sessions.getContextRevision(channelId) : null;
 		const opts = { ...rest, sessionId };
 		const sessionContextIsCurrent = () => (
 			!channelId
 			|| (
 				sessions.getAgent(channelId) === agent
 				&& sessions.getMode(channelId) === mode
-				&& sessions.getContextRevision(channelId) === contextRevision
 			)
 		);
 

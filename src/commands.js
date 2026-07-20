@@ -562,7 +562,18 @@ function isCodexAvailable(mode) {
 	return mode === 'admin' ? CODEX_AVAILABLE : isCodexAvailableInContainer();
 }
 
+// Context-mutating commands (mode/agent switch, session reset) are refused while
+// an execution is in flight on this channel: queuing prompts is useful, silently
+// mutating the context a running prompt or job depends on is not. Remote mode is
+// gated upstream by remoteGateHint.
+async function rejectIfChannelBusy(channel, channelId) {
+	if (!isBusy(channelId)) return false;
+	await channel.send('⏳ A prompt or job is running on this channel — retry when it is done.');
+	return true;
+}
+
 async function handleNew({ channel, channelId }) {
+	if (await rejectIfChannelBusy(channel, channelId)) return true;
 	sessions.clearChannel(channelId);
 	await channel.send('Session reset for this channel.');
 	return true;
@@ -573,6 +584,7 @@ async function handleAdmin({ channel, channelId, mode }) {
 		await channel.send('This channel is already in **admin** mode.');
 		return true;
 	}
+	if (await rejectIfChannelBusy(channel, channelId)) return true;
 	sessions.setMode(channelId, 'admin');
 	sessions.clearChannel(channelId);
 	await channel.send('Channel switched to **admin** mode. Session reset.');
@@ -588,6 +600,7 @@ async function handleSandbox({ channel, channelId, mode }) {
 		await channel.send('This channel is already in **sandbox** mode.');
 		return true;
 	}
+	if (await rejectIfChannelBusy(channel, channelId)) return true;
 	sessions.setMode(channelId, 'sandbox');
 	sessions.clearChannel(channelId);
 	await channel.send('Channel switched to **sandbox** mode. Session reset.');
@@ -687,9 +700,12 @@ async function handleModel({ channel, channelId, content, agent, model }) {
 		await channel.send(`This channel is already using **${target}**.`);
 		return true;
 	}
-	if (agent !== 'claude' && getActiveVoiceChannelId() === channelId) {
-		await channel.send(VOICE_AGENT_LOCK);
-		return true;
+	if (agent !== 'claude') {
+		if (getActiveVoiceChannelId() === channelId) {
+			await channel.send(VOICE_AGENT_LOCK);
+			return true;
+		}
+		if (await rejectIfChannelBusy(channel, channelId)) return true;
 	}
 	sessions.setModel(channelId, target);
 	if (agent !== 'claude') {
@@ -714,6 +730,7 @@ async function handleCodex({ channel, channelId, mode, agent }) {
 		await channel.send(VOICE_AGENT_LOCK);
 		return true;
 	}
+	if (await rejectIfChannelBusy(channel, channelId)) return true;
 	sessions.setAgent(channelId, 'codex');
 	await channel.send('Channel switched to **codex**. Session reset.');
 	return true;

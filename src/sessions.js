@@ -40,10 +40,6 @@ const log = require('./logger');
 /** @type {Map<string, {mode?: string, agent?: string, model?: string, sessionId?: string, remoteId?: string|null, autojoin?: boolean, lastName?: string}>} */
 const channels = new Map();
 
-// Process-local generation used to discard a session UUID returned after the
-// channel was reset while an agent process was still running.
-const contextRevisions = new Map();
-
 // In-memory only. Gates the one-time thread-starter injection against the race
 // where concurrent first-turn messages all see a null sessionId.
 const starterClaimed = new Set();
@@ -93,14 +89,6 @@ function ensureChannel(channelId) {
 	return channels.get(channelId);
 }
 
-function bumpContextRevision(channelId) {
-	contextRevisions.set(channelId, (contextRevisions.get(channelId) || 0) + 1);
-}
-
-function getContextRevision(channelId) {
-	return contextRevisions.get(channelId) || 0;
-}
-
 /**
  * Snapshot a parent channel's mode/agent/model onto a thread. Idempotent, so the
  * inheritance is a one-off at first contact, not a live link.
@@ -142,7 +130,6 @@ function setMode(channelId, mode) {
 	const entry = ensureChannel(channelId);
 	if (entry.mode === mode) return;
 	entry.mode = mode;
-	bumpContextRevision(channelId);
 	persist();
 	log.info(`Channel ${channelId} mode set to: ${mode}`);
 }
@@ -159,7 +146,6 @@ function setAgent(channelId, agent) {
 	if (entry.agent === agent) return;
 	entry.agent = agent;
 	entry.sessionId = null;
-	bumpContextRevision(channelId);
 	persist();
 	log.info(`Channel ${channelId} agent set to: ${agent}; session cleared`);
 }
@@ -229,7 +215,6 @@ function clearChannel(channelId) {
 	if (!entry) return;
 	entry.sessionId = null;
 	starterClaimed.delete(channelId);
-	bumpContextRevision(channelId);
 	persist();
 }
 
@@ -240,7 +225,6 @@ function listChannelIds() {
 function removeChannel(channelId) {
 	if (!channels.delete(channelId)) return false;
 	starterClaimed.delete(channelId);
-	contextRevisions.delete(channelId);
 	persist();
 	return true;
 }
@@ -256,7 +240,6 @@ function setRemoteId(channelId, remoteId) {
 	if (entry.remoteId === next) return;
 	entry.remoteId = next;
 	if (next) entry.sessionId = null; // `claude --bg` manages its own UUID
-	bumpContextRevision(channelId);
 	persist();
 	log.info(`Channel ${channelId} remoteId set to: ${next}`);
 }
@@ -296,7 +279,6 @@ module.exports = {
 	setAutojoin,
 	listAutojoinChannelIds,
 	getSession,
-	getContextRevision,
 	setSessionId,
 	setLastName,
 	clearChannel,

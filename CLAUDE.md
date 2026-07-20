@@ -310,7 +310,7 @@ CREATE TABLE jobs (
   ```json
   { "channels": { "<channelId>": { "mode": "admin"|"sandbox", "agent": "claude"|"codex", "model": "opus"|"sonnet", "sessionId": "<uuid>", "remoteId": null|"<agentId>", "lastName": "..." } } }
   ```
-- `sessionId` belongs to the active agent. Both Claude and Codex allocate it on the first invocation and emit it early in JSON output; `executor.js` persists it inside the channel queue. A process-local context revision prevents a late result from restoring a session cleared by `/new` or a mode/agent transition.
+- `sessionId` belongs to the active agent. Both Claude and Codex allocate it on the first invocation and emit it early in JSON output; `executor.js` persists it inside the channel queue. Context-mutating commands (`/new`, mode/agent switch) are refused while the channel is busy (`isBusy(channelId)` — a prompt or job running), so a late result cannot restore a session the user just changed; the executor still re-checks agent/mode before persisting (covers a context switch during a thread's pre-enqueue first-turn window). Remote mode blocks these commands upstream via `remoteGateHint`.
 - Spawn errors retain partial stdout so the agent adapter can attach an already-emitted UUID before the error is surfaced. The next prompt can therefore resume even when the first failed after session initialization.
 - Legacy entries without `agent` load as Claude. A legacy `sessionStarted: false` drops its possibly uncreated UUID; the field disappears on the next persistence.
 - `remoteId` is `null` when the channel is in Discord mode (default), or an 8-hex agent ID when the channel is currently driven from the Claude mobile app via `/remote`. See "Remote control" below.
