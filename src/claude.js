@@ -163,7 +163,7 @@ function buildClaudeArgs(prompt, options = {}) {
 	args.push('--disallowedTools', DISALLOWED_TOOLS);
 	args.push('--settings', CLAUDE_SETTINGS);
 	if (model) args.push('--model', model);
-	args.push('--effort', model === 'sonnet' ? 'medium' : 'xhigh');
+	args.push('--effort', model === 'sonnet' ? 'high' : 'xhigh');
 	args.push('--', prompt);
 
 	return args;
