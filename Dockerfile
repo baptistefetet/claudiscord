@@ -17,7 +17,10 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
     && cp /root/.local/bin/uv /usr/local/bin/uv \
     && cp /root/.local/bin/uvx /usr/local/bin/uvx \
     && rm -rf /root/.local
-RUN groupadd -g ${SANDBOX_GID} claude && useradd -u ${SANDBOX_UID} -g ${SANDBOX_GID} -m -s /bin/bash claude
+# -o allows a duplicate UID/GID: node:22-slim already ships a user/group at
+# 1000, and SANDBOX_HOME may be owned by 1000, so tolerate the clash instead
+# of failing the build.
+RUN groupadd -o -g ${SANDBOX_GID} claude && useradd -o -u ${SANDBOX_UID} -g ${SANDBOX_GID} -m -s /bin/bash claude
 USER claude
 WORKDIR /home/claude
 CMD ["sleep", "infinity"]
