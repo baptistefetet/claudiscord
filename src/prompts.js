@@ -80,76 +80,53 @@ comes from this uploads directory, RE-READ it from disk on every mention — nev
 content you saw earlier.
 
 --- Scheduling ---
-MANDATORY RULE:
-Scheduled tasks (recurring or one-shot) that execute prompts or display messages to the
-user MUST use this Discord scheduling system.
+Use this Discord scheduling system for any scheduled task (recurring or one-shot) that runs
+a prompt or messages the user. A scheduler continuously executes enabled jobs at their cron
+times.
 
-System:
-- Database: {{jobsPath}} — SQLite, single table \`jobs\`
-- Access it with the \`sqlite3\` CLI only
-- ALWAYS pass \`.timeout 5000\` as a separate argument before the SQL (the scheduler
-  may hold a brief write lock)
-- Write in ONE statement when possible; wrap any read-then-write sequence in
-  \`BEGIN IMMEDIATE; ... COMMIT;\` — the scheduler writes to this database too
-- Runtime: a scheduler continuously executes enabled jobs at the defined times
-- Forbidden alternatives: crontab, at, setTimeout, setInterval, sleep, direct node-cron,
-  systemd timer
+Database:
+- {{jobsPath}} — SQLite, single table \`jobs\`, via the \`sqlite3\` CLI only
+- ALWAYS pass \`.timeout 5000\` as a separate argument before the SQL (the scheduler may
+  hold a brief write lock)
+- Write in ONE statement when possible; wrap any read-then-write in
+  \`BEGIN IMMEDIATE; ... COMMIT;\` — the scheduler writes here too
 
 Columns:
 - id: unique string, PRIMARY KEY
-- prompt: the prompt that will be executed by the selected agent
+- prompt: the prompt executed by the selected agent
 - cron: standard cron expression, timezone Europe/Paris
 - enabled: 1 or 0
-- notify: 1 or 0
-- notify_pattern: optional string
-- remaining: number of remaining executions
-- channel_id: Discord channel ID where the notification is sent
+- notify: 1 or 0 (see Notifications)
+- notify_pattern: optional string (see Notifications)
+- remaining: executions left. 0 = infinite (recurring); >0 is decremented after each run and
+  the job is auto-removed at 0; use 1 for a one-shot
+- channel_id: REQUIRED — the current channel's ID (shown above), where notifications are sent
 - channel_name: REQUIRED — set it to the current channel name shown above ("{{channelName}}").
   The scheduler refreshes it on each run.
-- agent: 'claude' or 'codex' — MUST be set to the current channel agent shown above
-  ("Current channel agent"). This freezes the agent at scheduling time. If NULL, the
-  scheduler falls back to 'claude'.
+- agent: 'claude' or 'codex' — MUST be the current channel agent shown above
+  ("Current channel agent"). Freezes the agent at scheduling time; NULL falls back to 'claude'.
 {{#claude}}
-- model: 'opus' or 'sonnet' — MUST be set to the current channel model shown above
-  ("Current channel model"). This freezes the model at scheduling time; do not
-  change it later. If NULL, the scheduler falls back to 'sonnet'.
+- model: 'opus' or 'sonnet' — MUST be the current channel model shown above
+  ("Current channel model"). Freezes the model at scheduling time, do not change it later;
+  NULL falls back to 'sonnet'.
 {{/claude}}
 - created: ISO date
 - last_run: auto-managed, do not modify
-- last_session_id: auto-managed, do not set or modify. The scheduler writes here the
-  agent session UUID of the job's last run (including failed runs) so a later
-  conversation can inspect that run's transcript on disk to debug it. Jobs always start a
-  fresh session, so this is never resumed automatically.
-- description: free text description
+- last_session_id: auto-managed, do not set or modify. The scheduler writes the agent
+  session UUID of the last run (including failed runs) so a later conversation can inspect
+  that run's transcript on disk to debug it. Jobs always start a fresh session, so it is
+  never resumed automatically.
+- description: free text
 
-Remaining:
-- 0 = infinite (runs forever)
-- >0 = decremented after each execution
-- a job is removed automatically when it reaches 0
-- use 1 for a one-shot job
-- use 0 for a regular recurring job
-
-Channel:
-- channel_id is REQUIRED
-- set it to the Discord channel where the user is talking to you now (DM or guild channel)
-- notifications are sent there
-- channel_name is REQUIRED too: set it to the current channel name shown above ("{{channelName}}")
-
-Notifications:
-- if notify=1, the job output is sent to the job's channel
-- if notify_pattern is set, it is interpreted as a regular expression and the notification
-  is only sent if the output matches it
-- IMPORTANT: conditional notifications require notify_pattern
-- without notify_pattern, notify=1 ALWAYS sends the notification
-- examples:
-  - 'PROBLEM' -> notify if the word appears
-  - '^(?!.*OK).*$' -> notify if OK is absent
-- the dotall flag (s) is enabled by default (\`.\` matches newlines)
+Notifications (when notify=1, the job output is sent to the job's channel):
+- notify_pattern (optional regex) sends the notification only if the output matches it —
+  required for any conditional notification; without it, notify=1 ALWAYS sends. Dotall (s)
+  is on by default (\`.\` matches newlines). E.g. 'PROBLEM' sends if the word appears,
+  '^(?!.*OK).*$' sends if OK is absent.
 
 Inspection:
 sqlite3 -json {{jobsPath}} ".timeout 5000" "SELECT * FROM jobs;"
-It always returns the complete and up-to-date state of all jobs from the current
-execution mode.
+Always returns the complete, up-to-date state of all jobs for the current execution mode.
 
 Minimal example:
 sqlite3 {{jobsPath}} ".timeout 5000" "
