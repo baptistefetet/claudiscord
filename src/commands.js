@@ -1,12 +1,9 @@
-const { spawn, execFileSync, execFile } = require('child_process');
+const { execFile } = require('child_process');
 const { promisify } = require('util');
 const execFileAsync = promisify(execFile);
 const {
 	UPGRADE_TIMEOUT_MS,
-	SHELL_TIMEOUT_MS,
-	DISCORD_MAX_MSG_LENGTH,
 	CONTAINER_NAME,
-	ADMIN_USER_HOME,
 } = require('./config');
 const sessions = require('./sessions');
 const {
@@ -14,8 +11,10 @@ const {
 	DOCKER_AVAILABLE,
 	isCodexAvailableInContainer,
 } = require('./container');
-const { CODEX_AVAILABLE, getCodexUsage, startCodexLogin } = require('./codex');
-const { getClaudeUsage, startClaudeLogin } = require('./claude');
+const { CODEX_AVAILABLE, getCodexUsage } = require('./codex');
+const { getClaudeUsage } = require('./claude');
+const { handleLogin, finishPendingLogin } = require('./login');
+const { handleShell } = require('./shell');
 const { runMaintenance, isBusy } = require('./queue');
 const { startRemote, stopRemote } = require('./remote');
 const {
@@ -32,175 +31,10 @@ const { loadAllJobs } = require('./jobs-store');
 const scheduler = require('./scheduler');
 const log = require('./logger');
 
-const KILL_GRACE_MS = 5000;
-// Worst case: "```\n" (4) + output + "\n... (truncated)\n```" (21) = 25 overhead
-const SHELL_MAX_OUTPUT = DISCORD_MAX_MSG_LENGTH - 25;
-
 // Per-channel lock for a whole `/remote` toggle. `remoteId` is not set until the
 // spawn completes, so without it a concurrent message would pass the remote gate,
 // and two back-to-back toggles would both take the start branch.
 const remoteOpInFlight = new Set();
-let pendingLogin = null;
-
-function startAgentLogin(agent, mode) {
-	if (agent === 'codex') return startCodexLogin(mode);
-	return startClaudeLogin(mode);
-}
-
-function killLogin(login) {
-	if (!login || login.closed) return;
-	login.killed = true;
-	try { login.child.kill('SIGTERM'); } catch (_) {}
-	try {
-		if (login.flow.cleanup) login.flow.cleanup();
-	} catch (err) {
-		log.warn(`${login.flow.label} login cleanup failed: ${err.message}`);
-	}
-	setTimeout(() => {
-		if (!login.closed) {
-			try { login.child.kill('SIGKILL'); } catch (_) {}
-			try {
-				if (login.flow.cleanup) login.flow.cleanup();
-			} catch (err) {
-				log.warn(`${login.flow.label} login cleanup failed: ${err.message}`);
-			}
-		}
-	}, KILL_GRACE_MS);
-}
-
-function clearLogin(login) {
-	if (!login || pendingLogin !== login) return;
-	clearTimeout(login.timeout);
-	clearTimeout(login.urlTimeout);
-	if (login.releaseMaintenance) {
-		login.releaseMaintenance();
-		login.releaseMaintenance = null;
-	}
-	pendingLogin = null;
-}
-
-function resolveLoginStart(login) {
-	if (!login || login.startResolved) return;
-	login.startResolved = true;
-	if (login.resolveStart) login.resolveStart();
-}
-
-function loginOutput(login) {
-	return `${login.stdout}\n${login.stderr}`;
-}
-
-function maybeSendLoginUrl(login, channel) {
-	if (login.urlSent) return;
-	const output = loginOutput(login);
-	const url = login.flow.extractUrl(output);
-	if (!url) return;
-	login.urlSent = true;
-	clearTimeout(login.urlTimeout);
-	channel.send(login.flow.formatUrlMessage(url, output))
-		.catch(err => log.error(`${login.flow.label} login URL send error:`, err.message))
-		.finally(() => resolveLoginStart(login));
-}
-
-async function finishPendingLogin(channel, content) {
-	const login = pendingLogin;
-	if (!login || login.channelId !== channel.id) return false;
-
-	const trimmed = content.trim();
-	if (trimmed === '/login') {
-		await channel.send(`${login.flow.label} login is already pending here. ${login.flow.pendingHint}`);
-		return true;
-	}
-	if (trimmed === '/login cancel' || trimmed === '/cancel') {
-		killLogin(login);
-		clearLogin(login);
-		await channel.send(login.flow.cancelMessage);
-		resolveLoginStart(login);
-		return true;
-	}
-	if (!login.flow.awaitsDiscordInput) {
-		await channel.send(`${login.flow.label} login is pending. ${login.flow.pendingHint}`);
-		return true;
-	}
-	if (trimmed.startsWith('/')) {
-		await channel.send(`${login.flow.label} login is pending. ${login.flow.inputHint}`);
-		return true;
-	}
-
-	login.inputSubmitted = true;
-	try {
-		login.child.stdin.write(`${trimmed}\n`);
-		if (login.flow.inputReceivedMessage) {
-			await channel.send(login.flow.inputReceivedMessage);
-		}
-	} catch (err) {
-		clearLogin(login);
-		await channel.send(`${login.flow.label} login failed before the input could be sent: ${err.message}`);
-		resolveLoginStart(login);
-	}
-	return true;
-}
-
-/**
- * Execute a shell command and return output for Discord. spawn, not exec: a
- * blocked event loop would kill the Discord WebSocket heartbeat. SIGTERM→SIGKILL
- * with process group kill (host) or container cleanup (sandbox).
- */
-function executeShell(command, { inContainer } = {}) {
-	return new Promise((resolve) => {
-		const spawnArgs = inContainer
-			? { cmd: 'docker', args: ['exec', CONTAINER_NAME, 'bash', '-c', command], opts: { stdio: ['pipe', 'pipe', 'pipe'] } }
-			: { cmd: 'bash', args: ['-c', command], opts: { cwd: ADMIN_USER_HOME, stdio: ['pipe', 'pipe', 'pipe'], detached: true } };
-
-		const child = spawn(spawnArgs.cmd, spawnArgs.args, spawnArgs.opts);
-		child.stdin.end();
-
-		let stdout = '';
-		let stderr = '';
-		let killed = false;
-
-		child.stdout.on('data', chunk => { stdout += chunk; });
-		child.stderr.on('data', chunk => { stderr += chunk; });
-
-		const timer = setTimeout(() => {
-			killed = true;
-			log.warn(`Shell timeout after ${SHELL_TIMEOUT_MS / 1000}s, sending SIGTERM`);
-			if (inContainer) {
-				child.kill('SIGTERM');
-			} else {
-				try { process.kill(-child.pid, 'SIGTERM'); } catch (_) {}
-			}
-			setTimeout(() => {
-				if (inContainer) {
-					try { child.kill('SIGKILL'); } catch (_) {}
-					try {
-						execFileSync('docker', ['exec', CONTAINER_NAME, 'pkill', '-9', '-f', command.slice(0, 80)], { timeout: 5000 });
-					} catch (_) {}
-				} else {
-					try { process.kill(-child.pid, 'SIGKILL'); } catch (_) {}
-				}
-			}, KILL_GRACE_MS);
-		}, SHELL_TIMEOUT_MS);
-
-		child.on('close', (code) => {
-			clearTimeout(timer);
-			if (killed) {
-				resolve(`(timeout after ${SHELL_TIMEOUT_MS / 1000}s)`);
-				return;
-			}
-			const output = (stdout + stderr).trim();
-			if (code === 0) {
-				resolve(output || '(no output)');
-			} else {
-				resolve(output || `(exit code ${code})`);
-			}
-		});
-
-		child.on('error', (err) => {
-			clearTimeout(timer);
-			resolve(`(error: ${err.message})`);
-		});
-	});
-}
 
 /**
  * Multi-line rendering of a scheduled job for the /jobs command.
@@ -353,117 +187,6 @@ async function handleUsage({ channel, mode }) {
 		formatUsage(`Claude (${modeLabel})`, claudeUsage, claudeReasons),
 		formatUsage(`Codex (${modeLabel})`, codexUsage, codexReasons),
 	].join('\n\n'));
-	return true;
-}
-
-/**
- * /login — start the selected agent's browser login flow in the selected
- * environment. Only one login can be pending because it holds maintenance.
- */
-async function handleLogin({ channel, channelId, mode, agent }) {
-	if (pendingLogin) {
-		const sameChannel = pendingLogin.channelId === channelId;
-		await channel.send(sameChannel
-			? `${pendingLogin.flow.label} login is already pending here. ${pendingLogin.flow.pendingHint}`
-			: `${pendingLogin.flow.label} login is already pending in another channel. Finish or let it expire before starting a new one.`);
-		return true;
-	}
-	if (isBusy()) {
-		await channel.send('⏳ A prompt is currently running. Retry `/login` when the queue is idle.');
-		return true;
-	}
-
-	let flow;
-	try {
-		flow = startAgentLogin(agent, mode);
-	} catch (err) {
-		if (err.code === 'CODEX_NOT_AVAILABLE') {
-			await channel.send(`Codex is not installed or not available in **${mode}** mode.`);
-			return true;
-		}
-		const label = agent === 'codex' ? 'Codex' : 'Claude';
-		await channel.send(`${label} login failed to start: ${err.message}`);
-		return true;
-	}
-
-	const login = {
-		flow,
-		child: flow.child,
-		channelId,
-		stdout: '',
-		stderr: '',
-		urlSent: false,
-		inputSubmitted: false,
-		killed: false,
-		closed: false,
-		timeout: null,
-		urlTimeout: null,
-		releaseMaintenance: null,
-		startResolved: false,
-		resolveStart: null,
-	};
-	const maintenanceHold = new Promise((resolve) => { login.releaseMaintenance = resolve; });
-	const startPromise = new Promise((resolve) => { login.resolveStart = resolve; });
-	pendingLogin = login;
-	runMaintenance(() => maintenanceHold)
-		.catch(err => log.warn(`${flow.label} login maintenance failed: ${err.message}`));
-
-	login.child.stdin.on('error', () => {});
-	login.child.stdout.on('data', (chunk) => {
-		login.stdout += chunk;
-		maybeSendLoginUrl(login, channel);
-	});
-	login.child.stderr.on('data', (chunk) => {
-		login.stderr += chunk;
-		maybeSendLoginUrl(login, channel);
-	});
-	login.child.on('error', (err) => {
-		clearLogin(login);
-		channel.send(`${flow.label} login failed to start: ${err.message}`)
-			.catch(() => {})
-			.finally(() => resolveLoginStart(login));
-	});
-	login.child.on('close', (code) => {
-		login.closed = true;
-		if (pendingLogin !== login) return;
-		clearLogin(login);
-		if (code === 0) {
-			channel.send(flow.successMessage).catch(() => {})
-				.finally(() => resolveLoginStart(login));
-			return;
-		}
-		channel.send(flow.formatFailureMessage({
-			killed: login.killed,
-			urlSent: login.urlSent,
-			inputSubmitted: login.inputSubmitted,
-			code,
-			output: loginOutput(login),
-		}))
-			.catch(() => {})
-			.finally(() => resolveLoginStart(login));
-	});
-
-	login.urlTimeout = setTimeout(() => {
-		if (login.urlSent || pendingLogin !== login) return;
-		killLogin(login);
-		clearLogin(login);
-		channel.send(flow.noUrlMessage)
-			.catch(() => {})
-			.finally(() => resolveLoginStart(login));
-	}, flow.urlTimeoutMs);
-	login.timeout = setTimeout(() => {
-		if (pendingLogin !== login) return;
-		killLogin(login);
-		clearLogin(login);
-		channel.send(flow.formatFailureMessage({
-			killed: true,
-			urlSent: login.urlSent,
-			inputSubmitted: login.inputSubmitted,
-			output: loginOutput(login),
-		})).catch(() => {});
-	}, flow.timeoutMs);
-
-	await startPromise;
 	return true;
 }
 
@@ -813,41 +536,7 @@ async function handleCommand(message) {
 	if (content.startsWith('!')) {
 		const command = content.slice(1).trim();
 		if (!command) return false;
-
-		if (mode === 'sandbox' && !DOCKER_AVAILABLE) {
-			await channel.send('Sandbox is not available — shell requires either admin mode or a working sandbox.');
-			return true;
-		}
-		if (mode === 'sandbox' && sessions.hasActiveSandboxRemote()) {
-			await channel.send('\u{1F6F0}️ A sandbox `/remote` session is active — sandbox `!shell` is paused to avoid killing it. Stop the remote first.');
-			return true;
-		}
-		if (isBusy()) {
-			await channel.send('⏳ An execution or maintenance operation is running. Retry the shell command when the bot is idle.');
-			return true;
-		}
-		let output = await runMaintenance(async () => {
-			if (mode === 'sandbox') {
-				ensureContainer();
-				return executeShell(command, { inContainer: true });
-			}
-			return executeShell(command);
-		});
-
-		let truncated = false;
-		if (output.length > SHELL_MAX_OUTPUT) {
-			output = output.slice(0, SHELL_MAX_OUTPUT);
-			truncated = true;
-		}
-
-		const response = '```\n' + output + (truncated ? '\n... (truncated)' : '') + '\n```';
-		try {
-			await channel.send(response);
-		} catch (err) {
-			log.error('Shell send error:', err.message);
-			await channel.send('Output too large or failed to send.').catch(() => {});
-		}
-		return true;
+		return handleShell(channel, mode, command);
 	}
 
 	// Registry dispatch (single source of truth, shared with the slash path via
