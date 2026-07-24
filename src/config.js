@@ -53,12 +53,14 @@ const SANDBOX_JOBS_FILE = path.posix.join(SANDBOX_USER_HOME, STATE_DIR, JOBS_FIL
 const ADMIN_FILES_DIR = path.join(ADMIN_USER_HOME, STATE_DIR, 'files');
 const SANDBOX_HOST_FILES_DIR = SANDBOX_HOST_HOME ? path.join(SANDBOX_HOST_HOME, STATE_DIR, 'files') : null;
 const SANDBOX_FILES_DIR = path.posix.join(SANDBOX_USER_HOME, STATE_DIR, 'files'); // path seen inside the container (system prompt)
+const SANDBOX_CODEX_HOME = path.posix.join(SANDBOX_USER_HOME, '.codex'); // CODEX_HOME inside the container
 
 const CONTAINER_NAME = 'claudiscord-sandbox';
 const DOCKER_IMAGE = 'claudiscord-sandbox';
 const CONTAINER_CPUS = 1;
 
 const SHELL_TIMEOUT_MS = 300_000;
+const KILL_GRACE_MS = 5000; // SIGTERM→SIGKILL grace for killed child processes
 const DOCKER_CMD_TIMEOUT = 30_000;
 const UPGRADE_TIMEOUT_MS = 300_000;
 const DISCORD_MAX_MSG_LENGTH = 2000;
@@ -99,9 +101,11 @@ module.exports = {
 	ADMIN_FILES_DIR,
 	SANDBOX_HOST_FILES_DIR,
 	SANDBOX_FILES_DIR,
+	SANDBOX_CODEX_HOME,
 	STATE_DIR,
 	JOBS_FILENAME,
 	SHELL_TIMEOUT_MS,
+	KILL_GRACE_MS,
 	DISCORD_MAX_MSG_LENGTH,
 	TYPING_INTERVAL_MS,
 	DOCKER_IMAGE,

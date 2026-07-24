@@ -4,6 +4,7 @@ const path = require('path');
 const {
 	SANDBOX_HOST_HOME,
 	SANDBOX_USER_HOME,
+	SANDBOX_CODEX_HOME,
 	STATE_DIR,
 	JOBS_FILENAME,
 	CONTAINER_NAME,
@@ -183,7 +184,7 @@ function isCodexAvailableInContainer() {
 		ensureContainer();
 		execFileSync('docker', [
 			'exec',
-			'-e', `CODEX_HOME=${path.posix.join(SANDBOX_USER_HOME, '.codex')}`,
+			'-e', `CODEX_HOME=${SANDBOX_CODEX_HOME}`,
 			CONTAINER_NAME,
 			'codex',
 			'--version',
@@ -200,12 +201,11 @@ function isCodexAvailableInContainer() {
 function sandboxCodexEnv() {
 	ensureContainer();
 	const label = `Codex container [${CONTAINER_NAME}]`;
-	const codexHome = path.posix.join(SANDBOX_USER_HOME, '.codex');
 	return {
 		label,
 		spawn: (args, { input }) => spawnCollect(
 			'docker',
-			['exec', '-i', '-e', `CODEX_HOME=${codexHome}`, '-w', SANDBOX_USER_HOME,
+			['exec', '-i', '-e', `CODEX_HOME=${SANDBOX_CODEX_HOME}`, '-w', SANDBOX_USER_HOME,
 				CONTAINER_NAME, 'codex', ...args],
 			{ label, input },
 		),

@@ -1,10 +1,10 @@
-const path = require('path');
 const { execFileSync, spawn } = require('child_process');
 const {
 	CODEX_BIN,
 	ADMIN_USER_HOME,
 	CONTAINER_NAME,
 	SANDBOX_USER_HOME,
+	SANDBOX_CODEX_HOME,
 } = require('./config');
 const { ensureContainer, isCodexAvailableInContainer } = require('./container');
 const { spawnCollect } = require('./spawn');
@@ -31,14 +31,6 @@ try {
 	log.warn('Codex not detected — Codex agent disabled');
 }
 
-function loginTargetLabel(mode) {
-	return mode === 'sandbox' ? 'sandbox' : 'host';
-}
-
-function cleanUrl(url) {
-	return url.replace(/[.,;:]+$/, '');
-}
-
 function stripAnsi(output) {
 	return output.replace(ANSI_RE, '');
 }
@@ -47,7 +39,7 @@ function extractCodexLoginUrl(output) {
 	const urls = stripAnsi(output).match(URL_RE) || [];
 	if (urls.length === 0) return null;
 	const preferred = urls.find(url => /openai|chatgpt|device/i.test(url)) || urls[0];
-	return cleanUrl(preferred);
+	return preferred.replace(/[.,;:]+$/, '');
 }
 
 function extractCodexDeviceCode(output) {
@@ -65,7 +57,7 @@ function extractCodexDeviceCode(output) {
 }
 
 function buildCodexLoginFlow(mode, child) {
-	const target = loginTargetLabel(mode);
+	const target = mode === 'sandbox' ? 'sandbox' : 'host';
 	const label = `Codex ${target}`;
 	return {
 		agent: 'codex',
@@ -121,7 +113,7 @@ function startCodexLogin(mode) {
 		child = spawn('docker', [
 			'exec',
 			'-i',
-			'-e', `CODEX_HOME=${sandboxCodexHome()}`,
+			'-e', `CODEX_HOME=${SANDBOX_CODEX_HOME}`,
 			'-w', SANDBOX_USER_HOME,
 			CONTAINER_NAME,
 			'codex',
@@ -211,10 +203,6 @@ function isCodexAuthError(stdout = '', stderr = '') {
 		|| output.includes('token expired');
 }
 
-function sandboxCodexHome() {
-	return path.posix.join(SANDBOX_USER_HOME, '.codex');
-}
-
 function spawnCodexAppServer(mode) {
 	if (mode === 'sandbox') {
 		if (!isCodexAvailableInContainer()) {
@@ -225,7 +213,7 @@ function spawnCodexAppServer(mode) {
 			child: spawn('docker', [
 				'exec',
 				'-i',
-				'-e', `CODEX_HOME=${sandboxCodexHome()}`,
+				'-e', `CODEX_HOME=${SANDBOX_CODEX_HOME}`,
 				'-w', SANDBOX_USER_HOME,
 				CONTAINER_NAME,
 				'codex',

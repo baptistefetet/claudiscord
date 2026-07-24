@@ -1,6 +1,7 @@
 const { spawn, execFileSync } = require('child_process');
 const {
 	SHELL_TIMEOUT_MS,
+	KILL_GRACE_MS,
 	DISCORD_MAX_MSG_LENGTH,
 	CONTAINER_NAME,
 	ADMIN_USER_HOME,
@@ -10,7 +11,6 @@ const { ensureContainer, DOCKER_AVAILABLE } = require('./container');
 const { runMaintenance, isBusy } = require('./queue');
 const log = require('./logger');
 
-const KILL_GRACE_MS = 5000;
 // Worst case: "```\n" (4) + output + "\n... (truncated)\n```" (21) = 25 overhead
 const SHELL_MAX_OUTPUT = DISCORD_MAX_MSG_LENGTH - 25;
 

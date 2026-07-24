@@ -1,6 +1,7 @@
 const { runMaintenance, isBusy } = require('./queue');
 const { startCodexLogin } = require('./codex');
 const { startClaudeLogin } = require('./claude');
+const { KILL_GRACE_MS } = require('./config');
 const log = require('./logger');
 
 /**
@@ -10,14 +11,7 @@ const log = require('./logger');
  * timeouts and the maintenance hold.
  */
 
-const KILL_GRACE_MS = 5000;
-
 let pendingLogin = null;
-
-function startAgentLogin(agent, mode) {
-	if (agent === 'codex') return startCodexLogin(mode);
-	return startClaudeLogin(mode);
-}
 
 function killLogin(login) {
 	if (!login || login.closed) return;
@@ -131,7 +125,7 @@ async function handleLogin({ channel, channelId, mode, agent }) {
 
 	let flow;
 	try {
-		flow = startAgentLogin(agent, mode);
+		flow = agent === 'codex' ? startCodexLogin(mode) : startClaudeLogin(mode);
 	} catch (err) {
 		if (err.code === 'CODEX_NOT_AVAILABLE') {
 			await channel.send(`Codex is not installed or not available in **${mode}** mode.`);

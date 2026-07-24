@@ -50,17 +50,13 @@ const CLAUDE_LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
 const CLAUDE_LOGIN_URL_TIMEOUT_MS = 15 * 1000;
 const CLAUDE_LOGIN_URL_RE = /https:\/\/claude\.com\/cai\/oauth\/authorize\?[^\s]+/;
 
-function loginTargetLabel(mode) {
-	return mode === 'sandbox' ? 'sandbox' : 'host';
-}
-
 function extractClaudeLoginUrl(output) {
 	const match = output.match(CLAUDE_LOGIN_URL_RE);
 	return match ? match[0] : null;
 }
 
 function buildClaudeLoginFlow(mode, child) {
-	const target = loginTargetLabel(mode);
+	const target = mode === 'sandbox' ? 'sandbox' : 'host';
 	const label = `Claude ${target}`;
 	return {
 		agent: 'claude',
