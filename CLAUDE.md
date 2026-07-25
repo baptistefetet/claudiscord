@@ -253,7 +253,7 @@ bash scripts/rebuild-sandbox.sh
 
 ### Format
 
-Table `jobs`, one row per job (`src/jobs-store.js::SCHEMA`, `PRAGMA user_version = 1`):
+Table `jobs`, one row per job (`src/jobs-store.js::SCHEMA`, `PRAGMA user_version = 2`):
 
 ```sql
 CREATE TABLE jobs (
@@ -263,8 +263,6 @@ CREATE TABLE jobs (
   prompt          TEXT NOT NULL,
   cron            TEXT NOT NULL,
   enabled         INTEGER NOT NULL,
-  notify          INTEGER NOT NULL DEFAULT 0,
-  notify_pattern  TEXT,
   remaining       INTEGER NOT NULL DEFAULT 0,
   agent           TEXT,
   model           TEXT,
@@ -303,8 +301,12 @@ CREATE TABLE jobs (
 
 ### Notifications
 
-- When `notify: true` and the output matches `notifyPattern` (regex, dotall flag `s`, fallback `includes()` on invalid regex), the output is sent to `channelId`.
-- Errors are also announced on the channel when `notify: true`.
+A job's output is sent to its `channel_id`, unless it ends with `NOTIFY_NONE` — the whole output is then dropped, never stripped and resent (`src/scheduler.js::suppressesNotification`).
+
+- Matching: last non-empty line, trimmed, must *be* the token. Symmetric markdown emphasis and one trailing period are tolerated; the line is rejected when an odd number of ` ``` ` fences precedes it (token quoted inside an unterminated block). Anything else notifies — a spurious message is recoverable, a dropped report is not.
+- A job that must stay silent under some condition says so in its own `prompt`; there is no column for it. The convention is documented once, in the Scheduling section of `src/prompts.js`, and carries its own "never end with NOTIFY_NONE unless the job's prompt asks for it" guard — the token must never be described without it, or an agent could decide to go silent on its own.
+- Errors always notify: a crash produces no output, so it cannot opt out.
+- A dropped output is logged (`NOTIFY_NONE, output dropped (N chars)`) and stays readable in the run's transcript via `last_session_id`.
 
 ## Sessions
 

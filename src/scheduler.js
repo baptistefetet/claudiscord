@@ -25,6 +25,23 @@ const lastRunMinutes = new Map();
 /** Lock set for scheduled jobs (per job key) */
 const jobLocks = new Set();
 
+/**
+ * A job opts out of its notification by ending its output with NOTIFY_NONE; the
+ * whole output is then dropped. Only the last non-empty line counts and it must
+ * BE the token — a substring test would fire on an agent quoting it while
+ * writing another job's prompt. Emphasis must be symmetric and no code fence
+ * left open, so a truncated report is not read as a trailer. Any miss notifies,
+ * which is the recoverable direction.
+ */
+const NOTIFY_NONE_LINE = /^(\*\*|\*|__|_|`|~~)?NOTIFY_NONE\1\.?$/;
+
+function suppressesNotification(output) {
+	const lines = String(output || '').split('\n');
+	const last = lines.findLastIndex(l => l.trim());
+	if (last < 0 || !NOTIFY_NONE_LINE.test(lines[last].trim())) return false;
+	return lines.slice(0, last).filter(l => /^\s*```/.test(l)).length % 2 === 0;
+}
+
 function acquireJobLock(key) {
 	if (jobLocks.has(key)) return false;
 	jobLocks.add(key);
@@ -81,7 +98,7 @@ async function fetchJobPromptContext(channelId) {
 }
 
 async function executeJob(job) {
-	const { id, prompt, channelId, notify, notifyPattern } = job;
+	const { id, prompt, channelId } = job;
 	const key = jobKey(job);
 
 	const nowMinute = new Date().toISOString().slice(0, 16);
@@ -143,27 +160,24 @@ async function executeJob(job) {
 
 		log.info(`Job '${key}' completed (output: ${output.length} chars)`);
 
-		let patternMatches = true;
-		if (notifyPattern) {
-			try {
-				const regex = new RegExp(notifyPattern, 's');
-				patternMatches = regex.test(output);
-			} catch {
-				log.warn(`Job '${key}': invalid notifyPattern regex '${notifyPattern}', falling back to includes()`);
-				patternMatches = output.includes(notifyPattern);
-			}
-		}
-		if (notify && !promptContext.channelId) {
+		// An unresolved channel is checked first: it means this job can no longer
+		// deliver anything, which outranks what this particular run decided.
+		if (!promptContext.channelId) {
 			log.warn(`Job '${key}': notification skipped (unresolved channelId '${channelId}')`);
-		} else if (notify && output && patternMatches) {
+		} else if (suppressesNotification(output)) {
+			log.info(`Job '${key}': NOTIFY_NONE, output dropped (${output.length} chars)`);
+		} else if (!output) {
+			log.warn(`Job '${key}': completed with empty output, nothing to notify`);
+		} else {
 			await sendToChannel(channelId, `\u{1F4CB} **Job '${id}'**\n${output}`);
 		}
 	} catch (err) {
 		lastSessionId = err.sessionId || lastSessionId;
 		log.error(`Job '${key}': ERROR (code ${err.code || 'unknown'})`, err.message);
-		if (notify && promptContext?.channelId) {
+		// A crash produces no output, so it cannot opt out: always reported.
+		if (promptContext?.channelId) {
 			await sendToChannel(channelId, `\u{1F6A8} **Job '${id}' \u2014 ERROR**\nAgent failed with code ${err.code || 'unknown'}.`).catch(e => log.error('Notify failed:', e.message));
-		} else if (notify) {
+		} else {
 			log.warn(`Job '${key}': error notification skipped (unresolved channelId '${channelId}')`);
 		}
 	} finally {

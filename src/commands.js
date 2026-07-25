@@ -55,9 +55,6 @@ function formatJobBlock(job) {
 		`🔁 Runs: ${runs}`,
 		`🕘 Last run: ${last}`,
 	];
-	if (job.notify) {
-		lines.push(`🔔 Notify: ${job.notifyPattern ? `\`${job.notifyPattern}\`` : 'always'}`);
-	}
 	if (job.description) {
 		let d = String(job.description).replace(/\s+/g, ' ').trim();
 		if (d.length > 150) d = d.slice(0, 149) + '…';

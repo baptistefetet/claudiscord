@@ -96,8 +96,6 @@ Columns:
 - prompt: the prompt executed by the selected agent
 - cron: standard cron expression, timezone Europe/Paris
 - enabled: 1 or 0
-- notify: 1 or 0 (see Notifications)
-- notify_pattern: optional string (see Notifications)
 - remaining: executions left. 0 = infinite (recurring); >0 is decremented after each run and
   the job is auto-removed at 0; use 1 for a one-shot
 - channel_id: REQUIRED — the current channel's ID (shown above), where notifications are sent
@@ -118,11 +116,14 @@ Columns:
   never resumed automatically.
 - description: free text
 
-Notifications (when notify=1, the job output is sent to the job's channel):
-- notify_pattern (optional regex) sends the notification only if the output matches it —
-  required for any conditional notification; without it, notify=1 ALWAYS sends. Dotall (s)
-  is on by default (\`.\` matches newlines). E.g. 'PROBLEM' sends if the word appears,
-  '^(?!.*OK).*$' sends if OK is absent.
+Notifications:
+- A job's output is always sent to its channel, and a failed run is always reported.
+- A job stays silent only by ending its output with NOTIFY_NONE as the last line; the whole
+  output is then discarded. Never end with NOTIFY_NONE unless the job's own prompt defines a
+  condition for staying silent and that condition is met.
+- That condition lives in the job's \`prompt\` — there is no column for it. E.g. "if everything
+  is fine, reply with NOTIFY_NONE as the last line and nothing else". A prompt that never
+  mentions it notifies on every run.
 
 Inspection:
 sqlite3 -json {{jobsPath}} ".timeout 5000" "SELECT * FROM jobs;"
@@ -130,8 +131,8 @@ Always returns the complete, up-to-date state of all jobs for the current execut
 
 Minimal example:
 sqlite3 {{jobsPath}} ".timeout 5000" "
-INSERT INTO jobs (id, prompt, cron, enabled, notify, remaining, channel_id, channel_name, agent, {{#claude}}model, {{/claude}}created, description)
-VALUES ('weather', 'Give me the weather in Lyon', '0 8 * * *', 1, 1, 0, '1234567890', '{{channelName}}', '{{channelAgent}}', {{#claude}}'sonnet', {{/claude}}'2026-01-01T00:00:00Z', 'Daily weather');"
+INSERT INTO jobs (id, prompt, cron, enabled, remaining, channel_id, channel_name, agent, {{#claude}}model, {{/claude}}created, description)
+VALUES ('weather', 'Give me the weather in Lyon', '0 8 * * *', 1, 0, '1234567890', '{{channelName}}', '{{channelAgent}}', {{#claude}}'sonnet', {{/claude}}'2026-01-01T00:00:00Z', 'Daily weather');"
 
 {{#textFormat}}
 --- Response format ---

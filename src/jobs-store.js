@@ -14,7 +14,7 @@ const REQUIRED_FIELDS = ['id', 'prompt', 'cron', 'enabled', 'channelId'];
 // STRICT rejects mistyped values at insert time — the table is also written
 // by agents through the sqlite3 CLI, outside claudiscord's validation.
 const SCHEMA = `
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;
 CREATE TABLE IF NOT EXISTS jobs (
 	id              TEXT PRIMARY KEY,
 	channel_id      TEXT NOT NULL,
@@ -22,8 +22,6 @@ CREATE TABLE IF NOT EXISTS jobs (
 	prompt          TEXT NOT NULL,
 	cron            TEXT NOT NULL,
 	enabled         INTEGER NOT NULL,
-	notify          INTEGER NOT NULL DEFAULT 0,
-	notify_pattern  TEXT,
 	remaining       INTEGER NOT NULL DEFAULT 0,
 	agent           TEXT,
 	model           TEXT,
@@ -69,8 +67,6 @@ function rowToJob(row) {
 		prompt: row.prompt,
 		cron: row.cron,
 		enabled: row.enabled === 1,
-		notify: row.notify === 1,
-		notifyPattern: row.notify_pattern,
 		remaining: row.remaining,
 		channelId: row.channel_id,
 		channelName: row.channel_name,
