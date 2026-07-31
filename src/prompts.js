@@ -100,10 +100,10 @@ Columns:
   fires, the job is deleted instead of run — keep 1 for anything recurring or long-lived.
 - channel_id: REQUIRED — the current channel's ID (shown above), where notifications are sent
 - channel_name: REQUIRED — the current channel name shown above ("{{channelName}}")
+- description: free text
 - created: ISO date
 - last_run, last_session_id: auto-managed, do not modify. The session UUID of the last run
   (including failures) locates its transcript on disk for debugging.
-- description: free text
 
 Notifications:
 - A job's output is always sent to its channel, and a failed run is always reported.
