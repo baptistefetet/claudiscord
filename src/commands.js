@@ -4,7 +4,6 @@ const execFileAsync = promisify(execFile);
 const {
 	UPGRADE_TIMEOUT_MS,
 	CONTAINER_NAME,
-	AGENT_MODELS,
 } = require('./config');
 const sessions = require('./sessions');
 const {
@@ -332,12 +331,10 @@ async function handleSandbox({ channel, channelId, mode }) {
 async function handleStatus({ channel, channelId, mode, agent, remoteId }) {
 	const dockerNote = DOCKER_AVAILABLE ? '' : '\nSandbox unavailable on this host.';
 	const remoteLine = remoteId ? `\nRemote: \`${remoteId}\`` : '';
-	const models = AGENT_MODELS[agent];
-	const modelLine = `\nModels: **${models.high}** (prompts) · **${models.medium}** (jobs)`;
 	const codexLine = isCodexAvailable(mode) ? '' : `\nCodex unavailable in **${mode}** mode.`;
 	const voiceLine = getActiveVoiceChannelId() === channelId ? '\nVoice assistant: **active**' : '';
 	const autojoinLine = sessions.getAutojoin(channelId) ? '\nAutojoin: **on**' : '';
-	await channel.send(`Channel mode: **${mode}**\nAgent: **${agent}**${modelLine}${voiceLine}${autojoinLine}${remoteLine}${dockerNote}${codexLine}`);
+	await channel.send(`Channel mode: **${mode}**\nAgent: **${agent}**${voiceLine}${autojoinLine}${remoteLine}${dockerNote}${codexLine}`);
 	return true;
 }
 
