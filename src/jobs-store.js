@@ -12,7 +12,7 @@ const REQUIRED_FIELDS = ['id', 'prompt', 'cron', 'channelId'];
 // STRICT rejects mistyped values at insert time — the table is also written
 // by agents through the sqlite3 CLI, outside claudiscord's validation.
 const SCHEMA = `
-PRAGMA user_version = 3;
+PRAGMA user_version = 4;
 CREATE TABLE IF NOT EXISTS jobs (
 	id              TEXT PRIMARY KEY,
 	channel_id      TEXT NOT NULL,
@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS jobs (
 	prompt          TEXT NOT NULL,
 	cron            TEXT NOT NULL,
 	remaining       INTEGER NOT NULL DEFAULT 0,
+	isolated        INTEGER NOT NULL DEFAULT 1 CHECK (isolated IN (0, 1)),
 	created         TEXT,
 	last_run        TEXT,
 	last_session_id TEXT,
@@ -62,6 +63,9 @@ function rowToJob(row) {
 		prompt: row.prompt,
 		cron: row.cron,
 		remaining: row.remaining,
+		// A database predating the column yields undefined here, which reads as
+		// isolated — the behaviour every job had before it existed.
+		isolated: row.isolated !== 0,
 		channelId: row.channel_id,
 		channelName: row.channel_name,
 		created: row.created,
@@ -138,8 +142,8 @@ function recordJobRun(job, { channelName = null, lastSessionId = null } = {}) {
 	const sets = [`last_run = ${sqlLit(new Date().toISOString())}`];
 	if (channelName) sets.push(`channel_name = ${sqlLit(channelName)}`);
 	// Diagnostic only: UUID of the agent session for this run (Claude/Codex
-	// transcript on disk). Jobs always start fresh, so this is never resumed
-	// automatically — it lets a later conversation inspect what happened.
+	// transcript on disk), never resumed from here. An isolated job allocates a
+	// fresh one each run; a non-isolated one reports the channel's own session.
 	if (lastSessionId) sets.push(`last_session_id = ${sqlLit(lastSessionId)}`);
 
 	// changes() inside the DELETE's WHERE still reports the decrement UPDATE
@@ -160,4 +164,9 @@ SELECT changes() AS removed;
 	return removed;
 }
 
-module.exports = { loadAllJobs, jobKey, recordJobRun, ensureDb };
+/** Remove a job row outright, bypassing the `remaining` lifecycle. */
+function deleteJob(job) {
+	runSqlite(fileFor(job.mode), `DELETE FROM jobs WHERE id = ${sqlLit(job.id)};`);
+}
+
+module.exports = { loadAllJobs, jobKey, recordJobRun, deleteJob, ensureDb };

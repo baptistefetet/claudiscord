@@ -14,13 +14,17 @@ const { AGENT_MODELS } = require('./config');
  *
  * Channel session state is read inside the queue, just before spawn. The agent
  * returns its generated UUID, which is persisted before the next queued prompt
- * can run. Scheduled jobs pass no channelId and get a fresh session every run.
+ * can run. A caller passing no channelId supplies its own sessionId instead and
+ * never touches the channel's — that is how isolated jobs stay isolated.
+ *
+ * `requireSession` refuses to start when the channel has no live session, for a
+ * caller that must join an EXISTING conversation rather than open one.
  *
  * `tier` ('high' for interactive prompts, 'medium' for scheduled jobs) is turned
  * into a concrete model id here and nowhere else, so no caller names a model.
  */
 function executePrompt(agent, mode, prompt, options = {}) {
-	const { channelId, queueKey = channelId, tier = 'high', ...rest } = options;
+	const { channelId, queueKey = channelId, tier = 'high', requireSession = false, ...rest } = options;
 	return runQueued(queueKey, async () => {
 		if (
 			channelId
@@ -34,6 +38,16 @@ function executePrompt(agent, mode, prompt, options = {}) {
 		const sessionId = channelId
 			? sessions.getSession(channelId).sessionId
 			: (rest.sessionId || null);
+
+		// Checked here rather than by the caller: the FIFO wait can last as long as
+		// the prompt ahead, and every context transition (/new, mode or agent
+		// switch, /remote) nulls the session id. A check made before enqueuing
+		// would let a reset during that wait through, and the run would silently
+		// open a fresh session — whose id is then written back to the channel.
+		if (requireSession && !sessionId) {
+			throw Object.assign(new Error('SESSION_REQUIRED'), { code: 'SESSION_REQUIRED' });
+		}
+
 		const models = AGENT_MODELS[agent];
 		if (!models) throw new Error(`Unknown agent: ${agent}`);
 		const model = models[tier];

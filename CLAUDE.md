@@ -50,7 +50,7 @@ src/
   codex.js            # Codex exec/login (host + sandbox), JSONL parse, account usage (getCodexUsage)
   container.js        # Docker: image/container, sandbox env factories (sandboxClaudeEnv/sandboxCodexEnv)
   executor.js         # executePrompt(agent, mode) → resolve tier→model → pick env (host const / sandbox factory) → executeClaude|executeCodex; queue
-  jobs-store.js       # SQLite jobs store via sqlite3 CLI: loadAllJobs (admin+sandbox), recordJobRun, ensureDb, jobKey
+  jobs-store.js       # SQLite jobs store via sqlite3 CLI: loadAllJobs (admin+sandbox), recordJobRun, deleteJob, ensureDb, jobKey
   sessions.js         # { channels: { channelId -> { mode, agent, sessionId, ... } } }
   scheduler.js        # minute-resolution ticker, reloadJobs, executeJob, per-key lock
   commands.js         # COMMANDS registry → dispatch + native slash metadata; /new /status /usage /login /jobs /admin /sandbox /claude /codex /remote /voice /upgrade /restart !shell; transport-neutral dispatchSlashCommand + getRegisteredCommands (Discord plumbing stays in index.js); /login and !shell handlers live in login.js / shell.js
@@ -163,7 +163,7 @@ The user can drop files/photos into a channel (with no text). An upload does NOT
 - Interactive prompts (text and voice) always run `high`; scheduled jobs always run `medium`. There is nothing to choose and nothing to persist.
 - The tier→model resolution lives **only** in `executor.js`; no other module names a model id. Callers pass `tier`, which defaults to `high`.
 - Reasoning effort is one hardcoded `xhigh` for every agent and model (`REASONING_EFFORT` in `config.js`): `--effort` for Claude, `-c model_reasoning_effort` for Codex. The `-c` override wins over `config.toml`, so host and sandbox Codex behave identically.
-- Jobs store neither agent nor model. `executeJob` resolves the channel's **current** agent on every run, so switching a channel's agent retroactively changes which agent every job attached to that channel runs on — including jobs living in the other mode's database. `job.mode` is deliberately NOT live: it comes from the database the job lives in, which is the admin/sandbox security boundary.
+- Jobs store an `isolated` flag but neither agent nor model. `executeJob` resolves the channel's **current** agent on every run, so switching a channel's agent retroactively changes which agent every job attached to that channel runs on — including jobs living in the other mode's database. `job.mode` is deliberately NOT live: it comes from the database the job lives in, which is the admin/sandbox security boundary.
 
 ## Channel context injection
 
@@ -171,7 +171,7 @@ The user can drop files/photos into a channel (with no text). An upload does NOT
 
 ## Execution queues
 
-Interactive prompts, voice turns and scheduled jobs go through `src/queue.js::runQueued(channelId, ...)`. A channel or thread stays strictly FIFO, including its fresh-session job runs, while distinct IDs may execute without a global concurrency limit. `src/index.js` sends the one-shot "⏳ Waiting for previous prompt..." notice only when that same channel is busy. Rare operations (`/login`, `!shell`, `/upgrade`, `/remote` transitions) use `runMaintenance`: they are refused while any execution is pending, then briefly stop new queue work while they run. The single sandbox container accepts concurrent `docker exec` processes, so sandbox channels share its 1 CPU, home and filesystem. SQLite arbitrates concurrent jobs writes.
+Interactive prompts, voice turns and scheduled jobs go through `src/queue.js::runQueued(channelId, ...)`. A channel or thread stays strictly FIFO, including its job runs, while distinct IDs may execute without a global concurrency limit. `src/index.js` sends the one-shot "⏳ Waiting for previous prompt..." notice only when that same channel is busy. Rare operations (`/login`, `!shell`, `/upgrade`, `/remote` transitions) use `runMaintenance`: they are refused while any execution is pending, then briefly stop new queue work while they run. The single sandbox container accepts concurrent `docker exec` processes, so sandbox channels share its 1 CPU, home and filesystem. SQLite arbitrates concurrent jobs writes.
 
 ## Docker sandbox (optional)
 
@@ -259,7 +259,7 @@ bash scripts/rebuild-sandbox.sh
 
 ### Format
 
-Table `jobs`, one row per job (`src/jobs-store.js::SCHEMA`, `PRAGMA user_version = 3`):
+Table `jobs`, one row per job (`src/jobs-store.js::SCHEMA`, `PRAGMA user_version = 4`):
 
 ```sql
 CREATE TABLE jobs (
@@ -269,6 +269,7 @@ CREATE TABLE jobs (
   prompt          TEXT NOT NULL,
   cron            TEXT NOT NULL,
   remaining       INTEGER NOT NULL DEFAULT 0,
+  isolated        INTEGER NOT NULL DEFAULT 1 CHECK (isolated IN (0, 1)),
   created         TEXT,
   last_run        TEXT,
   last_session_id TEXT,
@@ -281,7 +282,8 @@ CREATE TABLE jobs (
 - `channel_name` is a display-only snapshot of the channel name at job creation time. The scheduler refreshes it on every run.
 - No `agent`, `model` or `enabled` column: the agent is the channel's current one, resolved at each run; the model is its `medium` tier; a job is stopped by deleting its row.
 - `remaining`: `0` = infinite, `>0` = decremented each run, job removed when it hits `0`.
-- `last_session_id`: diagnostic-only. Scheduler writes the agent session UUID of the last run (set even on error via `err.sessionId`). Jobs always run with a fresh session (`sessionId: null`), so this is never resumed — it just locates the run's transcript on disk: Claude at `<home>/.claude/projects/<cwd-hash>/<uuid>.jsonl` (admin cwd `/root` → `-root`, sandbox `/home/claude` → `-home-claude`), Codex via `find <home>/.codex/sessions -name "*<uuid>*"`.
+- `isolated`: `1` (default) = fresh session each run, `0` = runs inside the channel's ongoing conversation (see "Non-isolated jobs" below). A run that never happened never decrements `remaining` nor touches `last_run`.
+- `last_session_id`: diagnostic-only. Scheduler writes the agent session UUID of the last run (set even on error via `err.sessionId`), never resumed from here — it just locates the run's transcript on disk: Claude at `<home>/.claude/projects/<cwd-hash>/<uuid>.jsonl` (admin cwd `/root` → `-root`, sandbox `/home/claude` → `-home-claude`), Codex via `find <home>/.codex/sessions -name "*<uuid>*"`.
 - Unique key: `mode:id` (the mode is implicit from the database the job lives in).
 
 ### Storage
@@ -300,6 +302,16 @@ CREATE TABLE jobs (
 - Called at startup, after every interactive prompt, and at the end of every scheduled job — so any change to the jobs databases is picked up within one prompt.
 - No `fs.watch` — polling after each prompt is enough.
 - In-memory lock per job key (plus a per-minute guard) prevents duplicate runs (including the "same wall-clock minute" edge case).
+
+### Non-isolated jobs
+
+`isolated = 0` runs the job inside the channel's live agent conversation instead of a fresh session, so its result can be replied to ("check X in 5 minutes"). The scheduler passes `channelId` to `executePrompt`, which resolves the session live and persists the result back like any interactive turn.
+
+- **Resolution happens inside the queue callback**, never before: the FIFO wait can last as long as the prompt ahead, and any context transition during it would otherwise be missed. `executePrompt`'s `requireSession` option raises `SESSION_REQUIRED` there when the channel has no live session.
+- **A lost target is fatal to the job.** `/new`, a mode or agent switch, and `/remote` all null the channel `sessionId`, so one check covers them; the job row is then deleted (`deleteJob`) and the channel notified. Running it in a fresh session instead would strand its output where nobody is reading, and write that session's id back over the channel's.
+- The run marks itself **in-band**, at the head of the prompt: the system prompt is not persisted in the transcript, so without it the next interactive turn would read the job's instructions as user input. The `{{#job}}` block is dropped for these runs — its "user replies cannot resume this job" line is precisely what they invert.
+- An unresolved Discord channel skips the run (transient, no `remaining` consumed): the turn would land in the shared conversation with no visible trace.
+- Context cost is the caller's problem: a recurring non-isolated job re-injects its whole prompt every run, so long monitoring prompts stay isolated.
 
 ### Notifications
 

@@ -55,6 +55,8 @@ function formatJobBlock(job) {
 		`🔁 Runs: ${runs}`,
 		`🕘 Last run: ${last}`,
 	];
+	// Shown only for the exception, so the common case stays compact.
+	if (!job.isolated) lines.push('🧵 Session: channel conversation');
 	if (job.description) {
 		let d = String(job.description).replace(/\s+/g, ' ').trim();
 		if (d.length > 150) d = d.slice(0, 149) + '…';

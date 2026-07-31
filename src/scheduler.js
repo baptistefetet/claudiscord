@@ -3,7 +3,7 @@ const { AUTHORIZED_USER_ID } = require('./config');
 const { getSystemPrompt } = require('./prompts');
 const { executePrompt } = require('./executor');
 const sessions = require('./sessions');
-const { loadAllJobs, jobKey, recordJobRun } = require('./jobs-store');
+const { loadAllJobs, jobKey, recordJobRun, deleteJob } = require('./jobs-store');
 const { sendToChannel, getClient } = require('./discord');
 const log = require('./logger');
 
@@ -92,6 +92,27 @@ async function fetchJobPromptContext(channelId) {
 	}
 }
 
+/**
+ * A non-isolated job targets the channel's ongoing conversation; losing that
+ * session is permanent, so the job is removed rather than left to fire forever
+ * into a fresh session nobody is reading.
+ */
+async function dropStaleJob(job, reason) {
+	const key = jobKey(job);
+	log.warn(`Job '${key}': ${reason}, deleting`);
+	try {
+		deleteJob(job);
+	} catch (err) {
+		// The row survives and the job will be retried at its next occurrence.
+		log.error(`Failed to delete job '${key}':`, err.message);
+		return;
+	}
+	await sendToChannel(
+		job.channelId,
+		`\u{1F5D1}\u{FE0F} **Job '${job.id}' — DELETED**\nThe channel session it was attached to no longer exists.`,
+	).catch(e => log.error('Notify failed:', e.message));
+}
+
 async function executeJob(job) {
 	const { id, prompt, channelId } = job;
 	const key = jobKey(job);
@@ -123,11 +144,22 @@ async function executeJob(job) {
 	let resolvedChannelName = null;
 	let promptContext = null;
 	let lastSessionId = null;
+	// Set by any path that must not consume a `remaining` or touch last_run:
+	// the run did not happen, or the row is already gone.
+	let skipRecord = false;
 
 	try {
 		promptContext = await fetchJobPromptContext(channelId);
 		if (!promptContext.userName) {
 			throw new Error(`Could not resolve authorized user name for job '${key}'`);
+		}
+		// A non-isolated run appends a turn to the shared conversation, so an
+		// unresolved channel would leave that turn with no visible trace at all.
+		// Transient (a failed fetch), hence a plain skip: retried next occurrence.
+		if (!job.isolated && !promptContext.channelId) {
+			skipRecord = true;
+			log.warn(`Job '${key}': channel unresolved, non-isolated run skipped`);
+			return;
 		}
 		resolvedChannelName = promptContext?.channelName || job.channelName || null;
 		// The agent is live — a job stores none, it runs on whatever the channel is
@@ -142,16 +174,26 @@ async function executeJob(job) {
 			channelName: resolvedChannelName,
 			channelTopic: promptContext?.channelTopic,
 			isDM: Boolean(promptContext?.isDM),
-			jobId: id,
+			// The job block ends with "user replies cannot resume this job", which is
+			// exactly what a non-isolated run inverts.
+			jobId: job.isolated ? id : null,
 			channelAgent: jobAgent,
 		});
+		// The system prompt is re-sent on every invocation but never lands in the
+		// transcript, so a non-isolated run marks itself in-band instead: otherwise
+		// the next interactive turn reads the job's instructions as user input.
+		const jobPrompt = job.isolated
+			? prompt
+			: `[scheduled job "${id}" — automatic run, not typed by ${promptContext.userName}]\n\n${prompt}`;
+		// Passing channelId is what makes the executor resolve the channel session
+		// live and persist the result back; withholding it keeps a job isolated.
 		const jobOptions = {
 			queueKey: channelId,
-			sessionId: null,
 			systemPrompt: jobSystemPrompt,
 			tier: 'medium',
+			...(job.isolated ? { sessionId: null } : { channelId, requireSession: true }),
 		};
-		const { result: output, sessionId } = await executePrompt(jobAgent, job.mode, prompt, jobOptions);
+		const { result: output, sessionId } = await executePrompt(jobAgent, job.mode, jobPrompt, jobOptions);
 		lastSessionId = sessionId || null;
 
 		log.info(`Job '${key}' completed (output: ${output.length} chars)`);
@@ -168,6 +210,15 @@ async function executeJob(job) {
 			await sendToChannel(channelId, `\u{1F4CB} **Job '${id}'**\n${output}`);
 		}
 	} catch (err) {
+		// Only a non-isolated job can raise these: it passes channelId, which arms
+		// both guards. Either way its target conversation is gone.
+		if (err.code === 'SESSION_REQUIRED' || err.code === 'CHANNEL_CONTEXT_CHANGED') {
+			skipRecord = true;
+			await dropStaleJob(job, err.code === 'SESSION_REQUIRED'
+				? 'channel session gone'
+				: 'channel agent or mode changed while queued');
+			return;
+		}
 		lastSessionId = err.sessionId || lastSessionId;
 		log.error(`Job '${key}': ERROR (code ${err.code || 'unknown'})`, err.message);
 		// A crash produces no output, so it cannot opt out: always reported.
@@ -177,10 +228,12 @@ async function executeJob(job) {
 			log.warn(`Job '${key}': error notification skipped (unresolved channelId '${channelId}')`);
 		}
 	} finally {
-		try {
-			recordJobRun(job, { channelName: resolvedChannelName, lastSessionId });
-		} catch (err) {
-			log.error(`Failed to update job '${key}':`, err.message);
+		if (!skipRecord) {
+			try {
+				recordJobRun(job, { channelName: resolvedChannelName, lastSessionId });
+			} catch (err) {
+				log.error(`Failed to update job '${key}':`, err.message);
+			}
 		}
 		// Rebuild the schedule in case remaining reached 0 (job removed from file)
 		reloadJobs();

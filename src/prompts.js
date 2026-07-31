@@ -94,15 +94,15 @@ Columns:
 - cron: standard cron expression, timezone Europe/Paris
 - remaining: executions left. 0 = infinite (recurring); >0 is decremented after each run and
   the job is auto-removed at 0; use 1 for a one-shot
+- isolated: 1 (default) = each run gets a fresh session. 0 = the run happens inside this
+  channel's ongoing conversation, so its result can be replied to; use it for short
+  follow-ups ("check X in 5 min"). If that conversation has been reset before the job
+  fires, the job is deleted instead of run — keep 1 for anything recurring or long-lived.
 - channel_id: REQUIRED — the current channel's ID (shown above), where notifications are sent
-- channel_name: REQUIRED — set it to the current channel name shown above ("{{channelName}}").
-  The scheduler refreshes it on each run.
+- channel_name: REQUIRED — the current channel name shown above ("{{channelName}}")
 - created: ISO date
-- last_run: auto-managed, do not modify
-- last_session_id: auto-managed, do not set or modify. The scheduler writes the agent
-  session UUID of the last run (including failed runs) so a later conversation can inspect
-  that run's transcript on disk to debug it. Jobs always start a fresh session, so it is
-  never resumed automatically.
+- last_run, last_session_id: auto-managed, do not modify. The session UUID of the last run
+  (including failures) locates its transcript on disk for debugging.
 - description: free text
 
 Notifications:
