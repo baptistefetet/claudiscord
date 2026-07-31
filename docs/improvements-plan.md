@@ -1,4 +1,4 @@
-# Claudiscord — feature backlog: session forks, webhook, voice filter, inline jobs
+# Claudiscord — feature backlog: session forks, webhook, voice filter
 
 Ideas discussed 2026-07-24, verified against the host Claude CLI 2.1.218,
 codex-cli 0.146.0 and the current `src/`. Absorbs the former
@@ -142,93 +142,6 @@ verbal acks). Reuse the cached-phrase mechanism (`PHRASES` +
 
 Files: `src/voice.js`. Effort: low. Value: UX polish.
 
-## 8. Inline jobs — run a scheduled job inside the channel session
-
-Discussed 2026-07-25. Goal: "check X in 5 minutes" runs *in the conversation*,
-so the user can reply to the result. Today every job runs with
-`sessionId: null` (`scheduler.js::executeJob`), so its output is a dead end.
-Modelled on OpenClaw's cron `sessionTarget`, without its heartbeat file.
-
-New column `session_target TEXT`: `'isolated'` (default, current behaviour) or
-`'channel'`. An explicit enum keeps illegal states unrepresentable and is
-self-documenting in a table agents write by hand through the `sqlite3` CLI —
-worth a column rather than inferring the mode from some other field.
-
-Session resolution:
-
-- `executePrompt` already resolves the channel session when given `channelId`;
-  jobs currently pass `queueKey` only. The per-channel FIFO already serialises
-  a job against interactive prompts, so there is no race to add.
-- **Live lookup, never a snapshot.** Freezing the uuid in the row would, after
-  a `/new`, `--resume` a dead session and fork it — and `executor.js` writes
-  the returned id back to the channel, hijacking the live conversation.
-- **Resolve inside the queue callback**, not at tick time. `executeJob` already
-  reads the channel's agent live, but at tick time and without passing
-  `channelId`, so the executor's `CHANNEL_CONTEXT_CHANGED` guard never fires: a
-  `/claude` during the FIFO wait just means the run uses the agent that was
-  current when the tick fired. An inline job passes `channelId`, which arms that
-  guard and would fail the run outright. Consequence:
-  `executePrompt(agent, mode, …)` must accept "use the channel's" instead of
-  fixed values, and resolve agent and mode inside the callback.
-
-Marking the run as automatic:
-
-- The system prompt is re-sent on every invocation, including on resume (Claude
-  `--system-prompt`, Codex `developer_instructions`), so a `{{#job}}` block
-  would correctly mark the turn itself. But it is not persisted in the
-  transcript, and swapping it mid-session breaks the cached prefix twice (the
-  job turn, then the next interactive turn reverting to the normal one).
-- So an inline job uses the **normal** system prompt (no `jobId`) and the
-  marker goes **in-band**, at the head of the injected prompt:
-  `[scheduled job "<id>" — automatic run, not typed by <user>]`. In-band is
-  required regardless: the user message is the only thing that survives in the
-  transcript, otherwise the next turn reads the job's instructions as if the
-  user had typed them. Same intent as OpenClaw's "system event" for
-  main-session cron jobs.
-- The `{{#job}}` line "do not end with a question; user replies cannot resume
-  this job" is false for an inline job — replying is the point.
-
-Skip conditions, evaluated at execution time and non-permanent (the job becomes
-valid again once the channel is compatible):
-
-- A job from the sandbox db must not run on a channel currently in admin mode.
-  `job.mode` comes from the db the job lives in, and the container only mounts
-  the sandbox db — that *is* the security boundary. Taking the mode live from
-  the channel would let a sandboxed agent schedule an arbitrary prompt as root
-  on the host.
-- `remoteId` set → the session is driven from the mobile app and `setRemoteId`
-  wiped `sessionId`; running would start a parallel session or race the `--bg`
-  daemon.
-- **A skipped run must bypass `recordJobRun`**, which today sits in
-  `executeJob`'s `finally` and therefore always fires: otherwise the skip
-  consumes a `remaining` and overwrites `last_run`, silently burning a one-shot
-  that never ran.
-
-Prerequisite for the "in 5 minutes" use case — cron is the wrong tool. The
-ticker never replays a missed minute, so a one-shot that is missed (restart,
-late tick, or a skip above) stays armed and fires at the same minute the *next
-day*. Nullable `at` column (ISO 8601) taking precedence over `cron`, firing
-when `now >= at`: catch-up after a reboot becomes natural, and a stale one-shot
-can be disarmed past a threshold. This is OpenClaw's `kind: at`.
-
-Open points:
-
-- Stale session: an inline job can fail on `--resume` (expired session, or a
-  uuid from a 0-turn run) for reasons unrelated to its task. Hard error, or
-  fall back to a fresh session? A fallback silently breaks the "same session"
-  promise.
-- `NOTIFY_NONE` still applies — an inline job may stay silent — but the turn
-  remains in the shared context either way.
-- Context cost: a recurring inline job re-injects its whole prompt into the
-  conversation on every run. Accepted: inline targets short, finite tasks;
-  long monitoring prompts stay `isolated`.
-
-Files: `src/jobs-store.js` (schema, now at `user_version = 3`),
-`src/scheduler.js` (skip conditions, in-band prefix, no-decrement path),
-`src/executor.js` (channel-resolved agent/mode inside the queue callback),
-`src/prompts.js` (Scheduling section), `src/commands.js` (`/jobs`).
-Effort: medium. Value: high.
-
 ## Priorities
 
 `/btw` and the webhook have the best value/effort ratio; thread-fork is small
@@ -237,18 +150,10 @@ trivial; the `verbose_json` gate (§4.4) is a small, contained change to
 `stt.js` + `voice.js`; barge-in (§5) is the best UX win; streaming TTS (§6)
 is the heaviest item and can come last.
 
-Inline jobs (§8) are self-contained and independent of the fork work; the `at`
-column is a small prerequisite worth landing first, since it fixes one-shot
-scheduling for isolated jobs too.
-
 ## References
 
 - OpenClaw — Discord channel (voice modes, barge-in, wake word):
   <https://docs.openclaw.ai/fr/channels/discord/>
-- OpenClaw — cron jobs (`sessionTarget`: isolated / main / current / custom,
-  `kind: at`, system events): <https://docs.openclaw.ai/automation/cron-jobs>
-- OpenClaw — heartbeat (`isolatedSession`, `lightContext`, `HEARTBEAT_OK`
-  silence contract): <https://docs.openclaw.ai/gateway/heartbeat>
 - Hermes — Voice Mode (VAD, streaming TTS, hallucination filter):
   <https://github.com/nousresearch/hermes-agent/blob/main/website/docs/user-guide/features/voice-mode.md>
 - Hermes — `voice_mixer.py` (source of `src/mixer.js`, ambient bed / duck
