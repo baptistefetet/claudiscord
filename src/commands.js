@@ -4,6 +4,7 @@ const execFileAsync = promisify(execFile);
 const {
 	UPGRADE_TIMEOUT_MS,
 	CONTAINER_NAME,
+	AGENT_MODELS,
 } = require('./config');
 const sessions = require('./sessions');
 const {
@@ -41,16 +42,15 @@ const remoteOpInFlight = new Set();
  * Header line with id, then one piece of information per line.
  */
 function formatJobBlock(job) {
-	const status = job.enabled === false ? '⏸ disabled' : '✅ enabled';
-	const agent = job.agent === 'codex' ? 'codex' : `claude/${job.model || 'sonnet'}`;
+	// Derived, not stored: a job runs on whatever agent its channel is set to now.
+	const agent = sessions.getAgent(job.channelId);
 	const runs = (typeof job.remaining === 'number' && job.remaining > 0) ? `${job.remaining} left` : 'infinite';
 	const channel = job.channelName || job.channelId;
 	const last = job.lastRun ? `${String(job.lastRun).replace('T', ' ').slice(0, 16)} UTC` : 'never';
 	const lines = [
 		`**\`${job.id}\`**`,
-		`▫️ Status: ${status}`,
 		`⏰ Schedule: \`${job.cron}\``,
-		`🤖 Agent: ${agent}`,
+		`🤖 Agent: ${agent} (channel's current)`,
 		`💬 Channel: ${channel}`,
 		`🔁 Runs: ${runs}`,
 		`🕘 Last run: ${last}`,
@@ -69,7 +69,7 @@ function formatJobBlock(job) {
  */
 async function handleRemote({ channel, channelId, mode, agent, remoteId }) {
 	if (agent !== 'claude') {
-		await channel.send('`/remote` is only available with the **claude** agent. Use `/opus` or `/sonnet` first.');
+		await channel.send('`/remote` is only available with the **claude** agent. Use `/claude` first.');
 		return true;
 	}
 	// Hold the per-channel lock for the entire toggle. The gating above
@@ -327,10 +327,11 @@ async function handleSandbox({ channel, channelId, mode }) {
 	return true;
 }
 
-async function handleStatus({ channel, channelId, mode, agent, model, remoteId }) {
+async function handleStatus({ channel, channelId, mode, agent, remoteId }) {
 	const dockerNote = DOCKER_AVAILABLE ? '' : '\nSandbox unavailable on this host.';
 	const remoteLine = remoteId ? `\nRemote: \`${remoteId}\`` : '';
-	const modelLine = agent === 'claude' ? `\nModel: **${model}**` : '';
+	const models = AGENT_MODELS[agent];
+	const modelLine = `\nModels: **${models.high}** (prompts) · **${models.medium}** (jobs)`;
 	const codexLine = isCodexAvailable(mode) ? '' : `\nCodex unavailable in **${mode}** mode.`;
 	const voiceLine = getActiveVoiceChannelId() === channelId ? '\nVoice assistant: **active**' : '';
 	const autojoinLine = sessions.getAutojoin(channelId) ? '\nAutojoin: **on**' : '';
@@ -410,40 +411,20 @@ async function handleAutojoin({ channel, channelId }) {
 }
 
 // Switching agents mid-session would break the shared sessionId (Claude UUIDs vs
-// Codex thread ids). Model switches stay allowed.
+// Codex thread ids).
 const VOICE_AGENT_LOCK = 'Agent switch is locked while the voice assistant is active here — send `/voice` to stop it first.';
 
-// Shared by /opus and /sonnet — the target model is the command name sans slash.
-async function handleModel({ channel, channelId, content, agent, model }) {
+// Shared by /claude and /codex — the target agent is the command name sans slash.
+// Availability is checked before "already using": claiming the channel runs an
+// agent that has since disappeared would be the more misleading answer.
+async function handleAgent({ channel, channelId, content, mode, agent }) {
 	const target = content.slice(1);
-	if (agent === 'claude' && model === target) {
-		await channel.send(`This channel is already using **${target}**.`);
-		return true;
-	}
-	if (agent !== 'claude') {
-		if (getActiveVoiceChannelId() === channelId) {
-			await channel.send(VOICE_AGENT_LOCK);
-			return true;
-		}
-		if (await rejectIfChannelBusy(channel, channelId)) return true;
-	}
-	sessions.setModel(channelId, target);
-	if (agent !== 'claude') {
-		sessions.setAgent(channelId, 'claude');
-		await channel.send(`Channel switched to **claude ${target}**. Session reset.`);
-	} else {
-		await channel.send(`Channel switched to **${target}**.`);
-	}
-	return true;
-}
-
-async function handleCodex({ channel, channelId, mode, agent }) {
-	if (!isCodexAvailable(mode)) {
+	if (target === 'codex' && !isCodexAvailable(mode)) {
 		await channel.send(`Codex is not installed or not available in **${mode}** mode.`);
 		return true;
 	}
-	if (agent === 'codex') {
-		await channel.send('This channel is already using **codex**.');
+	if (agent === target) {
+		await channel.send(`This channel is already using **${target}**.`);
 		return true;
 	}
 	if (getActiveVoiceChannelId() === channelId) {
@@ -451,8 +432,8 @@ async function handleCodex({ channel, channelId, mode, agent }) {
 		return true;
 	}
 	if (await rejectIfChannelBusy(channel, channelId)) return true;
-	sessions.setAgent(channelId, 'codex');
-	await channel.send('Channel switched to **codex**. Session reset.');
+	sessions.setAgent(channelId, target);
+	await channel.send(`Channel switched to **${target}**. Session reset.`);
 	return true;
 }
 
@@ -479,7 +460,7 @@ async function handleRestart({ channel }) {
  *   - helpOnly:      excluded from slash registration and registry dispatch
  *                    (e.g. the `!` shell, matched by prefix before the registry).
  *   - handler:       ({ message, channel, channelId, content, mode, agent,
- *                    model, remoteId }) => Promise<boolean>.
+ *                    remoteId }) => Promise<boolean>.
  */
 const COMMANDS = [
 	{ name: '/new', help: 'Reset session for this channel (new conversation)', handler: handleNew },
@@ -489,9 +470,8 @@ const COMMANDS = [
 	{ name: '/jobs', help: 'List all scheduled jobs (admin + sandbox)', remoteAllowed: true, handler: handleJobs },
 	{ name: '/admin', help: 'Switch this channel to admin mode (host)', handler: handleAdmin },
 	{ name: '/sandbox', help: 'Switch this channel to sandbox mode (container)', handler: handleSandbox },
-	{ name: '/opus', help: 'Use Claude Opus for this channel', handler: handleModel },
-	{ name: '/sonnet', help: 'Use Claude Sonnet for this channel', handler: handleModel },
-	{ name: '/codex', help: 'Use Codex for this channel', handler: handleCodex },
+	{ name: '/claude', help: 'Use Claude for this channel', handler: handleAgent },
+	{ name: '/codex', help: 'Use Codex for this channel', handler: handleAgent },
 	{ name: '/remote', help: 'Toggle this channel between Discord mode and remote mode (Claude mobile app)', remoteAllowed: true, handler: handleRemote },
 	{ name: '/voice', help: 'Toggle the voice assistant in this voice channel (join/leave)', handler: handleVoice },
 	{ name: '/autojoin', help: 'Toggle autojoin for this voice channel (join on my own when you connect)', handler: handleAutojoin },
@@ -513,7 +493,6 @@ async function handleCommand(message) {
 	const channelId = channel.id;
 	const mode = sessions.getMode(channelId);
 	const agent = sessions.getAgent(channelId);
-	const model = sessions.getModel(channelId);
 
 	if (await finishPendingLogin(channel, content)) return true;
 
@@ -539,7 +518,7 @@ async function handleCommand(message) {
 	// Registry dispatch (single source of truth, shared with the slash path via
 	// runCommand). An unknown command → runCommand returns false → the message is
 	// handled as a normal prompt.
-	return runCommand({ channel, channelId, name: content, mode, agent, model, remoteId, message });
+	return runCommand({ channel, channelId, name: content, mode, agent, remoteId, message });
 }
 
 /**
@@ -563,14 +542,14 @@ function remoteGateHint(channelId, key) {
  * `channel.send`, so any transport can drive it. False when `name` is not a
  * registered command (text path: fall through to a normal prompt).
  */
-async function runCommand({ channel, channelId, name, mode, agent, model, remoteId, message }) {
+async function runCommand({ channel, channelId, name, mode, agent, remoteId, message }) {
 	const cmd = COMMANDS.find(c => !c.helpOnly && c.name === name);
 	if (!cmd) return false;
 	if (cmd.modes && !cmd.modes.includes(mode)) {
 		await channel.send(cmd.modeError);
 		return true;
 	}
-	return cmd.handler({ message, channel, channelId, content: name, mode, agent, model, remoteId });
+	return cmd.handler({ message, channel, channelId, content: name, mode, agent, remoteId });
 }
 
 /**
@@ -581,7 +560,6 @@ async function runCommand({ channel, channelId, name, mode, agent, model, remote
 async function dispatchSlashCommand({ channel, channelId, name }) {
 	const mode = sessions.getMode(channelId);
 	const agent = sessions.getAgent(channelId);
-	const model = sessions.getModel(channelId);
 	const remoteId = sessions.getRemoteId(channelId);
 
 	const hint = remoteGateHint(channelId, name);
@@ -589,7 +567,7 @@ async function dispatchSlashCommand({ channel, channelId, name }) {
 		await channel.send(hint);
 		return;
 	}
-	const handled = await runCommand({ channel, channelId, name, mode, agent, model, remoteId, message: null });
+	const handled = await runCommand({ channel, channelId, name, mode, agent, remoteId, message: null });
 	if (!handled) await channel.send('Unknown command.');
 }
 

@@ -143,7 +143,6 @@ function buildVoiceSystemPrompt(session) {
 		channelName: session.channelName,
 		isDM: false,
 		channelAgent: sessions.getAgent(session.channelId),
-		channelModel: sessions.getModel(session.channelId),
 		voice: true,
 	});
 }
@@ -203,7 +202,7 @@ async function handleTurn(session, pcm) {
 		const result = await executePrompt(agent, mode, text, {
 			channelId,
 			systemPrompt: buildVoiceSystemPrompt(session),
-			model: sessions.getModel(channelId),
+			tier: 'high',
 		});
 		reply = result.result || 'Réponse vide.';
 	} finally {

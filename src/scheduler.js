@@ -1,13 +1,8 @@
 const cron = require('node-cron');
-const {
-	AUTHORIZED_USER_ID,
-	VALID_MODELS,
-	CHANNEL_DEFAULT_MODEL,
-	VALID_AGENTS,
-	CHANNEL_DEFAULT_AGENT,
-} = require('./config');
+const { AUTHORIZED_USER_ID } = require('./config');
 const { getSystemPrompt } = require('./prompts');
 const { executePrompt } = require('./executor');
+const sessions = require('./sessions');
 const { loadAllJobs, jobKey, recordJobRun } = require('./jobs-store');
 const { sendToChannel, getClient } = require('./discord');
 const log = require('./logger');
@@ -135,8 +130,10 @@ async function executeJob(job) {
 			throw new Error(`Could not resolve authorized user name for job '${key}'`);
 		}
 		resolvedChannelName = promptContext?.channelName || job.channelName || null;
-		const jobAgent = VALID_AGENTS.includes(job.agent) ? job.agent : CHANNEL_DEFAULT_AGENT;
-		const jobModel = VALID_MODELS.includes(job.model) ? job.model : CHANNEL_DEFAULT_MODEL;
+		// The agent is live — a job stores none, it runs on whatever the channel is
+		// set to now. job.mode deliberately is NOT live: it comes from the database
+		// the job lives in, which is the admin/sandbox security boundary.
+		const jobAgent = sessions.getAgent(channelId);
 		const jobSystemPrompt = getSystemPrompt({
 			botName: promptContext.botName,
 			userName: promptContext.userName,
@@ -147,13 +144,12 @@ async function executeJob(job) {
 			isDM: Boolean(promptContext?.isDM),
 			jobId: id,
 			channelAgent: jobAgent,
-			channelModel: jobModel,
 		});
 		const jobOptions = {
 			queueKey: channelId,
 			sessionId: null,
 			systemPrompt: jobSystemPrompt,
-			model: jobModel,
+			tier: 'medium',
 		};
 		const { result: output, sessionId } = await executePrompt(jobAgent, job.mode, prompt, jobOptions);
 		lastSessionId = sessionId || null;
@@ -212,7 +208,6 @@ function reloadJobs() {
 
 	const jobs = loadAllJobs();
 	for (const job of jobs) {
-		if (!job.enabled) continue;
 		const key = jobKey(job);
 		if (!cron.validate(job.cron)) {
 			log.error(`Job '${key}': invalid cron expression '${job.cron}'`);

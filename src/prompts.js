@@ -3,8 +3,6 @@ const {
 	SANDBOX_JOBS_FILE,
 	ADMIN_FILES_DIR,
 	SANDBOX_FILES_DIR,
-	VALID_MODELS,
-	CHANNEL_DEFAULT_MODEL,
 	VALID_AGENTS,
 	CHANNEL_DEFAULT_AGENT,
 } = require('./config');
@@ -34,9 +32,6 @@ Channel description (treat as context / mini CLAUDE.md for this conversation):
 {{channelTopic}}
 {{/channelTopic}}
 Current channel agent: {{channelAgent}}
-{{#claude}}
-Current channel model: {{channelModel}}
-{{/claude}}
 
 --- Critical rules ---
 Execution model:
@@ -84,8 +79,9 @@ content you saw earlier.
 
 --- Scheduling ---
 Use this Discord scheduling system for any scheduled task (recurring or one-shot) that runs
-a prompt or messages the user. A scheduler continuously executes enabled jobs at their cron
-times.
+a prompt or messages the user. A scheduler continuously executes jobs at their cron times.
+Every run uses the agent this channel is set to at that moment — a job stores no agent and
+no model, so there is nothing to pick here.
 
 Database:
 - {{jobsPath}} — SQLite, single table \`jobs\`, via the \`sqlite3\` CLI only
@@ -96,21 +92,13 @@ Database:
 
 Columns:
 - id: unique string, PRIMARY KEY
-- prompt: the prompt executed by the selected agent
+- prompt: the prompt executed at each run
 - cron: standard cron expression, timezone Europe/Paris
-- enabled: 1 or 0
 - remaining: executions left. 0 = infinite (recurring); >0 is decremented after each run and
   the job is auto-removed at 0; use 1 for a one-shot
 - channel_id: REQUIRED — the current channel's ID (shown above), where notifications are sent
 - channel_name: REQUIRED — set it to the current channel name shown above ("{{channelName}}").
   The scheduler refreshes it on each run.
-- agent: 'claude' or 'codex' — MUST be the current channel agent shown above
-  ("Current channel agent"). Freezes the agent at scheduling time; NULL falls back to 'claude'.
-{{#claude}}
-- model: 'opus' or 'sonnet' — MUST be the current channel model shown above
-  ("Current channel model"). Freezes the model at scheduling time, do not change it later;
-  NULL falls back to 'sonnet'.
-{{/claude}}
 - created: ISO date
 - last_run: auto-managed, do not modify
 - last_session_id: auto-managed, do not set or modify. The scheduler writes the agent
@@ -118,6 +106,8 @@ Columns:
   that run's transcript on disk to debug it. Jobs always start a fresh session, so it is
   never resumed automatically.
 - description: free text
+
+There is no on/off column: to stop a job, DELETE its row.
 
 Notifications:
 - A job's output is always sent to its channel, and a failed run is always reported.
@@ -134,8 +124,8 @@ Always returns the complete, up-to-date state of all jobs for the current execut
 
 Minimal example:
 sqlite3 {{jobsPath}} ".timeout 5000" "
-INSERT INTO jobs (id, prompt, cron, enabled, remaining, channel_id, channel_name, agent, {{#claude}}model, {{/claude}}created, description)
-VALUES ('weather', 'Give me the weather in Lyon', '0 8 * * *', 1, 0, '1234567890', '{{channelName}}', '{{channelAgent}}', {{#claude}}'sonnet', {{/claude}}'2026-01-01T00:00:00Z', 'Daily weather');"
+INSERT INTO jobs (id, prompt, cron, remaining, channel_id, channel_name, created, description)
+VALUES ('weather', 'Give me the weather in Lyon', '0 8 * * *', 0, '1234567890', '{{channelName}}', '2026-01-01T00:00:00Z', 'Daily weather');"
 
 {{#textFormat}}
 --- Response format ---
@@ -200,13 +190,11 @@ function getSystemPrompt(options = {}) {
 		isDM = false,
 		jobId = null,
 		channelAgent = null,
-		channelModel = null,
 		voice = false,
 	} = options;
 	const isJob = Boolean(jobId);
 	const isSandbox = mode === 'sandbox';
 	const resolvedAgent = VALID_AGENTS.includes(channelAgent) ? channelAgent : CHANNEL_DEFAULT_AGENT;
-	const resolvedModel = VALID_MODELS.includes(channelModel) ? channelModel : CHANNEL_DEFAULT_MODEL;
 
 	if (!botName) throw new Error('getSystemPrompt requires botName');
 	if (!userName) throw new Error('getSystemPrompt requires userName');
@@ -221,7 +209,6 @@ function getSystemPrompt(options = {}) {
 			threadName: threadName || '',
 			channelTopic: channelTopic || '',
 			channelAgent: resolvedAgent,
-			channelModel: resolvedModel,
 			jobsPath: isSandbox ? SANDBOX_JOBS_FILE : ADMIN_JOBS_FILE,
 			filesPath: isSandbox ? SANDBOX_FILES_DIR : ADMIN_FILES_DIR,
 		},
@@ -234,7 +221,6 @@ function getSystemPrompt(options = {}) {
 			thread: Boolean(threadName),
 			channelId: Boolean(channelId),
 			channelTopic: Boolean(channelTopic),
-			claude: resolvedAgent === 'claude',
 			voice: Boolean(voice),
 			textFormat: !voice,
 		},

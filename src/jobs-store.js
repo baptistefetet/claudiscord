@@ -4,27 +4,22 @@ const cron = require('node-cron');
 const {
 	ADMIN_JOBS_FILE,
 	SANDBOX_HOST_JOBS_FILE,
-	VALID_MODELS,
-	VALID_AGENTS,
 } = require('./config');
 const log = require('./logger');
 
-const REQUIRED_FIELDS = ['id', 'prompt', 'cron', 'enabled', 'channelId'];
+const REQUIRED_FIELDS = ['id', 'prompt', 'cron', 'channelId'];
 
 // STRICT rejects mistyped values at insert time — the table is also written
 // by agents through the sqlite3 CLI, outside claudiscord's validation.
 const SCHEMA = `
-PRAGMA user_version = 2;
+PRAGMA user_version = 3;
 CREATE TABLE IF NOT EXISTS jobs (
 	id              TEXT PRIMARY KEY,
 	channel_id      TEXT NOT NULL,
 	channel_name    TEXT,
 	prompt          TEXT NOT NULL,
 	cron            TEXT NOT NULL,
-	enabled         INTEGER NOT NULL,
 	remaining       INTEGER NOT NULL DEFAULT 0,
-	agent           TEXT,
-	model           TEXT,
 	created         TEXT,
 	last_run        TEXT,
 	last_session_id TEXT,
@@ -66,13 +61,9 @@ function rowToJob(row) {
 		id: row.id,
 		prompt: row.prompt,
 		cron: row.cron,
-		enabled: row.enabled === 1,
 		remaining: row.remaining,
 		channelId: row.channel_id,
 		channelName: row.channel_name,
-		// NULL maps to undefined so validateJob's optional-field checks pass.
-		agent: row.agent ?? undefined,
-		model: row.model ?? undefined,
 		created: row.created,
 		lastRun: row.last_run,
 		lastSessionId: row.last_session_id,
@@ -103,10 +94,7 @@ function validateJob(job) {
 	if (typeof job.id !== 'string' || !job.id) return false;
 	if (typeof job.prompt !== 'string' || !job.prompt) return false;
 	if (typeof job.cron !== 'string' || !cron.validate(job.cron)) return false;
-	if (typeof job.enabled !== 'boolean') return false;
 	if (typeof job.channelId !== 'string' || !job.channelId) return false;
-	if (job.agent !== undefined && !VALID_AGENTS.includes(job.agent)) return false;
-	if (job.model !== undefined && !VALID_MODELS.includes(job.model)) return false;
 	return true;
 }
 

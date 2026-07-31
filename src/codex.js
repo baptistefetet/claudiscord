@@ -5,6 +5,7 @@ const {
 	CONTAINER_NAME,
 	SANDBOX_USER_HOME,
 	SANDBOX_CODEX_HOME,
+	REASONING_EFFORT,
 } = require('./config');
 const { ensureContainer, isCodexAvailableInContainer } = require('./container');
 const { spawnCollect } = require('./spawn');
@@ -15,10 +16,6 @@ const CODEX_LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
 const CODEX_LOGIN_URL_TIMEOUT_MS = 15 * 1000;
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 const URL_RE = /https?:\/\/[^\s<>"')]+/g;
-
-// model_reasoning_effort passed via -c to every Codex exec (host + sandbox);
-// the -c flag overrides any config.toml value, so this is the single source.
-const CODEX_REASONING_EFFORT = 'high';
 
 let CODEX_AVAILABLE = true;
 try {
@@ -141,15 +138,20 @@ function buildCodexArgs(options = {}) {
 	const {
 		sessionId = null,
 		systemPrompt = null,
+		model = null,
 	} = options;
 
+	// -m and -c both belong to the OPTIONS block, which precedes <SESSION_ID> in
+	// the `exec resume` form. The -c override wins over any config.toml value, so
+	// host and sandbox run the same model and effort.
 	const executionArgs = [
 		'--yolo',
 		'--skip-git-repo-check',
 		'--json',
 		'-c',
-		`model_reasoning_effort="${CODEX_REASONING_EFFORT}"`,
+		`model_reasoning_effort="${REASONING_EFFORT}"`,
 	];
+	if (model) executionArgs.push('-m', model);
 	if (systemPrompt) {
 		executionArgs.push(
 			'-c',
@@ -399,6 +401,7 @@ async function executeCodex(prompt, options = {}, env) {
 	const {
 		sessionId = null,
 		systemPrompt = null,
+		model = null,
 	} = options;
 
 	if (env.precheck) env.precheck();
@@ -412,7 +415,7 @@ async function executeCodex(prompt, options = {}, env) {
 	let execution;
 	try {
 		execution = await env.spawn(
-			buildCodexArgs({ sessionId, systemPrompt }),
+			buildCodexArgs({ sessionId, systemPrompt, model }),
 			{ input: prompt },
 		);
 	} catch (err) {

@@ -7,11 +7,11 @@ Works in both DMs and private guild channels. Each channel is an independent con
 ## Features
 
 - **Per-channel conversations** — each Discord channel (DM included) keeps its own active-agent session
-- **Threads** — a public thread is its own fresh session (inheriting the parent channel's mode/agent/model), so you can branch into a side conversation without disturbing the main channel
-- **Per-channel agent** — use Claude Code by default, or switch any channel to Codex with `/codex`
+- **Threads** — a public thread is its own fresh session (inheriting the parent channel's mode/agent), so you can branch into a side conversation without disturbing the main channel
+- **Per-channel agent** — use Claude Code by default, or switch any channel to Codex with `/codex`; `/claude` switches back
 - **Channel topic = mini CLAUDE.md** — renaming or rewriting the topic immediately changes the agent's context
 - **Two execution modes per channel** — `admin` runs the selected agent on the host, `sandbox` runs it in the Docker container
-- **Per-channel Claude model** — pick `opus` or `sonnet` per channel with `/opus` / `/sonnet` (default `sonnet`); scheduled jobs snapshot the channel's agent and model at scheduling time
+- **Two model tiers per agent** — your prompts always run the agent's high model (Claude `opus`, Codex `gpt-5.6-sol`), scheduled jobs always run its medium one (`sonnet` / `gpt-5.6-terra`); reasoning effort is `xhigh` everywhere. Nothing to pick, nothing to configure
 - **Per-channel queues** — prompts stay FIFO within a channel or thread while different channels can run concurrently
 - **Single-user authorization** — only the Discord user whose ID is in `AUTHORIZED_USER_ID` can talk to the bot; everyone else is silently dropped
 - **Optional Docker** — sandbox mode is disabled gracefully if Docker isn't installed; admin mode still works
@@ -121,8 +121,8 @@ If sandbox mode is configured you'll also see `Docker image 'claudiscord-sandbox
 - Invite the bot to any guild channel you want (private or not — the bot only talks back to the authorized user anyway).
 - Set the channel's **topic** to whatever you want the agent to keep in mind for this conversation — it's injected into the system prompt alongside the channel name.
 - The first message in a new channel defaults to **admin** mode. Switch with `/sandbox` if you'd rather keep that channel to a containerized workspace.
-- Claude Code is the default agent. `/codex` selects Codex in either mode; `/opus` or `/sonnet` selects Claude again.
-- Codex reasoning effort is forced for host and sandbox executions (`CODEX_REASONING_EFFORT` in `src/codex.js`).
+- Claude Code is the default agent. `/codex` selects Codex in either mode; `/claude` selects Claude again. Either switch resets the channel session.
+- Model and reasoning effort are forced by claudiscord for both agents, host and sandbox alike (`AGENT_MODELS` and `REASONING_EFFORT` in `src/config.js`) — they override any local CLI configuration.
 
 ## File uploads
 
@@ -147,8 +147,7 @@ Details:
 | `/jobs` | List all scheduled jobs (admin first, then sandbox) |
 | `/admin` | Switch the current channel to admin mode (host) |
 | `/sandbox` | Switch the current channel to sandbox mode (container) |
-| `/opus` | Use Claude Opus for this channel |
-| `/sonnet` | Use Claude Sonnet for this channel (default) |
+| `/claude` | Use Claude for this channel (default) |
 | `/codex` | Use Codex for this channel |
 | `/remote` | Claude only — toggle the channel between Discord mode and remote control via the Claude mobile app |
 | `/voice` | Voice channels only — toggle the voice assistant in this voice channel (join/leave) |
@@ -163,14 +162,14 @@ Type `/voice` in a **voice channel's text chat** to make the bot join that chann
 
 - Requires `OPENAI_API_KEY` (TTS) and `GROQ_API_KEY` (STT) in `.env`.
 - The transcript (`🎙️ …`) and the reply are also posted to the voice channel's chat.
-- The voice channel is a regular channel: switch mode with `/admin` / `/sandbox` in its chat. Voice turns run the channel's agent and model; switching the agent is locked while the assistant is active (`/voice` to stop it first).
+- The voice channel is a regular channel: switch mode with `/admin` / `/sandbox` in its chat. Voice turns run the channel's agent; switching the agent is locked while the assistant is active (`/voice` to stop it first).
 - Voice replies use a dedicated speakable system prompt (no markdown, confirmation questions when the transcript looks garbled).
 
 ### Autojoin
 
 Type `/autojoin` in a voice channel's text chat and the bot connects on its own whenever you join that channel — no `/voice` needed. It is **per channel and off by default**: only the channels you opt in to are ever joined, so the bot never lands in a call with other people and turns what you say to them into prompts.
 
-- Move to another autojoin channel and the bot follows; move to a channel without autojoin and it just leaves. Each voice channel keeps its own session, so following = a different conversation (its own mode/agent/model), not a moved one.
+- Move to another autojoin channel and the bot follows; move to a channel without autojoin and it just leaves. Each voice channel keeps its own session, so following = a different conversation (its own mode/agent), not a moved one.
 - `/autojoin` off does not disconnect a bot that is already there — use `/voice` for that. Conversely `/voice` to kick it out of an autojoin channel only holds until you leave the channel: reconnect and it comes back.
 - `/status` shows `Autojoin: on` when the current channel is opted in.
 
@@ -180,7 +179,7 @@ Note: `@discordjs/opus` has no prebuilt binary for some platforms (e.g. ARM64 + 
 
 Each environment authenticates independently: admin (host) and sandbox have their own credentials. Whichever environment runs an agent must be logged in there.
 
-From Discord, select the target environment and agent first (`/admin` or `/sandbox`, then `/sonnet`/`/opus` or `/codex`), then run `/login`. Claude sends an OAuth link and accepts the returned code in the same channel. Codex sends a device-auth browser link and waits for the CLI to complete.
+From Discord, select the target environment and agent first (`/admin` or `/sandbox`, then `/claude` or `/codex`), then run `/login`. Claude sends an OAuth link and accepts the returned code in the same channel. Codex sends a device-auth browser link and waits for the CLI to complete.
 
 If an environment is not authenticated, the corresponding agent reports an authentication error until `/login` is completed for that same mode and agent.
 

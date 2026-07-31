@@ -6,6 +6,7 @@ const {
 } = require('./container');
 const { runQueued } = require('./queue');
 const sessions = require('./sessions');
+const { AGENT_MODELS } = require('./config');
 
 /**
  * Execute a prompt with the selected agent and environment. Executions are FIFO
@@ -14,9 +15,12 @@ const sessions = require('./sessions');
  * Channel session state is read inside the queue, just before spawn. The agent
  * returns its generated UUID, which is persisted before the next queued prompt
  * can run. Scheduled jobs pass no channelId and get a fresh session every run.
+ *
+ * `tier` ('high' for interactive prompts, 'medium' for scheduled jobs) is turned
+ * into a concrete model id here and nowhere else, so no caller names a model.
  */
 function executePrompt(agent, mode, prompt, options = {}) {
-	const { channelId, queueKey = channelId, ...rest } = options;
+	const { channelId, queueKey = channelId, tier = 'high', ...rest } = options;
 	return runQueued(queueKey, async () => {
 		if (
 			channelId
@@ -30,7 +34,11 @@ function executePrompt(agent, mode, prompt, options = {}) {
 		const sessionId = channelId
 			? sessions.getSession(channelId).sessionId
 			: (rest.sessionId || null);
-		const opts = { ...rest, sessionId };
+		const models = AGENT_MODELS[agent];
+		if (!models) throw new Error(`Unknown agent: ${agent}`);
+		const model = models[tier];
+		if (!model) throw new Error(`Unknown model tier: ${tier}`);
+		const opts = { ...rest, sessionId, model };
 		const sessionContextIsCurrent = () => (
 			!channelId
 			|| (

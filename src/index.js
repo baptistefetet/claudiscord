@@ -126,7 +126,6 @@ client.on(Events.MessageCreate, async message => {
 
 	const mode = sessions.getMode(channelId);
 	const agent = sessions.getAgent(channelId);
-	const model = sessions.getModel(channelId);
 	const botName = client.user.displayName || client.user.username;
 	const userName = message.author.displayName || message.author.username;
 	const channelTopic = isPublicThread
@@ -177,9 +176,8 @@ client.on(Events.MessageCreate, async message => {
 			channelTopic,
 			isDM,
 			channelAgent: agent,
-			channelModel: model,
 		}),
-		model,
+		tier: 'high',
 	};
 
 	// Surface the wait once per channel if another prompt is already running.

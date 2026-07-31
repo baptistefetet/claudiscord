@@ -7,6 +7,7 @@ const {
 	SANDBOX_HOST_HOME,
 	CONTAINER_NAME,
 	SANDBOX_USER_HOME,
+	REASONING_EFFORT,
 } = require('./config');
 const { ensureContainer } = require('./container');
 const { spawnCollect } = require('./spawn');
@@ -159,7 +160,7 @@ function buildClaudeArgs(prompt, options = {}) {
 	args.push('--disallowedTools', DISALLOWED_TOOLS);
 	args.push('--settings', CLAUDE_SETTINGS);
 	if (model) args.push('--model', model);
-	args.push('--effort', model === 'sonnet' ? 'high' : 'xhigh');
+	args.push('--effort', REASONING_EFFORT);
 	args.push('--', prompt);
 
 	return args;

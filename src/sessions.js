@@ -1,8 +1,6 @@
 const fs = require('fs');
 const {
 	ADMIN_SESSIONS_FILE,
-	VALID_MODELS,
-	CHANNEL_DEFAULT_MODEL,
 	VALID_AGENTS,
 	CHANNEL_DEFAULT_AGENT,
 } = require('./config');
@@ -15,7 +13,6 @@ const log = require('./logger');
  *     "<channelId>": {
  *       "mode": "admin"|"sandbox",
  *       "agent": "claude"|"codex",
- *       "model": "opus"|"sonnet",
  *       "sessionId": "<uuid>",
  *       "remoteId": null | "<agentId>",
  *       "autojoin": true|false,
@@ -37,7 +34,7 @@ const log = require('./logger');
  * its own UUID and we don't reconcile back.
  */
 
-/** @type {Map<string, {mode?: string, agent?: string, model?: string, sessionId?: string, remoteId?: string|null, autojoin?: boolean, lastName?: string}>} */
+/** @type {Map<string, {mode?: string, agent?: string, sessionId?: string, remoteId?: string|null, autojoin?: boolean, lastName?: string}>} */
 const channels = new Map();
 
 // In-memory only. Gates the one-time thread-starter injection against the race
@@ -63,7 +60,6 @@ function load() {
 				channels.set(id, {
 					mode,
 					agent,
-					model: VALID_MODELS.includes(entry.model) ? entry.model : CHANNEL_DEFAULT_MODEL,
 					sessionId,
 					remoteId,
 					autojoin: entry.autojoin === true,
@@ -90,7 +86,7 @@ function ensureChannel(channelId) {
 }
 
 /**
- * Snapshot a parent channel's mode/agent/model onto a thread. Idempotent, so the
+ * Snapshot a parent channel's mode/agent onto a thread. Idempotent, so the
  * inheritance is a one-off at first contact, not a live link.
  */
 function ensureFromParent(channelId, parentId) {
@@ -99,7 +95,6 @@ function ensureFromParent(channelId, parentId) {
 	channels.set(channelId, {
 		mode: parent?.mode === 'sandbox' ? 'sandbox' : 'admin',
 		agent: VALID_AGENTS.includes(parent?.agent) ? parent.agent : CHANNEL_DEFAULT_AGENT,
-		model: VALID_MODELS.includes(parent?.model) ? parent.model : CHANNEL_DEFAULT_MODEL,
 		sessionId: null,
 		remoteId: null,
 		// Threads are never voice channels; kept for a uniform entry shape.
@@ -148,20 +143,6 @@ function setAgent(channelId, agent) {
 	entry.sessionId = null;
 	persist();
 	log.info(`Channel ${channelId} agent set to: ${agent}; session cleared`);
-}
-
-function getModel(channelId) {
-	const entry = channels.get(channelId);
-	const model = entry?.model;
-	return VALID_MODELS.includes(model) ? model : CHANNEL_DEFAULT_MODEL;
-}
-
-function setModel(channelId, model) {
-	if (!VALID_MODELS.includes(model)) throw new Error(`Invalid model: ${model}`);
-	const entry = ensureChannel(channelId);
-	entry.model = model;
-	persist();
-	log.info(`Channel ${channelId} model set to: ${model}`);
 }
 
 function getAutojoin(channelId) {
@@ -273,8 +254,6 @@ module.exports = {
 	setMode,
 	getAgent,
 	setAgent,
-	getModel,
-	setModel,
 	getAutojoin,
 	setAutojoin,
 	listAutojoinChannelIds,

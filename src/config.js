@@ -71,10 +71,21 @@ const TYPING_INTERVAL_MS = 8000;
 const VOICE_SILENCE_MS = 900;
 const VOICE_IDLE_TIMEOUT_MS = 900_000; // 15 min
 
-const VALID_MODELS = ['opus', 'sonnet'];
-const CHANNEL_DEFAULT_MODEL = 'sonnet';
 const VALID_AGENTS = ['claude', 'codex'];
 const CHANNEL_DEFAULT_AGENT = 'claude';
+
+// Two model tiers per agent. Interactive prompts (text + voice) use `high`,
+// scheduled jobs use `medium`. src/executor.js is the only resolver — no caller
+// ever names a concrete model id.
+const AGENT_MODELS = {
+	claude: { high: 'opus', medium: 'sonnet' },
+	codex: { high: 'gpt-5.6-sol', medium: 'gpt-5.6-terra' },
+};
+
+// Single reasoning effort for every agent and every model above. Claude takes it
+// via --effort, Codex via -c model_reasoning_effort (which overrides config.toml,
+// so this stays the single source).
+const REASONING_EFFORT = 'xhigh';
 
 module.exports = {
 	AUTHORIZED_USER_ID,
@@ -110,10 +121,10 @@ module.exports = {
 	TYPING_INTERVAL_MS,
 	DOCKER_IMAGE,
 	CONTAINER_CPUS,
-	VALID_MODELS,
-	CHANNEL_DEFAULT_MODEL,
 	VALID_AGENTS,
 	CHANNEL_DEFAULT_AGENT,
+	AGENT_MODELS,
+	REASONING_EFFORT,
 	DOCKER_CMD_TIMEOUT,
 	UPGRADE_TIMEOUT_MS,
 };

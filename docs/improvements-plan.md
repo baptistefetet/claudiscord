@@ -1,7 +1,7 @@
 # Claudiscord — feature backlog: session forks, webhook, voice filter, inline jobs
 
 Ideas discussed 2026-07-24, verified against the host Claude CLI 2.1.218,
-codex-cli 0.145.0 and the current `src/`. Absorbs the former
+codex-cli 0.146.0 and the current `src/`. Absorbs the former
 `docs/voice-improvements-plan.md` (§4–7); its deferred items (agent cancel
 while THINKING, realtime voice front-end) were dropped, not carried over.
 
@@ -34,7 +34,7 @@ appears as a Discord **reply** to the `/btw` message to mark it as an aside.
 
 ## 2. Threads forking the parent session
 
-Today `ensureFromParent` snapshots mode/agent/model but starts fresh
+Today `ensureFromParent` snapshots mode/agent but starts fresh
 (`sessionId: null`) + starter-message injection (`index.js`).
 
 - When the thread has an anchor message AND the parent holds an active Claude
@@ -58,7 +58,7 @@ Minimal HTTP server in the same process (`node:http`, no framework):
   transport: no session/jobs key namespacing, no scheduler notification
   routing — the pending work listed in `CLAUDE.md` ("Adding a transport")
   stays untouched.
-- Flow: resolve mode/agent/model from sessions → build the system prompt →
+- Flow: resolve mode/agent from sessions → build the system prompt →
   `executePrompt` through the channel FIFO → result posted to the Discord
   channel. HTTP answers `202` immediately (a prompt has no bounded duration).
 - Respect the remote gate (refuse when `remoteId` is set), like the text path.
@@ -150,10 +150,9 @@ so the user can reply to the result. Today every job runs with
 Modelled on OpenClaw's cron `sessionTarget`, without its heartbeat file.
 
 New column `session_target TEXT`: `'isolated'` (default, current behaviour) or
-`'channel'`. Explicit rather than inferred from NULL `agent`/`model`: NULL
-already means "not applicable / default" (`check-system` is `agent='codex',
-model=NULL`), so overloading it would silently change that row's meaning, and
-it would make illegal states representable.
+`'channel'`. An explicit enum keeps illegal states unrepresentable and is
+self-documenting in a table agents write by hand through the `sqlite3` CLI —
+worth a column rather than inferring the mode from some other field.
 
 Session resolution:
 
@@ -163,10 +162,14 @@ Session resolution:
 - **Live lookup, never a snapshot.** Freezing the uuid in the row would, after
   a `/new`, `--resume` a dead session and fork it — and `executor.js` writes
   the returned id back to the channel, hijacking the live conversation.
-- **Resolve inside the queue callback**, not at tick time: a `/codex` while the
-  job waits in the FIFO would otherwise trip the `CHANNEL_CONTEXT_CHANGED`
-  guard and fail the run. Consequence: `executePrompt(agent, mode, …)` must
-  accept "use the channel's" instead of fixed values.
+- **Resolve inside the queue callback**, not at tick time. `executeJob` already
+  reads the channel's agent live, but at tick time and without passing
+  `channelId`, so the executor's `CHANNEL_CONTEXT_CHANGED` guard never fires: a
+  `/claude` during the FIFO wait just means the run uses the agent that was
+  current when the tick fired. An inline job passes `channelId`, which arms that
+  guard and would fail the run outright. Consequence:
+  `executePrompt(agent, mode, …)` must accept "use the channel's" instead of
+  fixed values, and resolve agent and mode inside the callback.
 
 Marking the run as automatic:
 
@@ -220,10 +223,11 @@ Open points:
   conversation on every run. Accepted: inline targets short, finite tasks;
   long monitoring prompts stay `isolated`.
 
-Files: `src/jobs-store.js` (schema), `src/scheduler.js` (skip conditions,
-in-band prefix, no-decrement path), `src/executor.js` (channel-resolved
-agent/mode), `src/prompts.js` (Scheduling section), `src/commands.js`
-(`/jobs`). Effort: medium. Value: high.
+Files: `src/jobs-store.js` (schema, now at `user_version = 3`),
+`src/scheduler.js` (skip conditions, in-band prefix, no-decrement path),
+`src/executor.js` (channel-resolved agent/mode inside the queue callback),
+`src/prompts.js` (Scheduling section), `src/commands.js` (`/jobs`).
+Effort: medium. Value: high.
 
 ## Priorities
 

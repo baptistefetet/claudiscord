@@ -11,7 +11,7 @@ Discord message (DM, guild text channel or text-in-voice chat)
   -> authorization filter (authorized user only)
   -> command dispatcher (/admin, /sandbox, /new, …)
   -> session lookup by channelId
-  -> executePrompt(agent, mode, prompt) [FIFO queue keyed by channelId]
+  -> executePrompt(agent, mode, prompt, { tier: 'high' }) [FIFO queue keyed by channelId]
        claude + admin   -> host Claude
        claude + sandbox -> single container
        codex  + admin   -> host Codex
@@ -20,12 +20,12 @@ Discord message (DM, guild text channel or text-in-voice chat)
 Scheduled jobs
   -> minute-resolution ticker
   -> executeJob(job)
-  -> executePrompt(job.agent, job.mode, …) [queue keyed by job.channelId]
+  -> executePrompt(channel's agent, job.mode, …, { tier: 'medium' }) [queue keyed by job.channelId]
   -> notification sent back to job.channelId
 ```
 
-- Each Discord channel has its own mode (`admin` / `sandbox`), agent (`claude` / `codex`, default `claude`), Claude model (`opus` / `sonnet`, default `sonnet`) and active-agent session. A DM channel is treated exactly like any other channel.
-- Public threads are handled like any other channel (own `channelId` → own session). On first contact, a thread snapshots its parent channel's mode/agent/model (`sessions.ensureFromParent`, not a live link) but starts a fresh session. The system prompt shows both the parent channel name and the thread name (`prompts.js` `thread`/`threadName`); the topic falls back to the parent's. Jobs/uploads attach to the thread itself like any channel. System messages are dropped early (`if (message.system) return;`): creating a thread posts a `ThreadCreated` system message in the parent whose `content` is the thread NAME (not empty), which would otherwise be answered as a prompt. On a thread's first turn (sessionId still null), if it was created from an existing message, that anchor message (`channel.fetchStarterMessage()`) is prepended to the prompt as quoted context — otherwise the message the thread forks from would be invisible (it lives in the parent and appears in the thread only as a dropped system message).
+- Each Discord channel has its own mode (`admin` / `sandbox`), agent (`claude` / `codex`, default `claude`) and active-agent session. The model is not a channel setting — it is derived from the agent and the execution tier (see "Agent and models"). A DM channel is treated exactly like any other channel.
+- Public threads are handled like any other channel (own `channelId` → own session). On first contact, a thread snapshots its parent channel's mode/agent (`sessions.ensureFromParent`, not a live link) but starts a fresh session. The system prompt shows both the parent channel name and the thread name (`prompts.js` `thread`/`threadName`); the topic falls back to the parent's. Jobs/uploads attach to the thread itself like any channel. System messages are dropped early (`if (message.system) return;`): creating a thread posts a `ThreadCreated` system message in the parent whose `content` is the thread NAME (not empty), which would otherwise be answered as a prompt. On a thread's first turn (sessionId still null), if it was created from an existing message, that anchor message (`channel.fetchStarterMessage()`) is prepended to the prompt as quoted context — otherwise the message the thread forks from would be invisible (it lives in the parent and appears in the thread only as a dropped system message).
 - The authorized user is stored in `.env` (`AUTHORIZED_USER_ID`) and is required at startup — without it the process refuses to boot.
 - Per-channel queues (`src/queue.js`): prompts sharing a `channelId` are FIFO; different channels run concurrently. One global maintenance gate protects login, shell, upgrades and remote transitions. `isBusy(channelId)` drives the one-time "⏳ waiting" hint.
 - Jobs live in two separate SQLite databases — never merged, never watched:
@@ -41,7 +41,7 @@ Dockerfile            # Sandbox image (node:22-slim + Claude/Codex CLIs + user c
 src/
   index.js            # Entry point: Discord handler, queue wait UX
   config.js           # .env loading + paths + constants
-  prompts.js          # Shared system prompt builder with Claude-only sections
+  prompts.js          # Shared system prompt builder (agent-agnostic — no per-agent sections)
   logger.js           # stdout/stderr logging (journald-friendly)
   discord.js          # Client, sendToChannel, sendChunked (splitMessage now private), typing indicator
   queue.js            # Per-channel FIFOs + global maintenance gate
@@ -49,11 +49,11 @@ src/
   claude.js           # Claude exec/login (host + sandbox), stream-json parse, OAuth usage (getClaudeUsage)
   codex.js            # Codex exec/login (host + sandbox), JSONL parse, account usage (getCodexUsage)
   container.js        # Docker: image/container, sandbox env factories (sandboxClaudeEnv/sandboxCodexEnv)
-  executor.js         # executePrompt(agent, mode) → pick env (host const / sandbox factory) → executeClaude|executeCodex; queue
+  executor.js         # executePrompt(agent, mode) → resolve tier→model → pick env (host const / sandbox factory) → executeClaude|executeCodex; queue
   jobs-store.js       # SQLite jobs store via sqlite3 CLI: loadAllJobs (admin+sandbox), recordJobRun, ensureDb, jobKey
   sessions.js         # { channels: { channelId -> { mode, agent, sessionId, ... } } }
   scheduler.js        # minute-resolution ticker, reloadJobs, executeJob, per-key lock
-  commands.js         # COMMANDS registry → dispatch + native slash metadata; /new /status /usage /login /jobs /admin /sandbox /opus /sonnet /codex /remote /voice /upgrade /restart !shell; transport-neutral dispatchSlashCommand + getRegisteredCommands (Discord plumbing stays in index.js); /login and !shell handlers live in login.js / shell.js
+  commands.js         # COMMANDS registry → dispatch + native slash metadata; /new /status /usage /login /jobs /admin /sandbox /claude /codex /remote /voice /upgrade /restart !shell; transport-neutral dispatchSlashCommand + getRegisteredCommands (Discord plumbing stays in index.js); /login and !shell handlers live in login.js / shell.js
   login.js            # /login flow state machine: pending login, URL relay, Discord code input, timeouts
   shell.js            # !shell: executeShell (host/container, SIGTERM→SIGKILL) + gating, output truncation
   remote.js           # /remote helpers: startRemote, stopRemote, reconcileRemotes
@@ -107,7 +107,7 @@ Discord voice messages (the mic button — flag `MessageFlags.IsVoiceMessage`) a
 - **Mixer** (`src/mixer.js`): ONE permanent Readable (s16le 48 kHz stereo) for the whole session; a synthesized detuned-sine "thinking" bed, ducked under speech, gains smoothed per 20 ms frame (levels from Hermes, scaled by `BED_VOLUME`). The player is paused between turns so the speaking indicator turns off while idle. A player `Idle` means the pipeline broke → the mixer resource is rebuilt.
 - **Voice system prompt**: `prompts.js` flag `voice: true` swaps the Discord response-format section for speakable-text rules (no markdown, mangled-name caveat for local project names, confirm before acting on garbled transcripts).
 - **Gates mirrored from the text path**: `remoteId` set → turn dropped with a chat hint; sandbox-remote lockout enforced by the executor; `isBusy()` → spoken "un instant" notice; `scheduler.reloadJobs()` after each turn (like index.js) so voice-scheduled jobs fire on time. Canned spoken phrases are French (matches `STT_LANGUAGE` default) and their TTS output is cached. Speech rate: `TTS_SPEED`.
-- Voice turns run the channel's agent/mode/model. Agent switches are locked while the assistant is active there — the shared sessionId (Claude UUID vs Codex thread id) must stay coherent with the executor's context guard. **The bot joins silently**: the mode goes to the chat, not the speakers. Auto-leave after 15 min without a turn (`VOICE_IDLE_TIMEOUT_MS`); the timer is suspended during a turn.
+- Voice turns run the channel's agent/mode at the `high` tier. Agent switches are locked while the assistant is active there — the shared sessionId (Claude UUID vs Codex thread id) must stay coherent with the executor's context guard. **The bot joins silently**: the mode goes to the chat, not the speakers. Auto-leave after 15 min without a turn (`VOICE_IDLE_TIMEOUT_MS`); the timer is suspended during a turn.
 - **Discord requirements**: non-privileged `GuildVoiceStates` intent (enabled in `src/discord.js`), Connect + Speak permissions on the voice channel.
 
 ### Autojoin (per voice channel)
@@ -149,19 +149,25 @@ The user can drop files/photos into a channel (with no text). An upload does NOT
 - `/sandbox` reports an error and does not switch if Docker is not installed
 - The mode is persisted in `sessions.json`
 
-## Agent and model (per channel)
+## Agent and models (per channel)
 
-- Each channel has an agent (`claude` or `codex`, default `claude`).
-- `/codex` selects Codex and resets the channel session. It works in admin and sandbox modes when the corresponding binary is installed.
-- `/opus` and `/sonnet` select Claude and its model. Switching from Codex resets the session; changing only the Claude model does not.
-- Codex uses the model configured by the Codex CLI; claudiscord does not override it.
-- Reasoning effort is hardcoded in the arg builders: Claude `xhigh` (opus) / `high` (sonnet) in `buildClaudeArgs`, Codex via the `CODEX_REASONING_EFFORT` constant in `codex.js`.
-- Agent and model are persisted in `sessions.json` next to the mode.
-- Scheduled jobs snapshot the channel's agent and Claude model at scheduling time. Missing `agent` fields fall back to `claude` for backward compatibility.
+- Each channel has an agent (`claude` or `codex`, default `claude`), and only the agent. It is persisted in `sessions.json` next to the mode.
+- `/claude` and `/codex` select it; either switch resets the channel session (the sessionId belongs to the agent — Claude UUIDs vs Codex thread ids). `/codex` reports an error and does not switch when the binary is missing in the channel's mode.
+- Each agent has **two model tiers** (`AGENT_MODELS` in `config.js`):
+
+  | agent | `high` | `medium` |
+  |---|---|---|
+  | claude | `opus` | `sonnet` |
+  | codex | `gpt-5.6-sol` | `gpt-5.6-terra` |
+
+- Interactive prompts (text and voice) always run `high`; scheduled jobs always run `medium`. There is nothing to choose and nothing to persist.
+- The tier→model resolution lives **only** in `executor.js`; no other module names a model id. Callers pass `tier`, which defaults to `high`.
+- Reasoning effort is one hardcoded `xhigh` for every agent and model (`REASONING_EFFORT` in `config.js`): `--effort` for Claude, `-c model_reasoning_effort` for Codex. The `-c` override wins over `config.toml`, so host and sandbox Codex behave identically.
+- Jobs store neither agent nor model. `executeJob` resolves the channel's **current** agent on every run, so switching a channel's agent retroactively changes which agent every job attached to that channel runs on — including jobs living in the other mode's database. `job.mode` is deliberately NOT live: it comes from the database the job lives in, which is the admin/sandbox security boundary.
 
 ## Channel context injection
 
-`src/prompts.js` builds the system prompt from `{ channelAgent, channelModel, mode, channelName, threadName, channelTopic, isDM, botName, userName }`. The shared prompt always includes channel context, uploads, scheduling and Discord response rules. Claude-specific CLI and skill-filtering instructions live inside `{{#claude}}...{{/claude}}` and are omitted for Codex.
+`src/prompts.js` builds the system prompt from `{ channelAgent, mode, channelName, threadName, channelTopic, isDM, botName, userName }`. The prompt is agent-agnostic — it always includes channel context, uploads, scheduling and Discord response rules, with no per-agent conditional sections. `channelAgent` only feeds the "Current channel agent" context line.
 
 ## Execution queues
 
@@ -231,7 +237,7 @@ bash scripts/rebuild-sandbox.sh
 - `claude -p` with `--output-format stream-json --verbose` for both interactive messages and jobs; the first `session_id` seen in the stream is recorded as the job's `lastSessionId`
 - A first invocation omits session flags; Claude allocates an UUID and emits `session_id` in its JSON output. Subsequent invocations use `--resume <uuid>`.
 - `--dangerously-skip-permissions` in sandbox (the container IS the sandbox)
-- Model follows the channel/job snapshot; reasoning effort is hardcoded by model (`opus` → `xhigh`, `sonnet` → `high`)
+- `--model` follows the execution tier (`opus` for prompts, `sonnet` for jobs); `--effort xhigh` always
 - Host cwd: `os.homedir()` of the user running the service (auto-loads `$HOME/CLAUDE.md`) — typically `/root` on Linux when the service runs as root, `/var/root` on macOS
 - Sandbox cwd: `/home/claude`
 - Timeout: none — the CLI runs until it exits on its own
@@ -239,12 +245,12 @@ bash scripts/rebuild-sandbox.sh
 ## Codex CLI usage
 
 - Optional host integration, detected at startup from `CODEX_BIN` (default `codex`); the sandbox image installs `@openai/codex`
-- `codex exec --yolo --skip-git-repo-check --json -c model_reasoning_effort="high" -` for a new conversation
-- `codex exec resume` uses the same flags plus `<uuid>` before the trailing `-` for subsequent prompts
+- `codex exec --yolo --skip-git-repo-check --json -c model_reasoning_effort="xhigh" -m <model> -` for a new conversation
+- `codex exec resume` uses the same flags plus `<uuid>` before the trailing `-` for subsequent prompts. `-m` and `-c` belong to the OPTIONS block, which precedes `<SESSION_ID>` in both forms
 - Prompts are passed through stdin; progress is not relayed to Discord
 - `thread.started.thread_id` supplies the session UUID and the last completed `agent_message` supplies the response
 - The shared Discord prompt is injected through the `developer_instructions` config override
-- Codex model selection and authentication remain owned by the Codex CLI configuration; reasoning effort is forced by claudiscord (`CODEX_REASONING_EFFORT` in `codex.js`)
+- Model and reasoning effort are both forced by claudiscord (`AGENT_MODELS` / `REASONING_EFFORT` in `config.js`), overriding `config.toml`; only authentication remains owned by the Codex CLI
 - Sandbox execution uses `/home/claude` as cwd and `/home/claude/.codex` as `CODEX_HOME`
 - `/upgrade` (sandbox only) refreshes the container — apt packages, Claude Code, and the Codex package (`npm install -g --prefix /usr/local @openai/codex@latest`)
 - Codex remains unsupported in `/remote`
@@ -253,7 +259,7 @@ bash scripts/rebuild-sandbox.sh
 
 ### Format
 
-Table `jobs`, one row per job (`src/jobs-store.js::SCHEMA`, `PRAGMA user_version = 2`):
+Table `jobs`, one row per job (`src/jobs-store.js::SCHEMA`, `PRAGMA user_version = 3`):
 
 ```sql
 CREATE TABLE jobs (
@@ -262,10 +268,7 @@ CREATE TABLE jobs (
   channel_name    TEXT,
   prompt          TEXT NOT NULL,
   cron            TEXT NOT NULL,
-  enabled         INTEGER NOT NULL,
   remaining       INTEGER NOT NULL DEFAULT 0,
-  agent           TEXT,
-  model           TEXT,
   created         TEXT,
   last_run        TEXT,
   last_session_id TEXT,
@@ -276,8 +279,7 @@ CREATE TABLE jobs (
 - `STRICT` because agents write rows through the CLI, outside claudiscord's validation — mistyped values fail at insert instead of loading as junk.
 - `channel_id` is **required** — it's where the notification is sent. DM channels have an ID too, so a DM-bound job works identically.
 - `channel_name` is a display-only snapshot of the channel name at job creation time. The scheduler refreshes it on every run.
-- `agent` is `'claude'` or `'codex'`. Snapshot of the channel's agent at scheduling time. NULL falls back to `claude`.
-- `model` is `'opus'` or `'sonnet'`. Snapshot of the channel's Claude model at scheduling time and ignored by Codex. NULL falls back to `sonnet`.
+- No `agent`, `model` or `enabled` column: the agent is the channel's current one, resolved at each run; the model is its `medium` tier; a job is stopped by deleting its row.
 - `remaining`: `0` = infinite, `>0` = decremented each run, job removed when it hits `0`.
 - `last_session_id`: diagnostic-only. Scheduler writes the agent session UUID of the last run (set even on error via `err.sessionId`). Jobs always run with a fresh session (`sessionId: null`), so this is never resumed — it just locates the run's transcript on disk: Claude at `<home>/.claude/projects/<cwd-hash>/<uuid>.jsonl` (admin cwd `/root` → `-root`, sandbox `/home/claude` → `-home-claude`), Codex via `find <home>/.codex/sessions -name "*<uuid>*"`.
 - Unique key: `mode:id` (the mode is implicit from the database the job lives in).
@@ -312,11 +314,11 @@ A job's output is sent to its `channel_id`, unless it ends with `NOTIFY_NONE` �
 
 - `ADMIN_USER_HOME/.claudiscord/sessions.json` shape:
   ```json
-  { "channels": { "<channelId>": { "mode": "admin"|"sandbox", "agent": "claude"|"codex", "model": "opus"|"sonnet", "sessionId": "<uuid>", "remoteId": null|"<agentId>", "lastName": "..." } } }
+  { "channels": { "<channelId>": { "mode": "admin"|"sandbox", "agent": "claude"|"codex", "sessionId": "<uuid>", "remoteId": null|"<agentId>", "lastName": "..." } } }
   ```
 - `sessionId` belongs to the active agent. Both Claude and Codex allocate it on the first invocation and emit it early in JSON output; `executor.js` persists it inside the channel queue. Context-mutating commands (`/new`, mode/agent switch) are refused while the channel is busy (`isBusy(channelId)` — a prompt or job running), so a late result cannot restore a session the user just changed; the executor still re-checks agent/mode before persisting (covers a context switch during a thread's pre-enqueue first-turn window). Remote mode blocks these commands upstream via `remoteGateHint`.
 - Spawn errors retain partial stdout so the agent adapter can attach an already-emitted UUID before the error is surfaced. The next prompt can therefore resume even when the first failed after session initialization.
-- Legacy entries without `agent` load as Claude. A legacy `sessionStarted: false` drops its possibly uncreated UUID; the field disappears on the next persistence.
+- Legacy entries without `agent` load as Claude. A legacy `sessionStarted: false` drops its possibly uncreated UUID, and a legacy `model` key is ignored; both disappear on the next persistence (`load()` rebuilds each entry field by field).
 - `remoteId` is `null` when the channel is in Discord mode (default), or an 8-hex agent ID when the channel is currently driven from the Claude mobile app via `/remote`. See "Remote control" below.
 - `lastName` is a display snapshot to make the sessions file readable during debugging.
 - A full reset is harmless — it only drops the active agent session ID.
@@ -326,7 +328,7 @@ A job's output is sent to its `channel_id`, unless it ends with `NOTIFY_NONE` �
 
 `/remote` toggles the channel between Discord mode (default) and remote mode. In remote mode, the channel's Claude session is driven from the Claude mobile app (full UI, permissions, reasoning view, etc.) instead of from Discord.
 
-- `/remote` is Claude-only; Codex channels must switch back with `/opus` or `/sonnet` first.
+- `/remote` is Claude-only; Codex channels must switch back with `/claude` first.
 - Implementation: `src/remote.js` spawns `claude --bg [--resume <channelSessionId>] --remote-control <channelName>` (host for admin, `docker exec` for sandbox). The CLI prints `backgrounded · <agentId>` on stdout — we parse the 8-hex agent ID and persist it as `remoteId` in the sessions file.
 - Asymmetric continuity: `--resume` makes `claude --bg` copy the existing Discord conversation into the bg session's JSONL, so the mobile user picks up where Discord left off. But `--bg` manages its own UUID and we don't reconcile back — `setRemoteId` wipes the channel's `sessionId`, so the next Discord message after `/remote` stop starts a fresh session. Going Discord → mobile keeps history; coming back Discord → fresh.
 - Naming: the mobile app shows each session under `<channelName>` (DM = username), so multiple channels can run in parallel and stay discoverable.
@@ -334,4 +336,4 @@ A job's output is sent to its `channel_id`, unless it ends with `NOTIFY_NONE` �
 - Sandbox `!shell` lockout: while *any* channel holds a sandbox remote, sandbox `!shell` is refused (`hasActiveSandboxRemote()` check in `commands.js`). Reason: `executeShell`'s timeout pkills by command pattern inside the container, which can match the live remote daemon. Prompts and scheduled jobs are unaffected — they run concurrently with a remote by design.
 - Stop: `/remote` while active runs `claude stop <agentId>` (host or container), then deletes `~/.claude/jobs/<agentId>/` so the agent stops showing up in `claude agents` as a stopped session (`claude stop` keeps the conversation around by design). Strict 8-hex guard on the agentId before any `rm -rf`. Finally clears `remoteId` and calls `scheduler.reloadJobs()` — Claude may have edited the jobs databases during the mobile session, and we did not go through the executor path that normally triggers a reload.
 - Startup reconciliation: `reconcileRemotes()` runs after `sessions.load()` and best-effort-stops every persisted `remoteId` (also doing the jobs/ cleanup). After a machine reboot the daemon is gone and the stop fails harmlessly; the channel reverts to Discord mode either way.
-- Sandbox prerequisite: the in-container claude daemon needs valid sandbox Claude credentials. Run `/sandbox`, select Claude with `/opus` or `/sonnet`, then `/login` before using sandbox `/remote`.
+- Sandbox prerequisite: the in-container claude daemon needs valid sandbox Claude credentials. Run `/sandbox`, select Claude with `/claude`, then `/login` before using sandbox `/remote`.
