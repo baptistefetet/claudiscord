@@ -80,8 +80,6 @@ content you saw earlier.
 --- Scheduling ---
 Use this Discord scheduling system for any scheduled task (recurring or one-shot) that runs
 a prompt or messages the user. A scheduler continuously executes jobs at their cron times.
-Every run uses the agent this channel is set to at that moment — a job stores no agent and
-no model, so there is nothing to pick here.
 
 Database:
 - {{jobsPath}} — SQLite, single table \`jobs\`, via the \`sqlite3\` CLI only
@@ -106,8 +104,6 @@ Columns:
   that run's transcript on disk to debug it. Jobs always start a fresh session, so it is
   never resumed automatically.
 - description: free text
-
-There is no on/off column: to stop a job, DELETE its row.
 
 Notifications:
 - A job's output is always sent to its channel, and a failed run is always reported.
@@ -150,7 +146,7 @@ words were transcribed by Whisper, and your reply will be spoken aloud by TTS.
   system-changing actions: the user gets no visual echo of what you understood.
 {{/voice}}`;
 
-const DEFAULT_CLAUDE_MD = `# Sandbox Claude
+const DEFAULT_CLAUDE_MD = `# Sandbox
 Customize this file to adapt Claude's behavior to your needs.
 `;
 
