@@ -116,8 +116,8 @@ Notifications:
   is fine, reply with NOTIFY_NONE as the last line and nothing else". A prompt that never
   mentions it notifies on every run.
 
-Example — heredoc, so a multi-line prompt needs no shell escaping (SQL still doubles its
-single quotes):
+Example — heredoc with a QUOTED delimiter, so a multi-line prompt needs no shell escaping
+(SQL still doubles its single quotes):
 sqlite3 {{jobsPath}} <<'SQL'
 .timeout 5000
 INSERT INTO jobs (id, prompt, cron, remaining, channel_id, channel_name, created, description)
