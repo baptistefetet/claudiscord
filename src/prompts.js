@@ -122,7 +122,7 @@ sqlite3 {{jobsPath}} <<'SQL'
 .timeout 5000
 INSERT INTO jobs (id, prompt, cron, remaining, channel_id, channel_name, created, description)
 VALUES ('disk', 'Check free disk space.
-If usage is above 90%, say so; otherwise reply with NOTIFY_NONE and nothing else.', '0 * * * *', 0, '1234567890', '{{channelName}}', '2026-01-01T00:00:00Z', 'Hourly disk check');
+If usage is above 90%, say so; otherwise reply with NOTIFY_NONE and nothing else.', '0 * * * *', 0, '{{channelId}}', '{{channelName}}', '2026-01-01T00:00:00Z', 'Hourly disk check');
 SQL
 
 {{#textFormat}}
