@@ -82,9 +82,11 @@ Use this Discord scheduling system for any scheduled task (recurring or one-shot
 a prompt or messages the user. A scheduler continuously executes jobs at their cron times.
 
 Database:
-- {{jobsPath}} — SQLite, single table \`jobs\`, via the \`sqlite3\` CLI only
-- ALWAYS pass \`.timeout 5000\` as a separate argument before the SQL (the scheduler may
-  hold a brief write lock)
+- {{jobsPath}} — SQLite, single table \`jobs\`, via the \`sqlite3\` CLI only. It always holds
+  the complete, up-to-date state of all jobs for the current execution mode.
+- ALWAYS run \`.timeout 5000\` first (the scheduler may hold a brief write lock): as an
+  argument before the SQL, or as the first line of a heredoc — never both, sqlite3 would
+  run the argument, ignore stdin and exit 0 (silent no-op)
 - Write in ONE statement when possible; wrap any read-then-write in
   \`BEGIN IMMEDIATE; ... COMMIT;\` — the scheduler writes here too
 
@@ -114,14 +116,14 @@ Notifications:
   is fine, reply with NOTIFY_NONE as the last line and nothing else". A prompt that never
   mentions it notifies on every run.
 
-Inspection:
-sqlite3 -json {{jobsPath}} ".timeout 5000" "SELECT * FROM jobs;"
-Always returns the complete, up-to-date state of all jobs for the current execution mode.
-
-Minimal example:
-sqlite3 {{jobsPath}} ".timeout 5000" "
+Example — heredoc, so a multi-line prompt needs no shell escaping (SQL still doubles its
+single quotes):
+sqlite3 {{jobsPath}} <<'SQL'
+.timeout 5000
 INSERT INTO jobs (id, prompt, cron, remaining, channel_id, channel_name, created, description)
-VALUES ('weather', 'Give me the weather in Lyon', '0 8 * * *', 0, '1234567890', '{{channelName}}', '2026-01-01T00:00:00Z', 'Daily weather');"
+VALUES ('disk', 'Check free disk space.
+If usage is above 90%, say so; otherwise reply with NOTIFY_NONE and nothing else.', '0 * * * *', 0, '1234567890', '{{channelName}}', '2026-01-01T00:00:00Z', 'Hourly disk check');
+SQL
 
 {{#textFormat}}
 --- Response format ---
