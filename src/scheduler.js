@@ -3,7 +3,7 @@ const { AUTHORIZED_USER_ID } = require('./config');
 const { getSystemPrompt } = require('./prompts');
 const { executePrompt } = require('./executor');
 const sessions = require('./sessions');
-const { loadAllJobs, jobKey, recordJobRun, deleteJob } = require('./jobs-store');
+const { loadAllJobs, jobKey, recordJobRun, deleteJob, deleteNonIsolatedJobs } = require('./jobs-store');
 const { sendToChannel, getClient } = require('./discord');
 const log = require('./logger');
 
@@ -100,17 +100,44 @@ async function fetchJobPromptContext(channelId) {
 async function dropStaleJob(job, reason) {
 	const key = jobKey(job);
 	log.warn(`Job '${key}': ${reason}, deleting`);
+	let removed;
 	try {
-		deleteJob(job);
+		removed = deleteJob(job);
 	} catch (err) {
 		// The row survives and the job will be retried at its next occurrence.
 		log.error(`Failed to delete job '${key}':`, err.message);
 		return;
 	}
+	// Already swept by handleSessionCleared, which announced it: stay quiet.
+	if (!removed) return;
 	await sendToChannel(
 		job.channelId,
 		`\u{1F5D1}\u{FE0F} **Job '${job.id}' — DELETED**\nThe channel session it was attached to no longer exists.`,
 	).catch(e => log.error('Notify failed:', e.message));
+}
+
+/**
+ * A channel losing its session takes every non-isolated job bound to it: those
+ * runs target that exact conversation and a fresh one is not a substitute.
+ * Deleting here, at the moment the user destroys the target, is what makes the
+ * deletion visible — executeJob's SESSION_REQUIRED guard stays as the backstop
+ * for the rows this misses (a run already in flight, a failed delete).
+ *
+ * Called fire-and-forget from sessions.js, so it must never throw or return a
+ * promise the caller is expected to await.
+ */
+function handleSessionCleared(channelId, reason) {
+	const removed = deleteNonIsolatedJobs(channelId);
+	if (!removed.length) return;
+	reloadJobs();
+	const list = removed.map(j => `${j.mode}:${j.id}`).join(', ');
+	log.info(`Channel ${channelId}: ${removed.length} non-isolated job(s) deleted (${reason}): ${list}`);
+	// Best-effort: on a removed channel there is nobody left to tell, and the
+	// deletion is already visible in /jobs.
+	sendToChannel(
+		channelId,
+		`\u{1F5D1}\u{FE0F} **${removed.length} non-isolated job(s) deleted** — ${reason}: ${removed.map(j => `\`${j.id}\``).join(', ')}`,
+	).catch(err => log.warn(`Job deletion notice failed for channel ${channelId}: ${err.message}`));
 }
 
 async function executeJob(job) {
@@ -316,4 +343,4 @@ function stop() {
 	log.info('Scheduler stopped');
 }
 
-module.exports = { start, stop, reloadJobs };
+module.exports = { start, stop, reloadJobs, handleSessionCleared };

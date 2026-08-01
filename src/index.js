@@ -352,7 +352,8 @@ async function registerSlashCommands() {
 
 // Drop sessions.json entries whose channel no longer exists. Strict on the error
 // code: only Unknown Channel (10003) removes, so a flaky boot cannot nuke valid
-// entries. Scheduled jobs are left alone — the user manages their lifecycle.
+// entries. Removing an entry takes its non-isolated jobs with it (sessions.js
+// observer); its isolated jobs are left alone — the user manages their lifecycle.
 async function purgeInvalidChannels() {
 	const ids = sessions.listChannelIds();
 	if (ids.length === 0) return;
@@ -388,6 +389,8 @@ async function start() {
 	// Also fail-fast when the sqlite3 CLI is missing (spawn ENOENT aborts boot).
 	ensureDb(ADMIN_JOBS_FILE);
 	sessions.load();
+	// After load(), which rebuilds entries in place and must not trigger cleanups.
+	sessions.onSessionCleared(scheduler.handleSessionCleared);
 	if (DOCKER_AVAILABLE) {
 		try { ensureImage(); } catch (err) { log.warn('ensureImage failed:', err.message); }
 	} else {

@@ -41,6 +41,42 @@ const channels = new Map();
 // where concurrent first-turn messages all see a null sessionId.
 const starterClaimed = new Set();
 
+/**
+ * Notified whenever a channel loses its agent session. Injected by index.js:
+ * reacting to it means touching the jobs store and Discord, neither of which
+ * this module may depend on. Fire-and-forget — every caller below is
+ * synchronous and must stay so, so the observer owns its errors.
+ */
+let sessionClearedHandler = null;
+
+function onSessionCleared(handler) {
+	sessionClearedHandler = handler;
+}
+
+function fireSessionCleared(channelId, reason) {
+	if (!sessionClearedHandler) return;
+	try {
+		sessionClearedHandler(channelId, reason);
+	} catch (err) {
+		log.error(`sessionCleared handler failed for channel ${channelId}:`, err.message);
+	}
+}
+
+/**
+ * Single choke point for dropping a channel's agent session — /new, a mode or
+ * agent switch and the /remote handover all land here. Going through one
+ * function is what makes the observer exhaustive: a future command that resets
+ * a session cannot forget to notify it. Persists first, so the observer never
+ * sees a state that is not on disk yet.
+ */
+function dropSession(entry, channelId, reason) {
+	const had = Boolean(entry.sessionId);
+	entry.sessionId = null;
+	starterClaimed.delete(channelId);
+	persist();
+	if (had) fireSessionCleared(channelId, reason);
+}
+
 function load() {
 	try {
 		const raw = fs.readFileSync(ADMIN_SESSIONS_FILE, 'utf8');
@@ -140,8 +176,7 @@ function setAgent(channelId, agent) {
 	const entry = ensureChannel(channelId);
 	if (entry.agent === agent) return;
 	entry.agent = agent;
-	entry.sessionId = null;
-	persist();
+	dropSession(entry, channelId, 'agent switch');
 	log.info(`Channel ${channelId} agent set to: ${agent}; session cleared`);
 }
 
@@ -194,9 +229,7 @@ function setLastName(channelId, name) {
 function clearChannel(channelId) {
 	const entry = channels.get(channelId);
 	if (!entry) return;
-	entry.sessionId = null;
-	starterClaimed.delete(channelId);
-	persist();
+	dropSession(entry, channelId, 'session reset');
 }
 
 function listChannelIds() {
@@ -207,6 +240,9 @@ function removeChannel(channelId) {
 	if (!channels.delete(channelId)) return false;
 	starterClaimed.delete(channelId);
 	persist();
+	// Unconditional, unlike dropSession: the channel itself is gone, so its
+	// non-isolated jobs are undeliverable whether or not a session was live.
+	fireSessionCleared(channelId, 'channel removed');
 	return true;
 }
 
@@ -220,8 +256,9 @@ function setRemoteId(channelId, remoteId) {
 	const next = typeof remoteId === 'string' && remoteId ? remoteId : null;
 	if (entry.remoteId === next) return;
 	entry.remoteId = next;
-	if (next) entry.sessionId = null; // `claude --bg` manages its own UUID
-	persist();
+	// `claude --bg` manages its own UUID
+	if (next) dropSession(entry, channelId, 'remote handover');
+	else persist();
 	log.info(`Channel ${channelId} remoteId set to: ${next}`);
 }
 
@@ -248,6 +285,7 @@ function hasActiveSandboxRemote() {
 
 module.exports = {
 	load,
+	onSessionCleared,
 	ensureFromParent,
 	claimStarter,
 	getMode,

@@ -50,9 +50,9 @@ src/
   codex.js            # Codex exec/login (host + sandbox), JSONL parse, account usage (getCodexUsage)
   container.js        # Docker: image/container, sandbox env factories (sandboxClaudeEnv/sandboxCodexEnv)
   executor.js         # executePrompt(agent, mode) → resolve tier→model → pick env (host const / sandbox factory) → executeClaude|executeCodex; queue
-  jobs-store.js       # SQLite jobs store via sqlite3 CLI: loadAllJobs (admin+sandbox), recordJobRun, deleteJob, ensureDb, jobKey
-  sessions.js         # { channels: { channelId -> { mode, agent, sessionId, ... } } }
-  scheduler.js        # minute-resolution ticker, reloadJobs, executeJob, per-key lock
+  jobs-store.js       # SQLite jobs store via sqlite3 CLI: loadAllJobs (admin+sandbox), recordJobRun, deleteJob, deleteNonIsolatedJobs, ensureDb, jobKey
+  sessions.js         # { channels: { channelId -> { mode, agent, sessionId, ... } } }; onSessionCleared observer
+  scheduler.js        # minute-resolution ticker, reloadJobs, executeJob, handleSessionCleared, per-key lock
   commands.js         # COMMANDS registry → dispatch + native slash metadata; /new /status /usage /login /jobs /admin /sandbox /claude /codex /remote /voice /upgrade /restart !shell; transport-neutral dispatchSlashCommand + getRegisteredCommands (Discord plumbing stays in index.js); /login and !shell handlers live in login.js / shell.js
   login.js            # /login flow state machine: pending login, URL relay, Discord code input, timeouts
   shell.js            # !shell: executeShell (host/container, SIGTERM→SIGKILL) + gating, output truncation
@@ -163,7 +163,7 @@ The user can drop files/photos into a channel (with no text). An upload does NOT
 - Interactive prompts (text and voice) always run `high`; scheduled jobs always run `medium`. There is nothing to choose and nothing to persist.
 - The tier→model resolution lives **only** in `executor.js`; no other module names a model id. Callers pass `tier`, which defaults to `high`.
 - Reasoning effort is one hardcoded `xhigh` for every agent and model (`REASONING_EFFORT` in `config.js`): `--effort` for Claude, `-c model_reasoning_effort` for Codex. The `-c` override wins over `config.toml`, so host and sandbox Codex behave identically.
-- Jobs store an `isolated` flag but neither agent nor model. `executeJob` resolves the channel's **current** agent on every run, so switching a channel's agent retroactively changes which agent every job attached to that channel runs on — including jobs living in the other mode's database. `job.mode` is deliberately NOT live: it comes from the database the job lives in, which is the admin/sandbox security boundary.
+- Jobs store an `isolated` flag but neither agent nor model. `executeJob` resolves the channel's **current** agent on every run, so switching a channel's agent retroactively changes which agent every isolated job attached to that channel runs on — including jobs living in the other mode's database. Non-isolated ones do not survive the switch at all (see "Non-isolated jobs"). `job.mode` is deliberately NOT live: it comes from the database the job lives in, which is the admin/sandbox security boundary.
 
 ## Channel context injection
 
@@ -307,8 +307,10 @@ CREATE TABLE jobs (
 
 `isolated = 0` runs the job inside the channel's live agent conversation instead of a fresh session, so its result can be replied to ("check X in 5 minutes"). The scheduler passes `channelId` to `executePrompt`, which resolves the session live and persists the result back like any interactive turn.
 
-- **Resolution happens inside the queue callback**, never before: the FIFO wait can last as long as the prompt ahead, and any context transition during it would otherwise be missed. `executePrompt`'s `requireSession` option raises `SESSION_REQUIRED` there when the channel has no live session.
-- **A lost target is fatal to the job.** `/new`, a mode or agent switch, and `/remote` all null the channel `sessionId`, so one check covers them; the job row is then deleted (`deleteJob`) and the channel notified. Running it in a fresh session instead would strand its output where nobody is reading, and write that session's id back over the channel's.
+- **A lost target is fatal to the job**, and the deletion happens when the target is lost, not when the job next fires. Every path that drops a channel's session — `/new`, a mode or agent switch, `/remote` — funnels through `sessions.js::dropSession`, which notifies the observer `index.js` registers at boot (`scheduler.js::handleSessionCleared`); the startup purge of a deleted channel notifies it directly from `removeChannel`, unconditionally, since there is no session left to lose. It deletes that channel's non-isolated jobs in BOTH databases (`deleteNonIsolatedJobs` — the row's mode is the database it lives in, so a channel that just switched mode would otherwise strand the other one), reloads the schedule and posts the list. Running them in a fresh session instead would strand their output where nobody is reading, and write that session's id back over the channel's.
+- **The observer is fire-and-forget**: `sessions.js` is synchronous and depends on neither the jobs store nor Discord, hence the injection. A throwing handler is caught and logged; the session reset itself always goes through.
+- **The runtime guards are the backstop, not the mechanism.** `executePrompt`'s `requireSession` still raises `SESSION_REQUIRED` inside the queue callback, and `CHANNEL_CONTEXT_CHANGED` still fires on an agent/mode change; both delete the row (`dropStaleJob`). They catch what the observer structurally cannot: a run already past `tick()` but not yet enqueued. `isBusy(channelId)` only turns true when `executePrompt` claims the queue, so `rejectIfChannelBusy` lets a `/new` through during `fetchJobPromptContext`'s awaits. `CHANNEL_CONTEXT_CHANGED` also serves the interactive path (`index.js`), which has the same pre-enqueue window.
+- **Known residual gap**, accepted: `requireSession` tests the session's existence, not its identity. A run caught in that pre-enqueue window is only stopped if the channel is still session-less when it reaches the head of its queue. Should an interactive prompt slip in first and open a fresh session, the run joins that one instead. Closing it would mean stamping the target session id on the row and comparing it in the queue — not worth a column for a window measured in milliseconds.
 - The run marks itself **in-band**, at the head of the prompt: the system prompt is not persisted in the transcript, so without it the next interactive turn would read the job's instructions as user input. The `{{#job}}` block is dropped for these runs — its "user replies cannot resume this job" line is precisely what they invert.
 - An unresolved Discord channel skips the run (transient, no `remaining` consumed): the turn would land in the shared conversation with no visible trace.
 - Context cost is the caller's problem: a recurring non-isolated job re-injects its whole prompt every run, so long monitoring prompts stay isolated.
@@ -333,8 +335,8 @@ A job's output is sent to its `channel_id`, unless it ends with `NOTIFY_NONE` �
 - Legacy entries without `agent` load as Claude. A legacy `sessionStarted: false` drops its possibly uncreated UUID, and a legacy `model` key is ignored; both disappear on the next persistence (`load()` rebuilds each entry field by field).
 - `remoteId` is `null` when the channel is in Discord mode (default), or an 8-hex agent ID when the channel is currently driven from the Claude mobile app via `/remote`. See "Remote control" below.
 - `lastName` is a display snapshot to make the sessions file readable during debugging.
-- A full reset is harmless — it only drops the active agent session ID.
-- Startup purge (`src/index.js::purgeInvalidChannels`) drops entries whose Discord channel no longer exists. Runs after `login()` and after `reconcileRemotes()` (which needs to stop any remote agent first, before the entry vanishes). Strict: only `DiscordAPIError code 10003` (Unknown Channel) triggers removal; transient errors are logged and skipped. Scheduled jobs attached to a purged channel are intentionally NOT removed — job lifecycle is managed by hand.
+- A full reset drops the active agent session ID, and with it the channel's non-isolated jobs (see "Non-isolated jobs"). Isolated jobs are untouched.
+- Startup purge (`src/index.js::purgeInvalidChannels`) drops entries whose Discord channel no longer exists. Runs after `login()` and after `reconcileRemotes()` (which needs to stop any remote agent first, before the entry vanishes). Strict: only `DiscordAPIError code 10003` (Unknown Channel) triggers removal; transient errors are logged and skipped. Removing the entry takes the channel's non-isolated jobs with it, through the same observer as a reset; its isolated jobs are intentionally kept — their lifecycle is managed by hand.
 
 ## Remote control
 

@@ -164,9 +164,49 @@ SELECT changes() AS removed;
 	return removed;
 }
 
-/** Remove a job row outright, bypassing the `remaining` lifecycle. */
+/**
+ * Remove a job row outright, bypassing the `remaining` lifecycle. Returns false
+ * when the row was already gone — the eager cleanup may have deleted it first,
+ * and its notification must not be doubled.
+ */
 function deleteJob(job) {
-	runSqlite(fileFor(job.mode), `DELETE FROM jobs WHERE id = ${sqlLit(job.id)};`);
+	const out = runSqlite(fileFor(job.mode), `
+DELETE FROM jobs WHERE id = ${sqlLit(job.id)};
+SELECT changes() AS removed;
+`, { json: true });
+	return JSON.parse(out)[0].removed > 0;
 }
 
-module.exports = { loadAllJobs, jobKey, recordJobRun, deleteJob, ensureDb };
+/**
+ * Remove every non-isolated job bound to a channel, in BOTH databases, and
+ * return what was removed. Both are swept because a job's mode is the database
+ * it lives in: a channel that just switched mode would otherwise strand the
+ * rows of the mode it left. One unreachable database (sandbox home not mounted)
+ * must not sink the other, hence the per-file catch.
+ */
+function deleteNonIsolatedJobs(channelId) {
+	const cid = sqlLit(channelId);
+	const removed = [];
+	for (const mode of ['admin', 'sandbox']) {
+		let file;
+		try { file = fileFor(mode); } catch { continue; }
+		if (!fs.existsSync(file)) continue;
+		try {
+			// The SELECT is the only statement producing rows, so it owns the -json
+			// output; reading it inside the transaction keeps it in sync with the
+			// DELETE. Nothing is printed at all when no row matches.
+			const out = runSqlite(file, `
+BEGIN IMMEDIATE;
+SELECT id FROM jobs WHERE channel_id = ${cid} AND isolated = 0;
+DELETE FROM jobs WHERE channel_id = ${cid} AND isolated = 0;
+COMMIT;
+`, { json: true });
+			for (const row of (out.trim() ? JSON.parse(out) : [])) removed.push({ mode, id: row.id });
+		} catch (err) {
+			log.warn(`Failed to delete non-isolated jobs of channel ${channelId} in ${mode} db: ${err.message}`);
+		}
+	}
+	return removed;
+}
+
+module.exports = { loadAllJobs, jobKey, recordJobRun, deleteJob, deleteNonIsolatedJobs, ensureDb };
