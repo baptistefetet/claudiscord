@@ -193,7 +193,7 @@ async function handleUsage({ channel, mode }) {
  * channel's mode is.
  */
 async function handleVersion({ channel }) {
-	const [hostClaude, hostCodex, sandboxClaude, sandboxCodex] = await Promise.all([
+	const [adminClaude, adminCodex, sandboxClaude, sandboxCodex] = await Promise.all([
 		getClaudeVersion('admin'),
 		getCodexVersion('admin'),
 		DOCKER_AVAILABLE ? getClaudeVersion('sandbox') : null,
@@ -201,9 +201,9 @@ async function handleVersion({ channel }) {
 	]);
 	const fmt = (version) => (version ? `\`${version}\`` : '_unavailable_');
 	await channel.send([
-		'🖥️ **Host**',
-		`▫️ Claude: ${fmt(hostClaude)}`,
-		`▫️ Codex: ${fmt(hostCodex)}`,
+		'🖥️ **Admin**',
+		`▫️ Claude: ${fmt(adminClaude)}`,
+		`▫️ Codex: ${fmt(adminCodex)}`,
 		'',
 		'📦 **Sandbox**',
 		...(DOCKER_AVAILABLE
@@ -476,7 +476,7 @@ const COMMANDS = [
 	{ name: '/new', help: 'Reset session for this channel (new conversation)', handler: handleNew },
 	{ name: '/status', help: 'Show current mode, agent and runtime status', remoteAllowed: true, handler: handleStatus },
 	{ name: '/usage', help: 'Show Claude and Codex usage for the current mode', remoteAllowed: true, handler: handleUsage },
-	{ name: '/version', help: 'Show Claude and Codex CLI versions (host + container)', remoteAllowed: true, handler: handleVersion },
+	{ name: '/version', help: 'Show Claude and Codex CLI versions (admin + sandbox)', remoteAllowed: true, handler: handleVersion },
 	{ name: '/login', help: 'Refresh current agent login via a Discord-friendly link', remoteAllowed: true, handler: handleLogin },
 	{ name: '/jobs', help: 'List all scheduled jobs (admin + sandbox)', remoteAllowed: true, handler: handleJobs },
 	{ name: '/admin', help: 'Switch this channel to admin mode (host)', handler: handleAdmin },

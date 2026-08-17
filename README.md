@@ -143,7 +143,7 @@ Details:
 | `/new` | Reset the active agent session of the current channel (new conversation) |
 | `/status` | Show the channel's mode, agent and runtime status |
 | `/usage` | Show Claude and Codex account usage for the current mode |
-| `/version` | Show the Claude and Codex CLI versions on the host and in the container |
+| `/version` | Show the Claude and Codex CLI versions in both environments (admin + sandbox) |
 | `/login` | Refresh the current agent login in the current mode via a Discord-friendly browser flow |
 | `/jobs` | List all scheduled jobs (admin first, then sandbox) |
 | `/admin` | Switch the current channel to admin mode (host) |
