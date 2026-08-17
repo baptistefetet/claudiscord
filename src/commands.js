@@ -11,8 +11,8 @@ const {
 	DOCKER_AVAILABLE,
 	isCodexAvailableInContainer,
 } = require('./container');
-const { CODEX_AVAILABLE, getCodexUsage } = require('./codex');
-const { getClaudeUsage } = require('./claude');
+const { CODEX_AVAILABLE, getCodexUsage, getCodexVersion } = require('./codex');
+const { getClaudeUsage, getClaudeVersion } = require('./claude');
 const { handleLogin, finishPendingLogin } = require('./login');
 const { handleShell } = require('./shell');
 const { runMaintenance, isBusy } = require('./queue');
@@ -189,6 +189,31 @@ async function handleUsage({ channel, mode }) {
 }
 
 /**
+ * /version — Claude and Codex CLI versions in both environments, whatever the
+ * channel's mode is.
+ */
+async function handleVersion({ channel }) {
+	const [hostClaude, hostCodex, sandboxClaude, sandboxCodex] = await Promise.all([
+		getClaudeVersion('admin'),
+		getCodexVersion('admin'),
+		DOCKER_AVAILABLE ? getClaudeVersion('sandbox') : null,
+		DOCKER_AVAILABLE ? getCodexVersion('sandbox') : null,
+	]);
+	const fmt = (version) => (version ? `\`${version}\`` : '_unavailable_');
+	await channel.send([
+		'🖥️ **Host**',
+		`▫️ Claude: ${fmt(hostClaude)}`,
+		`▫️ Codex: ${fmt(hostCodex)}`,
+		'',
+		'📦 **Sandbox**',
+		...(DOCKER_AVAILABLE
+			? [`▫️ Claude: ${fmt(sandboxClaude)}`, `▫️ Codex: ${fmt(sandboxCodex)}`]
+			: ['▫️ Sandbox unavailable on this host.']),
+	].join('\n'));
+	return true;
+}
+
+/**
  * /jobs — list all scheduled jobs (admin first, then sandbox).
  */
 async function handleJobs({ channel }) {
@@ -254,21 +279,7 @@ async function handleUpgrade({ channel, mode }) {
 				'npm', 'install', '-g', '--prefix', '/usr/local',
 				'@openai/codex@latest', '--no-fund', '--no-audit',
 			], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
-			// Keep only the version number (e.g. "2.1.195 (Claude Code)" -> "2.1.195").
-			const parseVersion = (out) => (out.match(/\d+(?:\.\d+)+/) || [''])[0];
-			let claudeVersion = '';
-			let codexVersion = '';
-			try {
-				claudeVersion = parseVersion((await execFileAsync('docker', ['exec', CONTAINER_NAME, 'claude', '--version'], { encoding: 'utf8', timeout: 10000 })).stdout);
-			} catch {}
-			try {
-				codexVersion = parseVersion((await execFileAsync('docker', ['exec', CONTAINER_NAME, 'codex', '--version'], { encoding: 'utf8', timeout: 10000 })).stdout);
-			} catch {}
-			const versions = [
-				claudeVersion ? `Claude: \`${claudeVersion}\`` : null,
-				codexVersion ? `Codex: \`${codexVersion}\`` : null,
-			].filter(Boolean);
-			await channel.send(`Container updated.${versions.length ? `\n${versions.join('\n')}` : ''}`);
+			await channel.send('Container updated.');
 		} catch (err) {
 			log.error('Upgrade error:', err.message);
 			await channel.send(`Upgrade error: ${err.message.slice(0, 300)}`);
@@ -465,6 +476,7 @@ const COMMANDS = [
 	{ name: '/new', help: 'Reset session for this channel (new conversation)', handler: handleNew },
 	{ name: '/status', help: 'Show current mode, agent and runtime status', remoteAllowed: true, handler: handleStatus },
 	{ name: '/usage', help: 'Show Claude and Codex usage for the current mode', remoteAllowed: true, handler: handleUsage },
+	{ name: '/version', help: 'Show Claude and Codex CLI versions (host + container)', remoteAllowed: true, handler: handleVersion },
 	{ name: '/login', help: 'Refresh current agent login via a Discord-friendly link', remoteAllowed: true, handler: handleLogin },
 	{ name: '/jobs', help: 'List all scheduled jobs (admin + sandbox)', remoteAllowed: true, handler: handleJobs },
 	{ name: '/admin', help: 'Switch this channel to admin mode (host)', handler: handleAdmin },

@@ -8,7 +8,7 @@ const {
 	REASONING_EFFORT,
 } = require('./config');
 const { ensureContainer, isCodexAvailableInContainer } = require('./container');
-const { spawnCollect } = require('./spawn');
+const { spawnCollect, probeVersion } = require('./spawn');
 const log = require('./logger');
 
 const CODEX_USAGE_TIMEOUT_MS = 10000;
@@ -453,6 +453,26 @@ async function executeCodex(prompt, options = {}, env) {
 	return parsed;
 }
 
+/**
+ * Codex CLI version for the selected execution environment, null when the probe
+ * fails (binary missing, container down…).
+ */
+async function getCodexVersion(mode = 'admin') {
+	if (mode === 'sandbox') {
+		try {
+			ensureContainer();
+		} catch (err) {
+			log.warn('getCodexVersion(sandbox) container error:', err.message);
+			return null;
+		}
+		return probeVersion('docker', [
+			'exec', '-e', `CODEX_HOME=${SANDBOX_CODEX_HOME}`, CONTAINER_NAME, 'codex', '--version',
+		]);
+	}
+	if (!CODEX_AVAILABLE) return null;
+	return probeVersion(CODEX_BIN, ['--version']);
+}
+
 // Host environment: run the `codex` binary directly under the admin home.
 const hostCodexEnv = {
 	label: 'Codex',
@@ -476,6 +496,7 @@ const hostCodexEnv = {
 module.exports = {
 	CODEX_AVAILABLE,
 	getCodexUsage,
+	getCodexVersion,
 	executeCodex,
 	hostCodexEnv,
 	startCodexLogin,

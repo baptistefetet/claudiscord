@@ -10,7 +10,7 @@ const {
 	REASONING_EFFORT,
 } = require('./config');
 const { ensureContainer } = require('./container');
-const { spawnCollect } = require('./spawn');
+const { spawnCollect, probeVersion } = require('./spawn');
 const log = require('./logger');
 
 // Claude-only; Codex governs its tools via --yolo. `claude -p` already drops the
@@ -337,6 +337,23 @@ const hostClaudeEnv = {
 	),
 };
 
+/**
+ * Claude Code CLI version for the selected execution environment, null when the
+ * probe fails (binary missing, container down…).
+ */
+async function getClaudeVersion(mode = 'admin') {
+	if (mode === 'sandbox') {
+		try {
+			ensureContainer();
+		} catch (err) {
+			log.warn('getClaudeVersion(sandbox) container error:', err.message);
+			return null;
+		}
+		return probeVersion('docker', ['exec', CONTAINER_NAME, 'claude', '--version']);
+	}
+	return probeVersion(CLAUDE_BIN, ['--version'], { env: ADMIN_ENV });
+}
+
 function claudeCredentialsPath(mode) {
 	if (mode === 'sandbox') {
 		return SANDBOX_HOST_HOME
@@ -401,5 +418,6 @@ module.exports = {
 	executeClaude,
 	hostClaudeEnv,
 	getClaudeUsage,
+	getClaudeVersion,
 	startClaudeLogin,
 };
