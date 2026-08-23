@@ -62,7 +62,7 @@ const CONTAINER_CPUS = 1;
 const SHELL_TIMEOUT_MS = 300_000;
 const KILL_GRACE_MS = 5000; // SIGTERM→SIGKILL grace for killed child processes
 const DOCKER_CMD_TIMEOUT = 30_000;
-const UPGRADE_TIMEOUT_MS = 300_000;
+const UPGRADE_TIMEOUT_MS = 600_000; // Full sandbox upgrade: apt + Claude + Codex
 const DISCORD_MAX_MSG_LENGTH = 2000;
 const TYPING_INTERVAL_MS = 8000;
 

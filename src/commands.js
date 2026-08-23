@@ -1,9 +1,9 @@
 const { execFile } = require('child_process');
+const path = require('path');
 const { promisify } = require('util');
 const execFileAsync = promisify(execFile);
 const {
 	UPGRADE_TIMEOUT_MS,
-	CONTAINER_NAME,
 } = require('./config');
 const sessions = require('./sessions');
 const {
@@ -30,6 +30,8 @@ const { getClient, resolveChannelName, sendChunked } = require('./discord');
 const { loadAllJobs } = require('./jobs-store');
 const scheduler = require('./scheduler');
 const log = require('./logger');
+
+const UPDATE_SANDBOX_SCRIPT = path.resolve(__dirname, '..', 'scripts', 'update-sandbox.sh');
 
 // Per-channel lock for a whole `/remote` toggle. `remoteId` is not set until the
 // spawn completes, so without it a concurrent message would pass the remote gate,
@@ -258,27 +260,10 @@ async function handleUpgrade({ channel, mode }) {
 	await runMaintenance(async () => {
 		try {
 			ensureContainer();
-			await execFileAsync('docker', [
-				'exec', '-u', 'root', CONTAINER_NAME, 'bash', '-c',
-				'DEBIAN_FRONTEND=noninteractive apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" 2>&1 | tail -10',
-			], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
-			await execFileAsync('docker', [
-				'exec', CONTAINER_NAME, 'bash', '-c',
-				'curl -fsSL https://claude.ai/install.sh -o /tmp/claude-install.sh',
-			], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
-			await execFileAsync('docker', [
-				'exec', CONTAINER_NAME, 'bash', '-c',
-				'bash /tmp/claude-install.sh 2>&1 | tail -5 ; rm -f /tmp/claude-install.sh',
-			], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
-			await execFileAsync('docker', [
-				'exec', '-u', 'root', CONTAINER_NAME, 'bash', '-c',
-				'cp /home/claude/.local/share/claude/versions/$(ls -t /home/claude/.local/share/claude/versions/ | head -1) /usr/local/bin/claude && chmod 755 /usr/local/bin/claude',
-			], { encoding: 'utf8', timeout: 10000 });
-			await execFileAsync('docker', [
-				'exec', '-u', 'root', CONTAINER_NAME,
-				'npm', 'install', '-g', '--prefix', '/usr/local',
-				'@openai/codex@latest', '--no-fund', '--no-audit',
-			], { encoding: 'utf8', timeout: UPGRADE_TIMEOUT_MS });
+			await execFileAsync(UPDATE_SANDBOX_SCRIPT, [], {
+				encoding: 'utf8',
+				timeout: UPGRADE_TIMEOUT_MS,
+			});
 			await channel.send('Container updated.');
 		} catch (err) {
 			log.error('Upgrade error:', err.message);

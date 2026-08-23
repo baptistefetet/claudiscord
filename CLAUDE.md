@@ -64,6 +64,7 @@ src/
   voice.js            # Voice assistant: connection, turn capture, STT→Claude→TTS state machine
   uploads.js          # Save Discord file/photo attachments to .claudiscord/files
 scripts/
+  update-sandbox.sh   # Update apt packages, Claude Code and Codex in the live sandbox
   rebuild-sandbox.sh  # Rebuild Docker sandbox image
 .env                  # AUTHORIZED_USER_ID, DISCORD_TOKEN, CLAUDE_BIN, CODEX_BIN, SANDBOX_HOME, GROQ_API_KEY, OPENAI_API_KEY
 ```
@@ -252,7 +253,7 @@ bash scripts/rebuild-sandbox.sh
 - The shared Discord prompt is injected through the `developer_instructions` config override
 - Model and reasoning effort are both forced by claudiscord (`AGENT_MODELS` / `REASONING_EFFORT` in `config.js`), overriding `config.toml`; only authentication remains owned by the Codex CLI
 - Sandbox execution uses `/home/claude` as cwd and `/home/claude/.codex` as `CODEX_HOME`
-- `/upgrade` (sandbox only) refreshes the container — apt packages, Claude Code, and the Codex package (`npm install -g --prefix /usr/local @openai/codex@latest`)
+- `/upgrade` (sandbox only) calls `scripts/update-sandbox.sh` to refresh the container — apt packages, Claude Code, and the Codex package (`npm install -g --prefix /usr/local @openai/codex@latest`)
 - Codex remains unsupported in `/remote`
 
 ## Scheduled jobs
