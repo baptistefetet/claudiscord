@@ -4,6 +4,7 @@ const { promisify } = require('util');
 const execFileAsync = promisify(execFile);
 const {
 	UPGRADE_TIMEOUT_MS,
+	SANDBOX_HOST_HOME,
 } = require('./config');
 const sessions = require('./sessions');
 const {
@@ -27,6 +28,7 @@ const {
 	clearAutojoinSuppression,
 } = require('./voice');
 const { getClient, resolveChannelName, sendChunked } = require('./discord');
+const { listSkills } = require('./skills');
 const { loadAllJobs } = require('./jobs-store');
 const scheduler = require('./scheduler');
 const log = require('./logger');
@@ -211,6 +213,29 @@ async function handleVersion({ channel }) {
 		...(DOCKER_AVAILABLE
 			? [`▫️ Claude: ${fmt(sandboxClaude)}`, `▫️ Codex: ${fmt(sandboxCodex)}`]
 			: ['▫️ Sandbox unavailable on this host.']),
+	].join('\n'));
+	return true;
+}
+
+/**
+ * /skills — skill names of both agents in both environments, whatever the
+ * channel's mode is.
+ */
+async function handleSkills({ channel }) {
+	const line = (label, names) => {
+		if (names === null) return `▫️ ${label}: _unavailable_`;
+		if (names.length === 0) return `▫️ ${label}: _none_`;
+		return `▫️ ${label} (${names.length}): ${names.map(n => `\`${n}\``).join(', ')}`;
+	};
+	await sendChunked(channel, [
+		'🖥️ **Admin**',
+		line('Claude', listSkills('claude', 'admin')),
+		line('Codex', listSkills('codex', 'admin')),
+		'',
+		'📦 **Sandbox**',
+		...(SANDBOX_HOST_HOME
+			? [line('Claude', listSkills('claude', 'sandbox')), line('Codex', listSkills('codex', 'sandbox'))]
+			: ['▫️ Sandbox home is not configured.']),
 	].join('\n'));
 	return true;
 }
@@ -462,6 +487,7 @@ const COMMANDS = [
 	{ name: '/status', help: 'Show current mode, agent and runtime status', remoteAllowed: true, handler: handleStatus },
 	{ name: '/usage', help: 'Show Claude and Codex usage for the current mode', remoteAllowed: true, handler: handleUsage },
 	{ name: '/version', help: 'Show Claude and Codex CLI versions (admin + sandbox)', remoteAllowed: true, handler: handleVersion },
+	{ name: '/skills', help: 'List each agent\'s skills (admin + sandbox)', remoteAllowed: true, handler: handleSkills },
 	{ name: '/login', help: 'Refresh current agent login via a Discord-friendly link', remoteAllowed: true, handler: handleLogin },
 	{ name: '/jobs', help: 'List all scheduled jobs (admin + sandbox)', remoteAllowed: true, handler: handleJobs },
 	{ name: '/admin', help: 'Switch this channel to admin mode (host)', handler: handleAdmin },
