@@ -11,6 +11,7 @@ const {
 	ensureContainer,
 	DOCKER_AVAILABLE,
 	isCodexAvailableInContainer,
+	getSandboxVersions,
 } = require('./container');
 const { CODEX_AVAILABLE, getCodexUsage, getCodexVersion } = require('./codex');
 const { getClaudeUsage, getClaudeVersion } = require('./claude');
@@ -193,27 +194,27 @@ async function handleUsage({ channel, mode }) {
 }
 
 /**
- * /version — Claude and Codex CLI versions in both environments, whatever the
- * channel's mode is.
+ * /version — Claude and Codex CLI versions. One line per agent: the sandbox
+ * bind-mounts the host binaries, so both environments run the same build. The
+ * sandbox is still probed, and reported only when it disagrees — that
+ * disagreement is the symptom of every way the mounts can break.
  */
 async function handleVersion({ channel }) {
-	const [adminClaude, adminCodex, sandboxClaude, sandboxCodex] = await Promise.all([
-		getClaudeVersion('admin'),
-		getCodexVersion('admin'),
-		DOCKER_AVAILABLE ? getClaudeVersion('sandbox') : null,
-		DOCKER_AVAILABLE ? getCodexVersion('sandbox') : null,
-	]);
+	const [claude, codex] = await Promise.all([getClaudeVersion(), getCodexVersion()]);
 	const fmt = (version) => (version ? `\`${version}\`` : '_unavailable_');
-	await channel.send([
-		'🖥️ **Admin**',
-		`▫️ Claude: ${fmt(adminClaude)}`,
-		`▫️ Codex: ${fmt(adminCodex)}`,
-		'',
-		'📦 **Sandbox**',
-		...(DOCKER_AVAILABLE
-			? [`▫️ Claude: ${fmt(sandboxClaude)}`, `▫️ Codex: ${fmt(sandboxCodex)}`]
-			: ['▫️ Sandbox unavailable on this host.']),
-	].join('\n'));
+	const lines = [`▫️ Claude: ${fmt(claude)}`, `▫️ Codex: ${fmt(codex)}`];
+
+	if (DOCKER_AVAILABLE) {
+		const sandbox = await getSandboxVersions();
+		if (sandbox.error) {
+			lines.push(`⚠️ Sandbox unreachable: ${sandbox.error}`);
+		} else {
+			if (sandbox.claude !== claude) lines.push(`⚠️ Sandbox Claude: ${fmt(sandbox.claude)}`);
+			if (sandbox.codex !== codex) lines.push(`⚠️ Sandbox Codex: ${fmt(sandbox.codex)}`);
+		}
+	}
+
+	await channel.send(lines.join('\n'));
 	return true;
 }
 
@@ -262,8 +263,9 @@ async function handleJobs({ channel }) {
 }
 
 /**
- * /upgrade — sandbox only. Update container packages + Claude Code + Codex.
- * Runs as global maintenance so it never overwrites a binary mid-prompt.
+ * /upgrade — sandbox only. Update the container's apt packages (the agents
+ * themselves are bind-mounted from the host, see container.js).
+ * Runs as global maintenance so apt never swaps a library mid-prompt.
  */
 async function handleUpgrade({ channel, mode }) {
 	if (mode !== 'sandbox') {
@@ -486,7 +488,7 @@ const COMMANDS = [
 	{ name: '/new', help: 'Reset session for this channel (new conversation)', handler: handleNew },
 	{ name: '/status', help: 'Show current mode, agent and runtime status', remoteAllowed: true, handler: handleStatus },
 	{ name: '/usage', help: 'Show Claude and Codex usage for the current mode', remoteAllowed: true, handler: handleUsage },
-	{ name: '/version', help: 'Show Claude and Codex CLI versions (admin + sandbox)', remoteAllowed: true, handler: handleVersion },
+	{ name: '/version', help: 'Show the Claude and Codex CLI versions', remoteAllowed: true, handler: handleVersion },
 	{ name: '/skills', help: 'List each agent\'s skills (admin + sandbox)', remoteAllowed: true, handler: handleSkills },
 	{ name: '/login', help: 'Refresh current agent login via a Discord-friendly link', remoteAllowed: true, handler: handleLogin },
 	{ name: '/jobs', help: 'List all scheduled jobs (admin + sandbox)', remoteAllowed: true, handler: handleJobs },
@@ -498,7 +500,7 @@ const COMMANDS = [
 	{ name: '/voice', help: 'Toggle the voice assistant in this voice channel (join/leave)', handler: handleVoice },
 	{ name: '/autojoin', help: 'Toggle autojoin for this voice channel (join on my own when you connect)', handler: handleAutojoin },
 	{ name: '!<command>', help: 'Execute a shell command (host if admin, container if sandbox)', helpOnly: true },
-	{ name: '/upgrade', help: 'Update sandbox container (apt + Claude Code + Codex)', modes: ['sandbox'], modeError: '`/upgrade` is only available in sandbox mode.', handler: handleUpgrade },
+	{ name: '/upgrade', help: 'Update sandbox container packages (Claude and Codex follow the host install)', modes: ['sandbox'], modeError: '`/upgrade` is only available in sandbox mode.', handler: handleUpgrade },
 	{ name: '/restart', help: 'Restart the claudiscord service', modes: ['admin'], modeError: '`/restart` is only available in admin mode.', handler: handleRestart },
 ];
 

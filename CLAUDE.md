@@ -37,7 +37,7 @@ Scheduled jobs
 ## Files
 
 ```
-Dockerfile            # Sandbox image (node:22-slim + Claude/Codex CLIs + user claude)
+Dockerfile            # Sandbox image (node:22-bookworm-slim + user claude; agents come from host mounts)
 src/
   index.js            # Entry point: Discord handler, queue wait UX
   config.js           # .env loading + paths + constants
@@ -65,8 +65,8 @@ src/
   voice.js            # Voice assistant: connection, turn capture, STT→Claude→TTS state machine
   uploads.js          # Save Discord file/photo attachments to .claudiscord/files
 scripts/
-  update-sandbox.sh   # Update apt packages, Claude Code and Codex in the live sandbox
-  rebuild-sandbox.sh  # Rebuild Docker sandbox image
+  update-sandbox.sh   # Update the live sandbox's apt packages
+  rebuild-sandbox.sh  # Rebuild Docker sandbox image; opens the Claude versions dir to the container user
 .env                  # AUTHORIZED_USER_ID, DISCORD_TOKEN, CLAUDE_BIN, CODEX_BIN, SANDBOX_HOME, GROQ_API_KEY, OPENAI_API_KEY
 ```
 
@@ -177,14 +177,26 @@ Interactive prompts, voice turns and scheduled jobs go through `src/queue.js::ru
 
 ## Docker sandbox (optional)
 
-- **Image**: `claudiscord-sandbox` (local build, `node:22-slim` + Claude and Codex CLIs)
+- **Image**: `claudiscord-sandbox` (local build, `node:22-bookworm-slim`; both agents come from host mounts)
 - **Container**: `claudiscord-sandbox` (single container, `--restart unless-stopped`)
 - **Limit**: 1 CPU; no container RAM limit
-- **Volume**: `SANDBOX_HOME -> /home/claude`
+- **Volumes**: `SANDBOX_HOME -> /home/claude`, plus the two read-only agent mounts below
 - **Network**: bridge
 - **User in container**: `claude` (non-root)
 - **CMD**: `sleep infinity`; commands run via `docker exec`
 - Docker availability is detected at startup; if `docker --version` fails, `DOCKER_AVAILABLE` becomes `false` and sandbox operations report a friendly error
+
+### Agent binaries come from the host
+
+`container.js::hostBinMounts()` bind-mounts the host CLIs read-only at container creation, so one install serves admin and sandbox alike. Both execute inside the container's namespaces like any other file — only their bytes come from the host, which works because the two share a kernel and an architecture.
+
+- **Claude** → the installer's `versions/` dir at `/opt/claude-bin`. The *directory* is the mount source because an update writes a new `<semver>` file next to the old one and moves the symlink — mounting the file would pin the container to the version present at creation time. The image's `/usr/local/bin/claude` is a shell wrapper running the highest executable it finds there.
+- **Codex** → the `@openai` npm *scope* dir at `/opt/codex-scope`, with `/usr/local/bin/codex` symlinked to `codex/bin/codex.js` inside it. The scope and not the package because `npm install -g` replaces the package directory with a fresh inode: a mount of the package would survive as a detached copy of the version installed at creation time, silently freezing sandbox Codex. npm leaves the scope dir in place. The launcher finds its vendored binary relative to itself, so the package runs from any mount point.
+- **Each source is layout-checked before it is mounted** (`claudeMountSource` / `codexMountSource`): `versions/` for Claude, `@openai/codex/bin/codex.js` for Codex. `CLAUDE_BIN` and `CODEX_BIN` accept any path, and mounting the parent of an arbitrary binary would hand the sandbox whatever else lives beside it. A source that fails the check is a warning that disables that agent in the sandbox; the container stays useful for the other one and for `!shell`.
+- **The mounts are fixed at container creation.** `/version` probes the container and prints a line only when it disagrees with the host — that disagreement is what a stale mount, a changed `CLAUDE_BIN`/`CODEX_BIN` or an unreadable versions dir looks like from outside. The remedy is recreating the container.
+- The wrapper picks the highest version in the mount, which is the host's current one unless an older build is deliberately pinned while a newer file remains in `versions/`.
+- **Permissions are a setup step, never a runtime one.** Everything under `/root` is 0700, so the container user needs the Claude versions dir opened up to traverse the mount. `scripts/rebuild-sandbox.sh` chmods it 0755 once (parents untouched, so no host user gains anything); `hostBinMounts()` only *reads* the mode and warns when it is wrong. Claudiscord never changes host permissions on its own — a sandbox prompt has no business mutating the admin environment's filesystem, least of all under a concurrently running host agent. The whole step exists only because the default install lives under `/root`: a `CLAUDE_BIN` pointing outside it needs no chmod at all.
+- **Compatibility is a property of the base image**, hence the `node:22-bookworm-slim` pin (glibc 2.36). Claude is a self-contained aarch64 ELF requiring at most `GLIBC_2.26`; Codex vendors a statically linked musl binary and requires nothing. If a future Claude raises its floor above the image's glibc, sandbox Claude stops starting while admin keeps working — check with `docker exec claudiscord-sandbox claude --version`, and move the pin to the trixie variant (glibc 2.41, matching this host).
 
 ### Host user/group alignment
 
@@ -246,7 +258,7 @@ bash scripts/rebuild-sandbox.sh
 
 ## Codex CLI usage
 
-- Optional host integration, detected at startup from `CODEX_BIN` (default `codex`); the sandbox image installs `@openai/codex`
+- Optional host integration, detected at startup from `CODEX_BIN` (default `codex`); the sandbox runs that same host install through a read-only mount
 - `codex exec --yolo --skip-git-repo-check --json -c model_reasoning_effort="xhigh" -m <model> -` for a new conversation
 - `codex exec resume` uses the same flags plus `<uuid>` before the trailing `-` for subsequent prompts. `-m` and `-c` belong to the OPTIONS block, which precedes `<SESSION_ID>` in both forms
 - Prompts are passed through stdin; progress is not relayed to Discord
@@ -254,7 +266,7 @@ bash scripts/rebuild-sandbox.sh
 - The shared Discord prompt is injected through the `developer_instructions` config override
 - Model and reasoning effort are both forced by claudiscord (`AGENT_MODELS` / `REASONING_EFFORT` in `config.js`), overriding `config.toml`; only authentication remains owned by the Codex CLI
 - Sandbox execution uses `/home/claude` as cwd and `/home/claude/.codex` as `CODEX_HOME`
-- `/upgrade` (sandbox only) calls `scripts/update-sandbox.sh` to refresh the container — apt packages, Claude Code, and the Codex package (`npm install -g --prefix /usr/local @openai/codex@latest`)
+- `/upgrade` (sandbox only) calls `scripts/update-sandbox.sh`, which refreshes the container's apt packages only — both agents follow the host install
 - Codex remains unsupported in `/remote`
 
 ## Scheduled jobs

@@ -31,7 +31,7 @@ Works in both DMs and private guild channels. Each channel is an independent con
 - When generating the bot's invite link (portal **OAuth2 → URL Generator**, or the **Installation** page), select **both** the `bot` and `applications.commands` scopes — without `applications.commands` the native slash commands cannot be registered
 - In that same invite step, grant the bot the **View Channels**, **Send Messages** and **Read Message History** permissions so it can read and reply in the channels you add it to (DMs need no extra permission). For the voice assistant, also grant **Connect** and **Speak** (or add them later on the bot's role / the voice channel). The `Guilds` / `Guild Messages` / `Direct Messages` / `Guild Voice States` gateway intents are non-privileged and already enabled in code — nothing to toggle on the portal for them
 - Claude Code CLI installed on the host (`curl -fsSL https://claude.ai/install.sh | bash`) — claudiscord defaults to `~/.local/bin/claude` (the install script's default location); set `CLAUDE_BIN` in `.env` only if it's elsewhere
-- **Optional**: Codex CLI installed and authenticated on the host; set `CODEX_BIN` only if it isn't available as `codex` in `PATH`
+- **Optional**: Codex CLI installed and authenticated on the host; set `CODEX_BIN` only if it isn't available as `codex` in `PATH`. Each agent is a host-side prerequisite for sandbox mode too — the container borrows the host's copy, so an agent absent from the host is absent from the sandbox as well
 - **Optional**: Docker (only required for sandbox mode)
 
 ## Installation
@@ -52,6 +52,10 @@ bash scripts/rebuild-sandbox.sh
 ```
 
 `rebuild-sandbox.sh` creates `SANDBOX_HOME` if needed and builds the image with the in-container `claude` user UID/GID matching the directory's owner, so bind-mounted files are read/write-able on both sides without manual chown setup. After a successful rebuild, it removes dangling images and the unused Docker build cache.
+
+The container runs the host's own Claude and Codex binaries through read-only bind-mounts, so you install and update each agent once, on the host, and the sandbox follows. Configuration stays separate — credentials, skills and `CLAUDE.md`/`AGENTS.md` are read from each environment's home, so an admin channel and a sandbox channel remain distinct agents.
+
+The mounts are established when the container is created. `/version` probes the container and reports a line only when it disagrees with the host; rerun `rebuild-sandbox.sh` to recreate the container if it does.
 
 ## Systemd service
 
@@ -143,7 +147,7 @@ Details:
 | `/new` | Reset the active agent session of the current channel (new conversation) |
 | `/status` | Show the channel's mode, agent and runtime status |
 | `/usage` | Show Claude and Codex account usage for the current mode |
-| `/version` | Show the Claude and Codex CLI versions in both environments (admin + sandbox) |
+| `/version` | Show the Claude and Codex CLI versions (one line per agent, plus a warning if the sandbox disagrees) |
 | `/skills` | List the skills of both agents in both environments (admin + sandbox) |
 | `/login` | Refresh the current agent login in the current mode via a Discord-friendly browser flow |
 | `/jobs` | List all scheduled jobs (admin first, then sandbox) |
@@ -154,7 +158,7 @@ Details:
 | `/remote` | Claude only — toggle the channel between Discord mode and remote control via the Claude mobile app |
 | `/voice` | Voice channels only — toggle the voice assistant in this voice channel (join/leave) |
 | `/autojoin` | Voice channels only — toggle autojoin for this voice channel (the bot joins on its own when you connect) |
-| `/upgrade` | Sandbox only — update the container (apt + Claude Code + Codex) |
+| `/upgrade` | Sandbox only — update the container's packages (the agents follow the host install) |
 | `/restart` | Admin only — restart the claudiscord service |
 | `!<command>` | Run a shell command (host if the channel is admin, container if sandbox) |
 

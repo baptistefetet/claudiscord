@@ -454,21 +454,10 @@ async function executeCodex(prompt, options = {}, env) {
 }
 
 /**
- * Codex CLI version for the selected execution environment, null when the probe
- * fails (binary missing, container down…).
+ * Codex CLI version, null when the probe fails (binary missing…). One version
+ * covers both environments: the sandbox bind-mounts this same package.
  */
-async function getCodexVersion(mode = 'admin') {
-	if (mode === 'sandbox') {
-		try {
-			ensureContainer();
-		} catch (err) {
-			log.warn('getCodexVersion(sandbox) container error:', err.message);
-			return null;
-		}
-		return probeVersion('docker', [
-			'exec', '-e', `CODEX_HOME=${SANDBOX_CODEX_HOME}`, CONTAINER_NAME, 'codex', '--version',
-		]);
-	}
+async function getCodexVersion() {
 	if (!CODEX_AVAILABLE) return null;
 	return probeVersion(CODEX_BIN, ['--version']);
 }

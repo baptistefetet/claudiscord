@@ -2,6 +2,8 @@ const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const {
+	CLAUDE_BIN,
+	CODEX_BIN,
 	SANDBOX_HOST_HOME,
 	SANDBOX_USER_HOME,
 	SANDBOX_CODEX_HOME,
@@ -14,12 +16,18 @@ const {
 } = require('./config');
 const { getDefaultClaudeMd } = require('./prompts');
 const { ensureDb } = require('./jobs-store');
-const { spawnCollect } = require('./spawn');
+const { spawnCollect, probeVersion } = require('./spawn');
 const log = require('./logger');
 
 const DOCKERFILE_DIR = path.resolve(__dirname, '..');
 const SANDBOX_CODEX_CONFIG = `cli_auth_credentials_store = "file"
 `;
+
+// Where the host CLIs appear inside the container. The image reaches them
+// through a wrapper at /usr/local/bin/claude reading CLAUDE_BIN_MOUNT, and a
+// symlink /usr/local/bin/codex -> CODEX_SCOPE_MOUNT/codex/bin/codex.js.
+const CLAUDE_BIN_MOUNT = '/opt/claude-bin';
+const CODEX_SCOPE_MOUNT = '/opt/codex-scope';
 
 // UID/GID of the 'claude' user inside the container. By convention the
 // container is built (via scripts/rebuild-sandbox.sh) with IDs that match
@@ -132,20 +140,114 @@ function ensureStorage() {
 	}
 }
 
+/**
+ * Absolute host path of `bin`, following a PATH lookup for a bare name and the
+ * whole symlink chain. null when it cannot be resolved.
+ */
+function resolveHostBin(bin) {
+	try {
+		const abs = bin.includes('/')
+			? bin
+			: execFileSync('which', [bin], { encoding: 'utf8', timeout: 5000 }).trim();
+		return fs.realpathSync(abs);
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Mount source for the host Claude: the official installer's `versions/` dir,
+ * of which the resolved binary is one `<semver>` file. The directory is the
+ * source because an update writes a new file next to the old one and moves the
+ * symlink — mounting the file would pin the container to the version present
+ * at creation time. The image's wrapper picks the highest version at each run.
+ *
+ * null when the layout is not the installer's: `CLAUDE_BIN` accepts any path,
+ * and mounting the parent of an arbitrary binary would expose whatever else
+ * lives beside it to the sandbox.
+ */
+function claudeMountSource() {
+	const claude = resolveHostBin(CLAUDE_BIN);
+	if (!claude) {
+		log.warn(`Claude binary not found at '${CLAUDE_BIN}' — sandbox Claude disabled`);
+		return null;
+	}
+	const dir = path.dirname(claude);
+	if (path.basename(dir) !== 'versions') {
+		log.warn(`'${CLAUDE_BIN}' does not resolve into a Claude installer versions/ dir — sandbox Claude disabled`);
+		return null;
+	}
+	// Read-only check: the container's non-root user must be able to traverse
+	// the mount, which `scripts/rebuild-sandbox.sh` arranges once. Claudiscord
+	// never changes host permissions itself — a sandbox prompt has no business
+	// touching the admin environment's filesystem.
+	if ((fs.statSync(dir).mode & 0o005) !== 0o005) {
+		log.warn(`${dir} is not traversable by the container user — sandbox Claude will fail; rerun scripts/rebuild-sandbox.sh`);
+	}
+	return dir;
+}
+
+/**
+ * Mount source for the host Codex: the `@openai` npm scope directory, the
+ * resolved binary being `@openai/codex/bin/codex.js`. The scope rather than
+ * the package because `npm install -g` replaces the package directory with a
+ * fresh inode — a mount of the package would survive as a detached copy of the
+ * version installed at creation time, while npm leaves the scope dir in place.
+ * The launcher finds its vendored musl binary relative to itself, so the
+ * package runs from any mount point.
+ *
+ * null unless the resolved path has exactly that layout, so an unusual
+ * `CODEX_BIN` cannot mount an unrelated tree into the sandbox.
+ */
+function codexMountSource() {
+	const codex = resolveHostBin(CODEX_BIN);
+	if (!codex) {
+		log.warn(`Codex binary '${CODEX_BIN}' not found — sandbox Codex disabled`);
+		return null;
+	}
+	const pkgRoot = path.dirname(path.dirname(codex));
+	const scope = path.dirname(pkgRoot);
+	if (path.basename(codex) !== 'codex.js' || path.basename(pkgRoot) !== 'codex' || path.basename(scope) !== '@openai') {
+		log.warn(`'${CODEX_BIN}' does not resolve into an @openai/codex npm package — sandbox Codex disabled`);
+		return null;
+	}
+	return scope;
+}
+
+/**
+ * `-v` flags exposing the host CLIs to the container, read-only. A source that
+ * cannot be established is a warning: the container stays useful for the other
+ * agent and for `!shell`.
+ */
+function hostBinMounts() {
+	const mounts = [];
+	const claude = claudeMountSource();
+	if (claude) mounts.push('-v', `${claude}:${CLAUDE_BIN_MOUNT}:ro`);
+	const codex = codexMountSource();
+	if (codex) mounts.push('-v', `${codex}:${CODEX_SCOPE_MOUNT}:ro`);
+	return mounts;
+}
+
 function ensureContainer() {
 	if (!DOCKER_AVAILABLE) throw new Error('Docker is not installed on this host');
 	ensureStorage();
 
-	// Check if container exists (silencing stderr: a missing container makes
-	// `docker inspect` write a Go template error that otherwise reaches journald)
+	// Silencing stderr: a missing container makes `docker inspect` write a Go
+	// template error that would otherwise reach journald.
+	let state = null;
 	try {
-		const state = dockerQuiet('inspect', '-f', '{{.State.Status}}', CONTAINER_NAME);
-		if (state === 'running') return;
+		state = dockerQuiet('inspect', '-f', '{{.State.Status}}', CONTAINER_NAME);
+	} catch {
+		// No such container — fall through and create it.
+	}
+	if (state === 'running') return;
+	if (state) {
+		// A start of its own can fail (a mount source that vanished, for one).
+		// Letting that throw beats falling through to `docker create`, which
+		// would only fail again on the name this container already holds.
 		docker('start', CONTAINER_NAME);
 		log.info(`Started existing container '${CONTAINER_NAME}'`);
 		return;
-	} catch {
-		// Container doesn't exist, create it
 	}
 
 	docker(
@@ -156,6 +258,7 @@ function ensureContainer() {
 		'--restart', 'unless-stopped',
 		'-e', 'TZ=Europe/Paris',
 		'-v', `${SANDBOX_HOST_HOME}:${SANDBOX_USER_HOME}`,
+		...hostBinMounts(),
 		DOCKER_IMAGE,
 	);
 	docker('start', CONTAINER_NAME);
@@ -215,6 +318,29 @@ function sandboxCodexEnv() {
 }
 
 /**
+ * Versions the agents report from inside the container. The read-only mounts
+ * exist so these match the host's, so `/version` compares them and only speaks
+ * up on a divergence — which is what a broken mount, a stale container or an
+ * unreadable versions dir looks like from the outside.
+ *
+ * `{ error }` when the container itself cannot be reached.
+ */
+async function getSandboxVersions() {
+	try {
+		ensureContainer();
+	} catch (err) {
+		return { error: err.message };
+	}
+	const [claude, codex] = await Promise.all([
+		probeVersion('docker', ['exec', CONTAINER_NAME, 'claude', '--version']),
+		probeVersion('docker', [
+			'exec', '-e', `CODEX_HOME=${SANDBOX_CODEX_HOME}`, CONTAINER_NAME, 'codex', '--version',
+		]),
+	]);
+	return { claude, codex };
+}
+
+/**
  * Write an uploaded file into the sandbox volume's .claudiscord/files dir, then
  * chown it to the container's `claude` user so the non-root process can read it
  * through the bind-mount.
@@ -236,5 +362,6 @@ module.exports = {
 	sandboxClaudeEnv,
 	isCodexAvailableInContainer,
 	sandboxCodexEnv,
+	getSandboxVersions,
 	writeSandboxUpload,
 };

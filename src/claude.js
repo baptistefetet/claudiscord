@@ -338,19 +338,10 @@ const hostClaudeEnv = {
 };
 
 /**
- * Claude Code CLI version for the selected execution environment, null when the
- * probe fails (binary missing, container down…).
+ * Claude Code CLI version, null when the probe fails (binary missing…). One
+ * version covers both environments: the sandbox bind-mounts this same binary.
  */
-async function getClaudeVersion(mode = 'admin') {
-	if (mode === 'sandbox') {
-		try {
-			ensureContainer();
-		} catch (err) {
-			log.warn('getClaudeVersion(sandbox) container error:', err.message);
-			return null;
-		}
-		return probeVersion('docker', ['exec', CONTAINER_NAME, 'claude', '--version']);
-	}
+async function getClaudeVersion() {
 	return probeVersion(CLAUDE_BIN, ['--version'], { env: ADMIN_ENV });
 }
 

@@ -28,6 +28,32 @@ else
     fi
 fi
 
+# The container runs the host's Claude through a read-only bind-mount of the
+# installer's versions directory. Everything under /root is 0700, so the
+# container's non-root user needs that one directory opened up to traverse it.
+# Its parents keep their mode, so no host user gains anything. An install
+# outside /root would make this step unnecessary.
+CLAUDE_BIN=""
+if [ -f "$PROJECT_DIR/.env" ]; then
+    CLAUDE_BIN=$(grep -E '^CLAUDE_BIN=' "$PROJECT_DIR/.env" | head -1 | cut -d= -f2-)
+fi
+CLAUDE_BIN="${CLAUDE_BIN:-$HOME/.local/bin/claude}"
+# The layout is checked before touching any mode: CLAUDE_BIN accepts any path,
+# and chmod-ing the parent of an arbitrary binary could open up an unrelated
+# directory.
+if [ ! -e "$CLAUDE_BIN" ]; then
+    echo "WARNING: no Claude binary at $CLAUDE_BIN — sandbox Claude will be unavailable"
+else
+    CLAUDE_VERSIONS_DIR=$(dirname "$(readlink -f "$CLAUDE_BIN")")
+    if [ "$(basename "$CLAUDE_VERSIONS_DIR")" != "versions" ]; then
+        echo "WARNING: $CLAUDE_BIN does not resolve into a Claude installer versions/ dir — sandbox Claude will be unavailable"
+    else
+        chmod 755 "$CLAUDE_VERSIONS_DIR"
+        echo "Opened $CLAUDE_VERSIONS_DIR to the container user"
+    fi
+fi
+
+echo ""
 echo "=== Building $IMAGE (UID=$SANDBOX_UID GID=$SANDBOX_GID) ==="
 docker build --no-cache \
     --build-arg "SANDBOX_UID=$SANDBOX_UID" \
