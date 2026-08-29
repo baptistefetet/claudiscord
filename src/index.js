@@ -200,13 +200,17 @@ client.on(Events.MessageCreate, async message => {
 	} catch (err) {
 		if (stopTyping) stopTyping();
 
-		log.error('Message handling error:', err.message || err);
+		// A cancel is an operator decision, not a fault.
+		if (err.code === 'CANCELLED') log.info('Prompt stopped by the user');
+		else log.error('Message handling error:', err.message || err);
 
 		let errMsg;
 		if (err.code === 'CODEX_NOT_AVAILABLE') {
 			errMsg = `Codex is not installed or no longer available in **${mode}** mode.`;
 		} else if (err.code === 'CODEX_NOT_AUTHENTICATED') {
 			errMsg = 'Codex authentication failed. Select Codex in this channel and run `/login`.';
+		} else if (err.code === 'CANCELLED') {
+			errMsg = '⏹️ Stopped. The conversation is intact — send a message to continue it.';
 		} else if (err.code === 'CHANNEL_CONTEXT_CHANGED') {
 			errMsg = 'Channel mode or agent changed while this message was waiting. Send it again.';
 		} else if (err.message === 'Docker is not installed on this host') {

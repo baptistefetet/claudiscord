@@ -402,6 +402,7 @@ async function executeCodex(prompt, options = {}, env) {
 		sessionId = null,
 		systemPrompt = null,
 		model = null,
+		cancelKey = null,
 	} = options;
 
 	if (env.precheck) env.precheck();
@@ -416,7 +417,7 @@ async function executeCodex(prompt, options = {}, env) {
 	try {
 		execution = await env.spawn(
 			buildCodexArgs({ sessionId, systemPrompt, model }),
-			{ input: prompt },
+			{ input: prompt, cancelKey },
 		);
 	} catch (err) {
 		err.sessionId = parseCodexOutput(err.stdout).sessionId;
@@ -470,9 +471,9 @@ const hostCodexEnv = {
 			throw Object.assign(new Error('CODEX_NOT_AVAILABLE'), { code: 'CODEX_NOT_AVAILABLE' });
 		}
 	},
-	spawn: (args, { input }) => spawnCollect(
+	spawn: (args, opts = {}) => spawnCollect(
 		CODEX_BIN, args,
-		{ cwd: ADMIN_USER_HOME, env: process.env, label: 'Codex', input },
+		{ cwd: ADMIN_USER_HOME, env: process.env, label: 'Codex', detached: true, ...opts },
 	),
 	onSpawnError: (err) => {
 		if (err.code === 'ENOENT') {

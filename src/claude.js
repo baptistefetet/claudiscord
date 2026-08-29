@@ -303,6 +303,7 @@ async function executeClaude(prompt, options = {}, env) {
 		sessionId = null,
 		systemPrompt = null,
 		model = null,
+		cancelKey = null,
 	} = options;
 
 	if (!systemPrompt) {
@@ -319,7 +320,7 @@ async function executeClaude(prompt, options = {}, env) {
 
 	let result;
 	try {
-		result = await env.spawn(args);
+		result = await env.spawn(args, { cancelKey });
 	} catch (err) {
 		err.sessionId = sessionIdFromEvents(parseStreamJsonEvents(err.stdout));
 		throw err;
@@ -331,9 +332,9 @@ async function executeClaude(prompt, options = {}, env) {
 const hostClaudeEnv = {
 	label: 'Claude',
 	extraArgs: [],
-	spawn: args => spawnCollect(
+	spawn: (args, opts = {}) => spawnCollect(
 		CLAUDE_BIN, args,
-		{ cwd: ADMIN_USER_HOME, env: ADMIN_ENV, label: 'Claude' },
+		{ cwd: ADMIN_USER_HOME, env: ADMIN_ENV, label: 'Claude', detached: true, ...opts },
 	),
 };
 

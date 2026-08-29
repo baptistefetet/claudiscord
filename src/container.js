@@ -1,4 +1,5 @@
-const { execFileSync } = require('child_process');
+const { execFile, execFileSync } = require('child_process');
+const { randomUUID } = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const {
@@ -28,6 +29,9 @@ const SANDBOX_CODEX_CONFIG = `cli_auth_credentials_store = "file"
 // symlink /usr/local/bin/codex -> CODEX_SCOPE_MOUNT/codex/bin/codex.js.
 const CLAUDE_BIN_MOUNT = '/opt/claude-bin';
 const CODEX_SCOPE_MOUNT = '/opt/codex-scope';
+
+// Env var naming a run's process tree inside the container, for `/stop`.
+const RUN_MARKER = 'CLAUDISCORD_RUN';
 
 // UID/GID of the 'claude' user inside the container. By convention the
 // container is built (via scripts/rebuild-sandbox.sh) with IDs that match
@@ -265,6 +269,38 @@ function ensureContainer() {
 	log.info(`Created and started container '${CONTAINER_NAME}'`);
 }
 
+/**
+ * Signal the in-container process started for `runId`, plus its descendants.
+ *
+ * `docker exec` leaves what it started running when its client dies, so a
+ * sandbox `/stop` that only killed the local client would orphan the agent.
+ * The target is found through a marker env var injected at exec time rather
+ * than by command name: `pkill -f claude` would also hit a `/remote` daemon
+ * living in the same container.
+ */
+function killContainerRun(runId, signal) {
+	// Both values are built here, never user input, but they end up in a shell
+	// string — the guards keep it that way.
+	if (!/^[0-9a-f-]{36}$/.test(runId) || !/^(TERM|KILL)$/.test(signal)) return;
+	// Asynchronous on purpose: a synchronous `docker exec` would block the event
+	// loop, and with it the Discord heartbeat and every other channel, for as
+	// long as Docker takes to answer.
+	execFile('docker', [
+		'exec', CONTAINER_NAME, 'bash', '-c',
+		`for p in /proc/[0-9]*; do grep -qz ${RUN_MARKER}=${runId} "$p/environ" 2>/dev/null && kill -${signal} "\${p#/proc/}" 2>/dev/null; done; true`,
+	], { timeout: DOCKER_CMD_TIMEOUT }, (err) => {
+		if (err) log.warn(`Container kill (${signal}) failed: ${err.message}`);
+	});
+}
+
+// Marks a run's process tree inside the container so killContainerRun can find
+// it. Inherited by the agent's own children, which is what makes them stoppable
+// too.
+function sandboxRunMarker() {
+	const runId = randomUUID();
+	return { runId, env: ['-e', `${RUN_MARKER}=${runId}`] };
+}
+
 // Sandbox environment for Claude: run `claude` inside the container with
 // permissions skipped (the container IS the sandbox boundary). A factory because
 // ensureContainer() must run before each use.
@@ -274,10 +310,13 @@ function sandboxClaudeEnv() {
 	return {
 		label,
 		extraArgs: ['--dangerously-skip-permissions'],
-		spawn: args => spawnCollect(
-			'docker', ['exec', '-i', CONTAINER_NAME, 'claude', ...args],
-			{ label },
-		),
+		spawn: (args, opts = {}) => {
+			const { runId, env } = sandboxRunMarker();
+			return spawnCollect(
+				'docker', ['exec', '-i', ...env, CONTAINER_NAME, 'claude', ...args],
+				{ label, ...opts, killInContainer: signal => killContainerRun(runId, signal) },
+			);
+		},
 	};
 }
 
@@ -306,12 +345,15 @@ function sandboxCodexEnv() {
 	const label = `Codex container [${CONTAINER_NAME}]`;
 	return {
 		label,
-		spawn: (args, { input }) => spawnCollect(
-			'docker',
-			['exec', '-i', '-e', `CODEX_HOME=${SANDBOX_CODEX_HOME}`, '-w', SANDBOX_USER_HOME,
-				CONTAINER_NAME, 'codex', ...args],
-			{ label, input },
-		),
+		spawn: (args, opts = {}) => {
+			const { runId, env } = sandboxRunMarker();
+			return spawnCollect(
+				'docker',
+				['exec', '-i', '-e', `CODEX_HOME=${SANDBOX_CODEX_HOME}`, ...env, '-w', SANDBOX_USER_HOME,
+					CONTAINER_NAME, 'codex', ...args],
+				{ label, ...opts, killInContainer: signal => killContainerRun(runId, signal) },
+			);
+		},
 		isUnavailable: (execution) => execution.stderr.includes('executable file not found')
 			|| execution.stderr.includes('codex: not found'),
 	};

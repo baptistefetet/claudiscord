@@ -52,7 +52,10 @@ function executePrompt(agent, mode, prompt, options = {}) {
 		if (!models) throw new Error(`Unknown agent: ${agent}`);
 		const model = models[tier];
 		if (!model) throw new Error(`Unknown model tier: ${tier}`);
-		const opts = { ...rest, sessionId, model };
+		// Keyed on queueKey, not channelId: an isolated job withholds channelId but
+		// still occupies a channel's FIFO, so `/stop` typed there must reach it —
+		// it is exactly what is blocking that channel.
+		const opts = { ...rest, sessionId, model, cancelKey: queueKey || null };
 		const sessionContextIsCurrent = () => (
 			!channelId
 			|| (

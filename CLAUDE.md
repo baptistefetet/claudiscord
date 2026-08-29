@@ -44,8 +44,8 @@ src/
   prompts.js          # Shared system prompt builder (agent-agnostic — no per-agent sections)
   logger.js           # stdout/stderr logging (journald-friendly)
   discord.js          # Client, sendToChannel, sendChunked (splitMessage now private), typing indicator
-  queue.js            # Per-channel FIFOs + global maintenance gate
-  spawn.js            # spawnCollect: generic subprocess runner (unbounded, no timeout); probeVersion: `--version` probe
+  queue.js            # Per-channel FIFOs + global maintenance gate + the run currently executing per key (/stop)
+  spawn.js            # spawnCollect: generic subprocess runner (unbounded, no timeout, cancellable); probeVersion: `--version` probe
   claude.js           # Claude exec/login (host + sandbox), stream-json parse, OAuth usage (getClaudeUsage), CLI version (getClaudeVersion)
   codex.js            # Codex exec/login (host + sandbox), JSONL parse, account usage (getCodexUsage), CLI version (getCodexVersion)
   container.js        # Docker: image/container, sandbox env factories (sandboxClaudeEnv/sandboxCodexEnv)
@@ -53,7 +53,7 @@ src/
   jobs-store.js       # SQLite jobs store via sqlite3 CLI: loadAllJobs (admin+sandbox), recordJobRun, deleteJob, deleteNonIsolatedJobs, ensureDb, jobKey
   sessions.js         # { channels: { channelId -> { mode, agent, sessionId, ... } } }; onSessionCleared observer
   scheduler.js        # minute-resolution ticker, reloadJobs, executeJob, handleSessionCleared, per-key lock
-  commands.js         # COMMANDS registry → dispatch + native slash metadata; /new /status /usage /version /skills /login /jobs /admin /sandbox /claude /codex /remote /voice /upgrade /restart !shell; transport-neutral dispatchSlashCommand + getRegisteredCommands (Discord plumbing stays in index.js); /login and !shell handlers live in login.js / shell.js
+  commands.js         # COMMANDS registry → dispatch + native slash metadata; /new /stop /status /usage /version /skills /login /jobs /admin /sandbox /claude /codex /remote /voice /upgrade /restart !shell; transport-neutral dispatchSlashCommand + getRegisteredCommands (Discord plumbing stays in index.js); /login and !shell handlers live in login.js / shell.js
   login.js            # /login flow state machine: pending login, URL relay, Discord code input, timeouts
   shell.js            # !shell: executeShell (host/container, SIGTERM→SIGKILL) + gating, output truncation
   skills.js           # listSkills(agent, mode): skill names read from <home>/.claude|.codex/skills
@@ -175,6 +175,18 @@ The user can drop files/photos into a channel (with no text). An upload does NOT
 
 Interactive prompts, voice turns and scheduled jobs go through `src/queue.js::runQueued(channelId, ...)`. A channel or thread stays strictly FIFO, including its job runs, while distinct IDs may execute without a global concurrency limit. `src/index.js` sends the one-shot "⏳ Waiting for previous prompt..." notice only when that same channel is busy. Rare operations (`/login`, `!shell`, `/upgrade`, `/remote` transitions) use `runMaintenance`: they are refused while any execution is pending, then briefly stop new queue work while they run. The single sandbox container accepts concurrent `docker exec` processes, so sandbox channels share its 1 CPU, home and filesystem. SQLite arbitrates concurrent jobs writes.
 
+### Stopping a run
+
+`/stop` terminates the agent process running in the channel. Without it a stuck or runaway prompt holds its channel queue until someone opens a host shell, and every maintenance command stays refused meanwhile.
+
+- **It stops the running process, not the queue.** Prompts already queued behind it start as soon as it dies; `/stop` again to take them out one by one. A prompt that has not spawned yet has nothing to signal, so `/stop` answers that nothing is running.
+- **Outside the queue and outside `runMaintenance`.** Both refuse to act while an execution is pending, which is the only state where `/stop` has anything to do.
+- `spawn.js` publishes each run to `queue.js` under its `cancelKey` — the executor's `queueKey`, threaded through the agent's `env.spawn`. The registry lives beside the FIFOs because it is the same per-key execution state, and `stopRun(key)` is the counterpart of `isBusy(key)`. Keyed on the queue and not on `channelId` so that an isolated job, which withholds `channelId` but still occupies a channel's FIFO, is stoppable from the channel it is blocking.
+- A stopped run rejects with code `CANCELLED`, carrying the output produced so far. That is what keeps the conversation usable — the agent adapters recover the session id from that partial output, so the next message resumes where the run was cut. `index.js`, `voice.js` and `scheduler.js` each report it as a stop rather than a failure; a stopped job also skips `recordJobRun`, so its schedule and `remaining` are untouched.
+- **The sandbox needs a second kill.** `docker exec` leaves the process it started in the container running when its client dies (verified). `container.js::killContainerRun` signals it through a `CLAUDISCORD_RUN=<uuid>` marker injected at exec time and matched against `/proc/<pid>/environ`. Matching on the command name instead would also hit a `/remote` daemon living in the same container. The marker is inherited by the agent's children, so they go too. The call is asynchronous: a synchronous `docker exec` would block the event loop, and with it the Discord heartbeat.
+- **The host kills the process group**, hence `detached: true` on both host agent envs — a signal to the CLI alone can leave the tools it spawned behind.
+- SIGTERM first, SIGKILL after `KILL_GRACE_MS`. The escalation is deliberately not cancelled when the local child exits: killing a `docker exec` client is instant and says nothing about the container-side process, so the second signal has to outlive it.
+
 ## Docker sandbox (optional)
 
 - **Image**: `claudiscord-sandbox` (local build, `node:22-bookworm-slim`; both agents come from host mounts)
@@ -238,7 +250,7 @@ SANDBOX_HOST_HOME/
 
 ### Background tasks
 
-`spawnCollect` (`src/spawn.js`) waits for the active CLI to exit naturally, with no timeout: a prompt has no predictable duration and only the operator knows what a given one should take. A stuck agent therefore holds its channel queue indefinitely; other channels continue, while maintenance commands are refused until all queues are idle. Recovery is manual: inspect from a host shell, kill the offending process, then resume the channel session.
+`spawnCollect` (`src/spawn.js`) waits for the active CLI to exit naturally, with no timeout: a prompt has no predictable duration and only the operator knows what a given one should take. A stuck agent holds its channel queue until `/stop` ends it (see "Stopping a run"); other channels continue meanwhile, while maintenance commands are refused until all queues are idle.
 
 ### Image rebuild
 

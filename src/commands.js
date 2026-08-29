@@ -17,7 +17,7 @@ const { CODEX_AVAILABLE, getCodexUsage, getCodexVersion } = require('./codex');
 const { getClaudeUsage, getClaudeVersion } = require('./claude');
 const { handleLogin, finishPendingLogin } = require('./login');
 const { handleShell } = require('./shell');
-const { runMaintenance, isBusy } = require('./queue');
+const { runMaintenance, isBusy, stopRun } = require('./queue');
 const { startRemote, stopRemote } = require('./remote');
 const {
 	isVoiceModeAvailable,
@@ -190,6 +190,22 @@ async function handleUsage({ channel, mode }) {
 		formatUsage(`Claude (${modeLabel})`, claudeUsage, claudeReasons),
 		formatUsage(`Codex (${modeLabel})`, codexUsage, codexReasons),
 	].join('\n\n'));
+	return true;
+}
+
+/**
+ * /stop — terminate the agent process running in this channel.
+ *
+ * Deliberately outside the queue and outside `runMaintenance`: both refuse to
+ * act while an execution is pending, which is the only state where `/stop` has
+ * anything to do. The killed run rejects as CANCELLED, so its caller reports it
+ * and the channel session survives — the next message resumes the conversation.
+ */
+async function handleStop({ channel, channelId }) {
+	const label = stopRun(channelId);
+	await channel.send(label
+		? '⏹️ Stopping the current prompt...'
+		: 'Nothing is running in this channel.');
 	return true;
 }
 
@@ -486,6 +502,7 @@ async function handleRestart({ channel }) {
  */
 const COMMANDS = [
 	{ name: '/new', help: 'Reset session for this channel (new conversation)', handler: handleNew },
+	{ name: '/stop', help: 'Stop the prompt currently running in this channel', handler: handleStop },
 	{ name: '/status', help: 'Show current mode, agent and runtime status', remoteAllowed: true, handler: handleStatus },
 	{ name: '/usage', help: 'Show Claude and Codex usage for the current mode', remoteAllowed: true, handler: handleUsage },
 	{ name: '/version', help: 'Show the Claude and Codex CLI versions', remoteAllowed: true, handler: handleVersion },

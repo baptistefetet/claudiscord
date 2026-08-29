@@ -2,9 +2,14 @@
  * FIFO queues keyed by Discord channel ID, plus one stop-the-world maintenance
  * gate for rare operations. Different keys run concurrently; tasks sharing a
  * key never overlap.
+ *
+ * Also holds the process currently running for a key, so `/stop` can end it:
+ * that is the same per-key execution state the queue is built around, and
+ * `stop(key)` is the counterpart of `isBusy(key)`.
  */
 
 const queues = new Map();
+const running = new Map();
 let totalPending = 0;
 let maintenanceActive = false;
 let maintenanceDone = Promise.resolve();
@@ -53,8 +58,36 @@ function runQueued(key, fn) {
 	entry.tail = settled.catch(() => {});
 	return settled;
 }
+/**
+ * Publish the process running under `key`. Called by `spawn.js`, which owns the
+ * child and supplies its `stop()`; nothing else registers.
+ */
+function registerRun(key, run) {
+	if (key) running.set(key, run);
+}
+
+// Guarded against the entry of a later run: a spawn that ends after its
+// successor registered must not delete the successor's.
+function unregisterRun(key, run) {
+	if (key && running.get(key) === run) running.delete(key);
+}
+
+/**
+ * Stop the run for `key`. Returns its label, or null when there is nothing left
+ * to stop — no process yet (a task still waiting its turn), one already
+ * finishing, or one a previous stop already signalled.
+ */
+function stopRun(key) {
+	const run = running.get(key);
+	if (!run) return null;
+	return run.stop() ? run.label : null;
+}
+
 module.exports = {
 	runQueued,
 	runMaintenance,
 	isBusy,
+	registerRun,
+	unregisterRun,
+	stopRun,
 };

@@ -246,6 +246,18 @@ async function executeJob(job) {
 				: 'channel agent or mode changed while queued');
 			return;
 		}
+		// `/stop` in the channel this run occupies. An operator decision, not a
+		// failure: no error banner, and the occurrence is not consumed, so a
+		// recurring job keeps its schedule and a one-shot is not deleted unrun.
+		if (err.code === 'CANCELLED') {
+			skipRecord = true;
+			log.info(`Job '${key}': stopped by the user`);
+			if (promptContext?.channelId) {
+				await sendToChannel(channelId, `⏹️ **Job '${id}'** stopped. Its schedule is unchanged.`)
+					.catch(e => log.error('Notify failed:', e.message));
+			}
+			return;
+		}
 		lastSessionId = err.sessionId || lastSessionId;
 		log.error(`Job '${key}': ERROR (code ${err.code || 'unknown'})`, err.message);
 		// A crash produces no output, so it cannot opt out: always reported.
