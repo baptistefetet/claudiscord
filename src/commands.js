@@ -202,9 +202,9 @@ async function handleUsage({ channel, mode }) {
  * and the channel session survives — the next message resumes the conversation.
  */
 async function handleStop({ channel, channelId }) {
-	const label = stopRun(channelId);
-	await channel.send(label
-		? '⏹️ Stopping the current prompt...'
+	const what = stopRun(channelId);
+	await channel.send(what
+		? `⏹️ Stopping ${what}...`
 		: 'Nothing is running in this channel.');
 	return true;
 }

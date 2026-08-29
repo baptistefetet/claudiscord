@@ -1,5 +1,5 @@
 const cron = require('node-cron');
-const { AUTHORIZED_USER_ID } = require('./config');
+const { AUTHORIZED_USER_ID, JOB_TIMEOUT_MS } = require('./config');
 const { getSystemPrompt } = require('./prompts');
 const { executePrompt } = require('./executor');
 const sessions = require('./sessions');
@@ -218,6 +218,9 @@ async function executeJob(job) {
 			queueKey: channelId,
 			systemPrompt: jobSystemPrompt,
 			tier: 'medium',
+			// A job runs unannounced, so `/stop` has to name it: the user reaching
+			// for that command only knows their channel is busy, not why.
+			runLabel: `scheduled job '${id}'`,
 			...(job.isolated ? { sessionId: null } : { channelId, requireSession: true }),
 		};
 		const { result: output, sessionId } = await executePrompt(jobAgent, job.mode, jobPrompt, jobOptions);
@@ -260,9 +263,14 @@ async function executeJob(job) {
 		}
 		lastSessionId = err.sessionId || lastSessionId;
 		log.error(`Job '${key}': ERROR (code ${err.code || 'unknown'})`, err.message);
-		// A crash produces no output, so it cannot opt out: always reported.
+		// A crash produces no output, so it cannot opt out: always reported. A
+		// timeout is one of those failures \u2014 unlike `/stop` above, nobody decided
+		// it \u2014 so the occurrence is consumed like any other failed run.
+		const reason = err.code === 'TIMEOUT'
+			? `Run exceeded the ${JOB_TIMEOUT_MS / 60000}-minute limit and was killed.`
+			: `Agent failed with code ${err.code || 'unknown'}.`;
 		if (promptContext?.channelId) {
-			await sendToChannel(channelId, `\u{1F6A8} **Job '${id}' \u2014 ERROR**\nAgent failed with code ${err.code || 'unknown'}.`).catch(e => log.error('Notify failed:', e.message));
+			await sendToChannel(channelId, `\u{1F6A8} **Job '${id}' \u2014 ERROR**\n${reason}`).catch(e => log.error('Notify failed:', e.message));
 		} else {
 			log.warn(`Job '${key}': error notification skipped (unresolved channelId '${channelId}')`);
 		}

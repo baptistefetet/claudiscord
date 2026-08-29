@@ -80,6 +80,7 @@ content you saw earlier.
 --- Scheduling ---
 Use this Discord scheduling system for any scheduled task (recurring or one-shot) that runs
 a prompt or messages the user. A scheduler continuously executes jobs at their cron times.
+A run is killed after one hour, so split anything longer into several jobs.
 
 Database:
 - {{jobsPath}} — SQLite, single table \`jobs\`, via the \`sqlite3\` CLI only. It always holds

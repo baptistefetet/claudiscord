@@ -179,12 +179,14 @@ Interactive prompts, voice turns and scheduled jobs go through `src/queue.js::ru
 
 `/stop` terminates the agent process running in the channel. Without it a stuck or runaway prompt holds its channel queue until someone opens a host shell, and every maintenance command stays refused meanwhile.
 
+- **It names what it stopped**, from the run's `runLabel`: "the current prompt" by default, `scheduled job '<id>'` when the scheduler set it. A job fires unannounced, so someone reaching for `/stop` after an unexplained "⏳ Waiting for previous prompt..." only knows their channel is busy — the reply has to say why.
 - **It stops the running process, not the queue.** Prompts already queued behind it start as soon as it dies; `/stop` again to take them out one by one. A prompt that has not spawned yet has nothing to signal, so `/stop` answers that nothing is running.
 - **Outside the queue and outside `runMaintenance`.** Both refuse to act while an execution is pending, which is the only state where `/stop` has anything to do.
 - `spawn.js` publishes each run to `queue.js` under its `cancelKey` — the executor's `queueKey`, threaded through the agent's `env.spawn`. The registry lives beside the FIFOs because it is the same per-key execution state, and `stopRun(key)` is the counterpart of `isBusy(key)`. Keyed on the queue and not on `channelId` so that an isolated job, which withholds `channelId` but still occupies a channel's FIFO, is stoppable from the channel it is blocking.
 - A stopped run rejects with code `CANCELLED`, carrying the output produced so far. That is what keeps the conversation usable — the agent adapters recover the session id from that partial output, so the next message resumes where the run was cut. `index.js`, `voice.js` and `scheduler.js` each report it as a stop rather than a failure; a stopped job also skips `recordJobRun`, so its schedule and `remaining` are untouched.
 - **The sandbox needs a second kill.** `docker exec` leaves the process it started in the container running when its client dies (verified). `container.js::killContainerRun` signals it through a `CLAUDISCORD_RUN=<uuid>` marker injected at exec time and matched against `/proc/<pid>/environ`. Matching on the command name instead would also hit a `/remote` daemon living in the same container. The marker is inherited by the agent's children, so they go too. The call is asynchronous: a synchronous `docker exec` would block the event loop, and with it the Discord heartbeat.
 - **The host kills the process group**, hence `detached: true` on both host agent envs — a signal to the CLI alone can leave the tools it spawned behind.
+- `run.stop(reason)` takes `'user'` or `'timeout'`, which is what separates code `CANCELLED` from code `TIMEOUT` at the reject. The first caller wins: a later stop returns false and changes nothing, so a run already killed by its deadline stays a `TIMEOUT`.
 - SIGTERM first, SIGKILL after `KILL_GRACE_MS`. The escalation is deliberately not cancelled when the local child exits: killing a `docker exec` client is instant and says nothing about the container-side process, so the second signal has to outlive it.
 
 ## Docker sandbox (optional)
@@ -250,7 +252,9 @@ SANDBOX_HOST_HOME/
 
 ### Background tasks
 
-`spawnCollect` (`src/spawn.js`) waits for the active CLI to exit naturally, with no timeout: a prompt has no predictable duration and only the operator knows what a given one should take. A stuck agent holds its channel queue until `/stop` ends it (see "Stopping a run"); other channels continue meanwhile, while maintenance commands are refused until all queues are idle.
+`spawnCollect` (`src/spawn.js`) waits for the active CLI to exit naturally: an interactive prompt has no predictable duration and only the operator knows what a given one should take, so a stuck agent holds its channel queue until `/stop` ends it (see "Stopping a run"). Other channels continue meanwhile, while maintenance commands are refused until all queues are idle.
+
+Scheduled runs are the exception. `executor.js` passes `timeoutMs: JOB_TIMEOUT_MS` (1 h) for the `medium` tier, and only that tier: a job fires with nobody watching, so an unbounded one would hold its channel's queue and block maintenance until someone happened to notice. The deadline reuses the `/stop` machinery — same SIGTERM/SIGKILL, same container kill — but rejects with code `TIMEOUT`, which the scheduler reports as a failed run rather than as a decision, consuming the occurrence like any other error.
 
 ### Image rebuild
 

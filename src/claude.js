@@ -304,6 +304,8 @@ async function executeClaude(prompt, options = {}, env) {
 		systemPrompt = null,
 		model = null,
 		cancelKey = null,
+		timeoutMs = 0,
+		runLabel,
 	} = options;
 
 	if (!systemPrompt) {
@@ -320,7 +322,7 @@ async function executeClaude(prompt, options = {}, env) {
 
 	let result;
 	try {
-		result = await env.spawn(args, { cancelKey });
+		result = await env.spawn(args, { cancelKey, timeoutMs, runLabel });
 	} catch (err) {
 		err.sessionId = sessionIdFromEvents(parseStreamJsonEvents(err.stdout));
 		throw err;

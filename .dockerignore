@@ -1,0 +1,3 @@
+# The image is built entirely from the Dockerfile, which Docker sends on its
+# own. Nothing else needs to reach the daemon — least of all .env.
+*

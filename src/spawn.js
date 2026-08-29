@@ -11,10 +11,11 @@ const VERSION_TIMEOUT_MS = 10_000;
  * Spawn a command with stdout/stderr collection, resolving on exit.
  * Returns { stdout, stderr, code }.
  *
- * Deliberately unbounded: only the operator knows how long a given prompt should
- * take, so a run ends when it ends, or when `/stop` ends it. Interactive
- * commands (`apt install` without `-y`, ssh to an unknown host) therefore hang
- * until one of the two happens.
+ * Unbounded unless `timeoutMs` says otherwise: only the operator knows how long
+ * a given prompt should take, so an interactive run ends when it ends, or when
+ * `/stop` ends it. Scheduled runs pass a deadline instead — nobody is watching
+ * them. A run past its deadline rejects with code TIMEOUT rather than
+ * CANCELLED, so a failure is not read as a decision.
  *
  * `cancelKey` (a channelId) publishes the run to `runs.js` so `/stop` can reach
  * it; a cancelled run rejects with code CANCELLED, carrying the output produced
@@ -36,6 +37,8 @@ function spawnCollect(cmd, args, options = {}) {
 		cancelKey = null,
 		killInContainer = null,
 		detached = false,
+		timeoutMs = 0,
+		runLabel = 'the current prompt',
 	} = options;
 
 	return new Promise((resolve, reject) => {
@@ -65,13 +68,22 @@ function spawnCollect(cmd, args, options = {}) {
 		};
 
 		let killTimer = null;
+		let timeoutTimer = null;
 		const run = {
 			label,
+			// What `/stop` calls this run when it reports killing it. A job runs
+			// with nobody watching, so the answer must not read "the current
+			// prompt" to someone who never started one.
+			runLabel,
 			cancelled: false,
-			stop() {
+			timedOut: false,
+			// `reason` distinguishes the operator's `/stop` from the deadline, so
+			// the caller can tell a decision from a failure.
+			stop(reason = 'user') {
 				if (this.cancelled || exited) return false;
 				this.cancelled = true;
-				log.info(`Stopping ${label}`);
+				this.timedOut = reason === 'timeout';
+				log.info(`Stopping ${label}${this.timedOut ? ' (timeout)' : ''}`);
 				signalLocal('SIGTERM');
 				if (killInContainer) killInContainer('TERM');
 				// The escalation is NOT cleared when the local child exits. Killing a
@@ -88,9 +100,15 @@ function spawnCollect(cmd, args, options = {}) {
 		};
 		registerRun(cancelKey, run);
 
+		if (timeoutMs > 0) {
+			timeoutTimer = setTimeout(() => run.stop('timeout'), timeoutMs);
+			timeoutTimer.unref?.();
+		}
+
 		const settle = () => {
 			exited = true;
 			unregisterRun(cancelKey, run);
+			clearTimeout(timeoutTimer);
 			if (!run.cancelled) clearTimeout(killTimer);
 		};
 
@@ -101,7 +119,8 @@ function spawnCollect(cmd, args, options = {}) {
 			settle();
 			if (stderr) log.warn(`${label} stderr:`, stderr.slice(0, 500));
 			if (run.cancelled) {
-				reject(Object.assign(new Error('CANCELLED'), { code: 'CANCELLED', stdout, stderr }));
+				const code = run.timedOut ? 'TIMEOUT' : 'CANCELLED';
+				reject(Object.assign(new Error(code), { code, stdout, stderr }));
 				return;
 			}
 			resolve({ stdout, stderr, code });

@@ -6,7 +6,7 @@ const {
 } = require('./container');
 const { runQueued } = require('./queue');
 const sessions = require('./sessions');
-const { AGENT_MODELS } = require('./config');
+const { AGENT_MODELS, JOB_TIMEOUT_MS } = require('./config');
 
 /**
  * Execute a prompt with the selected agent and environment. Executions are FIFO
@@ -24,7 +24,14 @@ const { AGENT_MODELS } = require('./config');
  * into a concrete model id here and nowhere else, so no caller names a model.
  */
 function executePrompt(agent, mode, prompt, options = {}) {
-	const { channelId, queueKey = channelId, tier = 'high', requireSession = false, ...rest } = options;
+	const {
+		channelId,
+		queueKey = channelId,
+		tier = 'high',
+		requireSession = false,
+		runLabel,
+		...rest
+	} = options;
 	return runQueued(queueKey, async () => {
 		if (
 			channelId
@@ -55,7 +62,18 @@ function executePrompt(agent, mode, prompt, options = {}) {
 		// Keyed on queueKey, not channelId: an isolated job withholds channelId but
 		// still occupies a channel's FIFO, so `/stop` typed there must reach it —
 		// it is exactly what is blocking that channel.
-		const opts = { ...rest, sessionId, model, cancelKey: queueKey || null };
+		const opts = {
+			...rest,
+			sessionId,
+			model,
+			cancelKey: queueKey || null,
+			// Only scheduled runs get a deadline; an interactive one has an
+			// operator and `/stop`.
+			timeoutMs: tier === 'medium' ? JOB_TIMEOUT_MS : 0,
+			// How `/stop` names this run. Only a caller nobody is watching needs to
+			// say; an interactive prompt takes spawn.js's default.
+			...(runLabel ? { runLabel } : {}),
+		};
 		const sessionContextIsCurrent = () => (
 			!channelId
 			|| (

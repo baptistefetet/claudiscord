@@ -73,14 +73,14 @@ function unregisterRun(key, run) {
 }
 
 /**
- * Stop the run for `key`. Returns its label, or null when there is nothing left
- * to stop — no process yet (a task still waiting its turn), one already
- * finishing, or one a previous stop already signalled.
+ * Stop the run for `key`. Returns how to name it to the user, or null when
+ * there is nothing left to stop — no process yet (a task still waiting its
+ * turn), one already finishing, or one a previous stop already signalled.
  */
 function stopRun(key) {
 	const run = running.get(key);
 	if (!run) return null;
-	return run.stop() ? run.label : null;
+	return run.stop() ? run.runLabel : null;
 }
 
 module.exports = {

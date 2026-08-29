@@ -63,6 +63,10 @@ const SHELL_TIMEOUT_MS = 300_000;
 const KILL_GRACE_MS = 5000; // SIGTERM→SIGKILL grace for killed child processes
 const DOCKER_CMD_TIMEOUT = 30_000;
 const UPGRADE_TIMEOUT_MS = 600_000; // Sandbox apt upgrade
+// Scheduled runs only. An interactive prompt has an operator watching it and
+// `/stop` to end it; a job fires with nobody there, and a stuck one holds its
+// channel's queue and blocks maintenance until someone notices.
+const JOB_TIMEOUT_MS = 3_600_000;
 const DISCORD_MAX_MSG_LENGTH = 2000;
 const TYPING_INTERVAL_MS = 8000;
 
@@ -127,4 +131,5 @@ module.exports = {
 	REASONING_EFFORT,
 	DOCKER_CMD_TIMEOUT,
 	UPGRADE_TIMEOUT_MS,
+	JOB_TIMEOUT_MS,
 };
