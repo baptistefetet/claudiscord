@@ -38,8 +38,13 @@ function spawnCollect(cmd, args, options = {}) {
 		killInContainer = null,
 		detached = false,
 		timeoutMs = 0,
-		runLabel = 'the current prompt',
+		// How `/stop` reports killing this run. A job fires unannounced, so the
+		// defaults must not be the only wording available: someone who started no
+		// prompt would be told their prompt was stopped.
+		stopInfo = {},
 	} = options;
+	const stopLabel = stopInfo.label || 'the current prompt';
+	const stopNote = stopInfo.note || 'the conversation is intact';
 
 	return new Promise((resolve, reject) => {
 		const child = spawn(cmd, args, {
@@ -69,12 +74,16 @@ function spawnCollect(cmd, args, options = {}) {
 
 		let killTimer = null;
 		let timeoutTimer = null;
+		// Resolved once the child is really gone, so `/stop` can answer after the
+		// fact instead of announcing an intention it cannot vouch for.
+		let markSettled;
+		const settled = new Promise(resolve => { markSettled = resolve; });
+
 		const run = {
 			label,
-			// What `/stop` calls this run when it reports killing it. A job runs
-			// with nobody watching, so the answer must not read "the current
-			// prompt" to someone who never started one.
-			runLabel,
+			stopLabel,
+			stopNote,
+			settled,
 			cancelled: false,
 			timedOut: false,
 			// `reason` distinguishes the operator's `/stop` from the deadline, so
@@ -110,6 +119,7 @@ function spawnCollect(cmd, args, options = {}) {
 			unregisterRun(cancelKey, run);
 			clearTimeout(timeoutTimer);
 			if (!run.cancelled) clearTimeout(killTimer);
+			markSettled();
 		};
 
 		child.stdout.on('data', chunk => { stdout += chunk; });

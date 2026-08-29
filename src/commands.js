@@ -4,6 +4,7 @@ const { promisify } = require('util');
 const execFileAsync = promisify(execFile);
 const {
 	UPGRADE_TIMEOUT_MS,
+	STOP_REPORT_TIMEOUT_MS,
 	SANDBOX_HOST_HOME,
 } = require('./config');
 const sessions = require('./sessions');
@@ -198,14 +199,28 @@ async function handleUsage({ channel, mode }) {
  *
  * Deliberately outside the queue and outside `runMaintenance`: both refuse to
  * act while an execution is pending, which is the only state where `/stop` has
- * anything to do. The killed run rejects as CANCELLED, so its caller reports it
- * and the channel session survives — the next message resumes the conversation.
+ * anything to do.
+ *
+ * One message, sent once the process is actually gone rather than when the
+ * signal goes out — the callers whose run was cancelled stay quiet about it so
+ * this is the only reply. The killed run rejects as CANCELLED, so the channel
+ * session survives and the next message resumes the conversation.
  */
 async function handleStop({ channel, channelId }) {
-	const what = stopRun(channelId);
-	await channel.send(what
-		? `⏹️ Stopping ${what}...`
-		: 'Nothing is running in this channel.');
+	const run = stopRun(channelId);
+	if (!run) {
+		await channel.send('Nothing is running in this channel.');
+		return true;
+	}
+	// SIGKILL lands at KILL_GRACE_MS, so this only expires if the process is
+	// unkillable (uninterruptible sleep, a wedged Docker daemon). Saying so beats
+	// claiming a stop that did not happen.
+	const gaveUp = Symbol('gaveUp');
+	const timer = new Promise(resolve => setTimeout(() => resolve(gaveUp), STOP_REPORT_TIMEOUT_MS));
+	const outcome = await Promise.race([run.settled, timer]);
+	await channel.send(outcome === gaveUp
+		? `⏹️ Signalled ${run.label}, but it has not exited yet. Check the service logs.`
+		: `⏹️ Stopped ${run.label} — ${run.note}.`);
 	return true;
 }
 

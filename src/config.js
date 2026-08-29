@@ -67,6 +67,9 @@ const UPGRADE_TIMEOUT_MS = 600_000; // Sandbox apt upgrade
 // `/stop` to end it; a job fires with nobody there, and a stuck one holds its
 // channel's queue and blocks maintenance until someone notices.
 const JOB_TIMEOUT_MS = 3_600_000;
+// How long `/stop` waits for the process to actually exit before answering.
+// Comfortably past KILL_GRACE_MS, since SIGKILL settles it by then.
+const STOP_REPORT_TIMEOUT_MS = 15_000;
 const DISCORD_MAX_MSG_LENGTH = 2000;
 const TYPING_INTERVAL_MS = 8000;
 
@@ -132,4 +135,5 @@ module.exports = {
 	DOCKER_CMD_TIMEOUT,
 	UPGRADE_TIMEOUT_MS,
 	JOB_TIMEOUT_MS,
+	STOP_REPORT_TIMEOUT_MS,
 };

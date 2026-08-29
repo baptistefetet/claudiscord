@@ -229,8 +229,8 @@ function onSpeakingStart(session, userId) {
 				// `/stop` typed in the chat while the turn was running: an operator
 				// decision, so the assistant just goes back to listening.
 				if (err.code === 'CANCELLED') {
+					// `/stop` answers for itself; the assistant just resumes listening.
 					log.info('voice turn stopped by the user');
-					await postToChat(session, '⏹️ Stopped.');
 				} else {
 					log.error('voice turn error:', err.message || err);
 					await postToChat(session, `Voice turn failed: ${err.message?.slice(0, 300) || 'unknown'}`);

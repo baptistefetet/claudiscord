@@ -29,7 +29,7 @@ function executePrompt(agent, mode, prompt, options = {}) {
 		queueKey = channelId,
 		tier = 'high',
 		requireSession = false,
-		runLabel,
+		stopInfo,
 		...rest
 	} = options;
 	return runQueued(queueKey, async () => {
@@ -72,7 +72,7 @@ function executePrompt(agent, mode, prompt, options = {}) {
 			timeoutMs: tier === 'medium' ? JOB_TIMEOUT_MS : 0,
 			// How `/stop` names this run. Only a caller nobody is watching needs to
 			// say; an interactive prompt takes spawn.js's default.
-			...(runLabel ? { runLabel } : {}),
+			...(stopInfo ? { stopInfo } : {}),
 		};
 		const sessionContextIsCurrent = () => (
 			!channelId

@@ -210,7 +210,8 @@ client.on(Events.MessageCreate, async message => {
 		} else if (err.code === 'CODEX_NOT_AUTHENTICATED') {
 			errMsg = 'Codex authentication failed. Select Codex in this channel and run `/login`.';
 		} else if (err.code === 'CANCELLED') {
-			errMsg = '⏹️ Stopped. The conversation is intact — send a message to continue it.';
+			// `/stop` answers for itself, once the process is really gone.
+			errMsg = null;
 		} else if (err.code === 'CHANNEL_CONTEXT_CHANGED') {
 			errMsg = 'Channel mode or agent changed while this message was waiting. Send it again.';
 		} else if (err.message === 'Docker is not installed on this host') {
@@ -219,7 +220,7 @@ client.on(Events.MessageCreate, async message => {
 			const agentLabel = agent === 'codex' ? 'Codex' : 'Claude Code';
 			errMsg = `${agentLabel} error: ${err.message?.slice(0, 300) || 'unknown'}`;
 		}
-		await channel.send(errMsg).catch(e => log.error('Failed to send error message:', e));
+		if (errMsg) await channel.send(errMsg).catch(e => log.error('Failed to send error message:', e));
 	} finally {
 		if (!isBusy(channelId)) waitingNotice.delete(channelId);
 		scheduler.reloadJobs(); // the agent may have edited a jobs file, even on error

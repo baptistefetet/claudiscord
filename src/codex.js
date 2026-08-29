@@ -404,7 +404,7 @@ async function executeCodex(prompt, options = {}, env) {
 		model = null,
 		cancelKey = null,
 		timeoutMs = 0,
-		runLabel,
+		stopInfo,
 	} = options;
 
 	if (env.precheck) env.precheck();
@@ -419,7 +419,7 @@ async function executeCodex(prompt, options = {}, env) {
 	try {
 		execution = await env.spawn(
 			buildCodexArgs({ sessionId, systemPrompt, model }),
-			{ input: prompt, cancelKey, timeoutMs, runLabel },
+			{ input: prompt, cancelKey, timeoutMs, stopInfo },
 		);
 	} catch (err) {
 		err.sessionId = parseCodexOutput(err.stdout).sessionId;

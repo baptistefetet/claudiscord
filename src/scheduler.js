@@ -220,7 +220,7 @@ async function executeJob(job) {
 			tier: 'medium',
 			// A job runs unannounced, so `/stop` has to name it: the user reaching
 			// for that command only knows their channel is busy, not why.
-			runLabel: `scheduled job '${id}'`,
+			stopInfo: { label: `scheduled job '${id}'`, note: 'its schedule is unchanged' },
 			...(job.isolated ? { sessionId: null } : { channelId, requireSession: true }),
 		};
 		const { result: output, sessionId } = await executePrompt(jobAgent, job.mode, jobPrompt, jobOptions);
@@ -253,12 +253,9 @@ async function executeJob(job) {
 		// failure: no error banner, and the occurrence is not consumed, so a
 		// recurring job keeps its schedule and a one-shot is not deleted unrun.
 		if (err.code === 'CANCELLED') {
+			// `/stop` answers for itself, naming this job.
 			skipRecord = true;
 			log.info(`Job '${key}': stopped by the user`);
-			if (promptContext?.channelId) {
-				await sendToChannel(channelId, `⏹️ **Job '${id}'** stopped. Its schedule is unchanged.`)
-					.catch(e => log.error('Notify failed:', e.message));
-			}
 			return;
 		}
 		lastSessionId = err.sessionId || lastSessionId;

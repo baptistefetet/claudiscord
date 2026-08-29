@@ -73,14 +73,15 @@ function unregisterRun(key, run) {
 }
 
 /**
- * Stop the run for `key`. Returns how to name it to the user, or null when
- * there is nothing left to stop — no process yet (a task still waiting its
+ * Stop the run for `key`. Returns `{ label, note, settled }` — how to name it
+ * to the user and a promise resolving once the process is really gone — or null
+ * when there is nothing left to stop: no process yet (a task still waiting its
  * turn), one already finishing, or one a previous stop already signalled.
  */
 function stopRun(key) {
 	const run = running.get(key);
-	if (!run) return null;
-	return run.stop() ? run.runLabel : null;
+	if (!run || !run.stop()) return null;
+	return { label: run.stopLabel, note: run.stopNote, settled: run.settled };
 }
 
 module.exports = {
