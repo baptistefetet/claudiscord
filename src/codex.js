@@ -69,7 +69,7 @@ function buildCodexLoginFlow(mode, child) {
 			const code = extractCodexDeviceCode(output);
 			return [
 				`Codex login started for **${target}**.`,
-				'Open this link on your iPhone:',
+				'Open this link in a browser:',
 				`<${url}>`,
 				code ? `Enter this code: \`${code}\`` : 'Complete the browser authorization.',
 				'I will confirm here when Codex finishes.',

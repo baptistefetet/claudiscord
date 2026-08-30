@@ -70,7 +70,7 @@ function buildClaudeLoginFlow(mode, child) {
 		extractUrl: extractClaudeLoginUrl,
 		formatUrlMessage: (url) => [
 			`Claude login started for **${target}**.`,
-			'Open this link on your iPhone:',
+			'Open this link in a browser:',
 			`<${url}>`,
 			'After signing in, Claude will show a code. Send only that code here.',
 			'This login expires in 10 minutes. Use `/login cancel` to abort.',

@@ -1,25 +1,44 @@
 # Claudiscord
 
-A single-user Discord bot that relays your messages to [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or the optional [Codex CLI](https://developers.openai.com/codex/cli), with optional Docker sandboxing and a built-in job scheduler.
+A single-user Discord bot that drives [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and the [Codex CLI](https://developers.openai.com/codex/cli) from any Discord client, in DMs or private guild channels.
 
-Works in both DMs and private guild channels. Each channel is an independent conversation (its own session, its own mode), and the channel topic is injected into the system prompt as a mini `CLAUDE.md` — perfect for per-project contexts without manual `/new`.
+**Two agents, one interface.** `/claude` and `/codex` switch which agent answers in a channel, and nothing else changes: same commands, same scheduler, same uploads, same voice. Each agent keeps its own session and its own login, so switching back resumes where you left it.
+
+**Two environments, one bot.** An `admin` channel runs the agent on the host with your own rights. A `sandbox` channel runs it inside a Docker container with separate credentials, separate skills and its own agent instructions file. Same commands on both sides, two blast radii that never touch. Jobs, uploads and shell commands all follow the channel's environment.
 
 ## Features
 
-- **Per-channel conversations** — each Discord channel (DM included) keeps its own active-agent session
-- **Threads** — a public thread is its own fresh session (inheriting the parent channel's mode/agent), so you can branch into a side conversation without disturbing the main channel
-- **Per-channel agent** — use Claude Code by default, or switch any channel to Codex with `/codex`; `/claude` switches back
-- **Channel topic = mini CLAUDE.md** — renaming or rewriting the topic immediately changes the agent's context
-- **Two execution modes per channel** — `admin` runs the selected agent on the host, `sandbox` runs it in the Docker container
-- **Two model tiers per agent** — your prompts always run the agent's high model (Claude `opus`, Codex `gpt-5.6-sol`), scheduled jobs always run its medium one (`sonnet` / `gpt-5.6-terra`); reasoning effort is `xhigh` everywhere. Nothing to pick, nothing to configure
-- **Live progress** — while a prompt runs, a single message shows the tool the agent is using or what it is saying, updated in place and removed once the answer arrives. Scheduled jobs and voice turns don't stream
-- **Per-channel queues** — prompts stay FIFO within a channel or thread while different channels can run concurrently
-- **Single-user authorization** — only the Discord user whose ID is in `AUTHORIZED_USER_ID` can talk to the bot; everyone else is silently dropped
-- **Optional Docker** — sandbox mode is disabled gracefully if Docker isn't installed; admin mode still works
-- **Voice messages** — Discord voice messages (mic button) are transcribed via Groq Whisper before being passed to the active agent
-- **Voice assistant** — talk to the bot in a guild voice channel (`/voice`): utterances are transcribed (Groq Whisper), answered by Claude, and spoken back (OpenAI TTS), with an ambient "thinking" pad masking the latency
-- **File uploads** — drop files/photos into a channel and the bot saves them to `.claudiscord/files/`; add text in the same message to have the active agent act on them right away, or send them alone and reference them by name later
-- **Scheduler** — cron-based jobs via `node-cron`, notifications delivered to the channel where the job was created
+**Conversations**
+
+- **One per channel** — every channel and DM keeps its own session, mode and agent
+- **Threads** — a public thread starts a fresh session while inheriting its parent's mode and agent, so you can branch off without disturbing the main channel
+- **Channel topic** — injected into the system prompt alongside the channel name, so a channel can carry standing context for its subject
+- **Per-channel queues** — prompts stay FIFO within a channel while different channels run concurrently
+
+**Running prompts**
+
+- **Live progress** — while a prompt runs, one message shows what the agent is doing, updated in place and removed when the answer arrives
+- **Fixed models** — your prompts use the agent's high model (Claude `opus`, Codex `gpt-5.6-sol`), scheduled jobs its medium one (`sonnet` / `gpt-5.6-terra`), reasoning effort `xhigh` everywhere. Nothing to pick
+- **Escape hatches** — stop a runaway prompt, or hand a channel's Claude session to the Claude mobile app when you want permission prompts, reasoning and diffs
+
+**Scheduling**
+
+- **Jobs written by asking** — "check the disk every morning and only tell me if it's above 90%" creates the job; the agent owns the schedule, no config file to edit
+- **Delivered where they belong** — each job notifies its channel, and can stay silent when it has nothing to report
+
+**Voice**
+
+- **Voice messages** — the mic button is transcribed via Groq Whisper and handed to the channel's agent
+- **Voice assistant** — talk to the bot in a voice channel (`/voice`): transcribed, answered by the channel's agent, spoken back via OpenAI TTS, with an ambient pad covering the latency
+
+**Files**
+
+- **Uploads** — drop files or photos in; add text in the same message and the agent gets their paths right away, or send them alone and name them later
+
+**Safety**
+
+- **Single user** — only `AUTHORIZED_USER_ID` is answered; every other message is dropped without a reply
+- **Optional Docker** — without it, sandbox mode reports itself unavailable and admin mode carries on
 
 > **Linux only.** Claudiscord ships a systemd unit, expects GNU coreutils, and the sandbox aligns UIDs/GIDs the Linux way. macOS and Windows are not supported.
 
@@ -129,6 +148,18 @@ If sandbox mode is configured you'll also see `Docker image 'claudiscord-sandbox
 - Claude Code is the default agent. `/codex` selects Codex in either mode; `/claude` selects Claude again. Either switch resets the channel session.
 - Model and reasoning effort are forced by claudiscord for both agents, host and sandbox alike (`AGENT_MODELS` and `REASONING_EFFORT` in `src/config.js`) — they override any local CLI configuration.
 
+## Scheduling
+
+There is no job syntax to learn and no file to edit: ask, and the agent writes the job itself. "Every morning at 8, check for new releases of the projects in /srv and tell me only if there are any" is a complete specification — the agent turns it into a scheduled prompt attached to the channel you asked in.
+
+Same for the rest of the lifecycle: `/jobs` lists them, and asking to reschedule or drop one works the same way. There is no paused state — a job you no longer want is deleted. The jobs live in a SQLite file per environment, which the agent reads and writes directly.
+
+A run notifies its channel unless the job's own prompt told it to stay quiet when there is nothing to report — that condition belongs in the wording you asked for, which is why "only if there are any" above is enough. Runs are capped at one hour, and a job stopped mid-run keeps its schedule.
+
+**Isolated or not.** By default a job runs in a fresh session each time: it knows nothing of the channel's conversation and leaves it untouched, which is what you want for anything recurring. Ask for a follow-up instead — "check that build again in ten minutes" — and the job runs *inside* the channel's ongoing conversation, so its result lands as a turn you can reply to. That kind of job is tied to that exact conversation: resetting the session with `/new`, or switching the channel's mode or agent, deletes it rather than firing it into a conversation nobody is reading.
+
+**The environment is the channel's, not the job's choice.** A job created in a sandbox channel always runs in the sandbox, whichever channel it reports to — writing to the other environment's job list is not something an agent can do.
+
 ## File uploads
 
 Drag a file or photo into a channel and the bot always saves it to disk and replies with the saved file name(s). What happens next depends on whether the message also carries text:
@@ -164,9 +195,20 @@ Details:
 | `/restart` | Admin only — restart the claudiscord service |
 | `!<command>` | Run a shell command (host if the channel is admin, container if sandbox) |
 
+## Remote control
+
+Some turns want the full Claude app rather than a chat bubble: permission prompts, the reasoning view, file diffs. `/remote` hands the channel's session over to the [Claude mobile app](https://claude.com/product/claude-code) and back.
+
+- `/remote` starts a backgrounded Claude agent for this channel and stops answering in Discord. The session appears in the app under the channel's name, so several channels stay distinct.
+- `/remote` again stops it and returns the channel to Discord.
+- **Going out keeps the history, coming back does not.** The Discord conversation is copied into the app session, but the return trip starts fresh — the app manages its own session id and claudiscord does not adopt it.
+- While remote, the channel accepts only `/remote`, `/status`, `/jobs`, `/usage`, `/version`, `/skills` and `/login`. Anything else, voice messages included, is refused rather than run, so two processes never share one session. Uploads are still saved.
+- Claude only: a Codex channel must `/claude` first. In sandbox mode the container needs its own Claude login (`/sandbox`, `/claude`, `/login`) before `/remote` works.
+- Isolated jobs keep firing during a remote session. Non-isolated ones do not survive it: `/remote` resets the channel session, and a job bound to that exact conversation is deleted with it, like on `/new`.
+
 ## Voice assistant
 
-Type `/voice` in a **voice channel's text chat** to make the bot join that channel. Speak, pause ~1 s, and the bot transcribes the utterance, runs it through Claude (same session as the channel's text chat) and answers out loud — half-duplex, walkie-talkie style. `/voice` again makes it leave; it also leaves by itself after 15 min of silence.
+Type `/voice` in a **voice channel's text chat** to make the bot join that channel. Speak, pause ~1 s, and the bot transcribes the utterance, runs it through the channel's agent (same session as the channel's text chat) and answers out loud — half-duplex, walkie-talkie style. `/voice` again makes it leave; it also leaves by itself after 15 min of silence.
 
 - Requires `OPENAI_API_KEY` (TTS) and `GROQ_API_KEY` (STT) in `.env`.
 - The transcript (`🎙️ …`) and the reply are also posted to the voice channel's chat.
