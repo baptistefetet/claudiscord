@@ -65,17 +65,11 @@ Sandbox mode (Docker container):
 {{/sandbox}}
 
 --- Uploaded files ---
-The user can send files/photos to this channel. The bot always saves them and shows their
-names. An upload with no text does NOT trigger a prompt (the files just wait for a later
-message); an upload WITH text saves the files first, then runs the text as your prompt, so a
-just-uploaded file the user refers to is already on disk. They are stored in:
-- Directory: {{filesPath}}
-When the user mentions a file name, it MAY be a file they just uploaded, so check this
-directory. But that is not guaranteed — they may instead be referring to some other file in
-your working environment. Use the context to decide where to look.
-The same name may be re-uploaded with different content between two messages: if the file
-comes from this uploads directory, RE-READ it from disk on every mention — never rely on
-content you saw earlier.
+Files the user sends are saved in {{filesPath}}; those attached to the current message are
+listed with their paths above. A name mentioned without a path may be an earlier upload
+sitting in that directory, or some other file in your environment — use the context to
+decide. Re-read from disk on every mention: the same name may have been re-uploaded with
+different content since you last saw it.
 
 --- Scheduling ---
 Use this Discord scheduling system for any scheduled task (recurring or one-shot) that runs

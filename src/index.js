@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const config = require('./config');
-const { ADMIN_USER_HOME, STATE_DIR, ADMIN_JOBS_FILE } = config;
+const { ADMIN_USER_HOME, STATE_DIR, ADMIN_JOBS_FILE, ADMIN_FILES_DIR, SANDBOX_FILES_DIR } = config;
 const { ensureDb } = require('./jobs-store');
 const { getSystemPrompt } = require('./prompts');
 const log = require('./logger');
@@ -92,10 +92,18 @@ client.on(Events.MessageCreate, async message => {
 	// Before handleCommand, so uploads work in /remote mode too (they spawn no
 	// agent). A voice message's lone attachment is the audio, handled by STT above.
 	if (!isVoice && message.attachments.size > 0) {
+		const uploadMode = sessions.getMode(channel.id);
 		try {
-			const saved = await saveUploads([...message.attachments.values()], sessions.getMode(channel.id));
+			const saved = await saveUploads([...message.attachments.values()], uploadMode);
 			const list = saved.map(n => `\`${n}\``).join(', ');
 			await channel.send(`📎 Received ${saved.length} file(s): ${list}`).catch(() => {});
+			if (prompt) {
+				// Paths as the agent sees them, so it reads the file instead of
+				// searching for the name.
+				const dir = uploadMode === 'sandbox' ? SANDBOX_FILES_DIR : ADMIN_FILES_DIR;
+				const paths = saved.map(n => `${dir}/${n}`).join('\n');
+				prompt = `[Files attached to this message:]\n${paths}\n\n[Message:]\n${prompt}`;
+			}
 		} catch (err) {
 			log.error('Upload failed:', err.message);
 			await channel.send(`Upload failed: ${err.message?.slice(0, 200) || 'unknown'}`).catch(() => {});
