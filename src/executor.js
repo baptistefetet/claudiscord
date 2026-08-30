@@ -103,13 +103,17 @@ function executePrompt(agent, mode, prompt, options = {}) {
 				throw new Error(`Unknown agent: ${agent}`);
 			}
 
-			if (channelId && result.sessionId && sessionContextIsCurrent()) {
-				sessions.setSessionId(channelId, result.sessionId);
+			if (channelId && sessionContextIsCurrent()) {
+				if (result.sessionId) sessions.setSessionId(channelId, result.sessionId);
+				sessions.setUsage(channelId, result.usage);
 			}
 			return result;
 		} catch (err) {
-			if (channelId && err.sessionId && sessionContextIsCurrent()) {
-				sessions.setSessionId(channelId, err.sessionId);
+			if (channelId && sessionContextIsCurrent()) {
+				if (err.sessionId) sessions.setSessionId(channelId, err.sessionId);
+				// A failed, cancelled or timed-out turn still spent tokens and
+				// money; dropping it would undercount the conversation.
+				sessions.setUsage(channelId, err.usage);
 			}
 			throw err;
 		}

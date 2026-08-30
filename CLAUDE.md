@@ -51,7 +51,7 @@ src/
   container.js        # Docker: image/container, sandbox env factories (sandboxClaudeEnv/sandboxCodexEnv)
   executor.js         # executePrompt(agent, mode) → resolve tier→model → pick env (host const / sandbox factory) → executeClaude|executeCodex; queue
   jobs-store.js       # SQLite jobs store via sqlite3 CLI: loadAllJobs (admin+sandbox), recordJobRun, deleteJob, deleteNonIsolatedJobs, ensureDb, jobKey
-  sessions.js         # { channels: { channelId -> { mode, agent, sessionId, ... } } }; onSessionCleared observer
+  sessions.js         # { channels: { channelId -> { mode, agent, sessionId, usage, ... } } }; onSessionCleared observer
   scheduler.js        # minute-resolution ticker, reloadJobs, executeJob, handleSessionCleared, per-key lock
   commands.js         # COMMANDS registry → dispatch + native slash metadata; /new /stop /status /usage /version /skills /login /jobs /admin /sandbox /claude /codex /remote /voice /upgrade /restart !shell; transport-neutral dispatchSlashCommand + getRegisteredCommands (Discord plumbing stays in index.js); /login and !shell handlers live in login.js / shell.js
   login.js            # /login flow state machine: pending login, URL relay, Discord code input, timeouts
@@ -370,13 +370,14 @@ A job's output is sent to its `channel_id`, unless it ends with `NOTIFY_NONE` �
 
 - `ADMIN_USER_HOME/.claudiscord/sessions.json` shape:
   ```json
-  { "channels": { "<channelId>": { "mode": "admin"|"sandbox", "agent": "claude"|"codex", "sessionId": "<uuid>", "remoteId": null|"<agentId>", "lastName": "..." } } }
+  { "channels": { "<channelId>": { "mode": "admin"|"sandbox", "agent": "claude"|"codex", "sessionId": "<uuid>", "remoteId": null|"<agentId>", "usage": null|{...}, "lastName": "..." } } }
   ```
 - `sessionId` belongs to the active agent. Both Claude and Codex allocate it on the first invocation and emit it early in JSON output; `executor.js` persists it inside the channel queue. Context-mutating commands (`/new`, mode/agent switch) are refused while the channel is busy (`isBusy(channelId)` — a prompt or job running), so a late result cannot restore a session the user just changed; the executor still re-checks agent/mode before persisting (covers a context switch during a thread's pre-enqueue first-turn window). Remote mode blocks these commands upstream via `remoteGateHint`.
 - Spawn errors retain partial stdout so the agent adapter can attach an already-emitted UUID before the error is surfaced. The next prompt can therefore resume even when the first failed after session initialization.
 - Legacy entries without `agent` load as Claude. A legacy `sessionStarted: false` drops its possibly uncreated UUID, and a legacy `model` key is ignored; both disappear on the next persistence (`load()` rebuilds each entry field by field).
 - `remoteId` is `null` when the channel is in Discord mode (default), or an 8-hex agent ID when the channel is currently driven from the Claude mobile app via `/remote`. See "Remote control" below.
 - `lastName` is a display snapshot to make the sessions file readable during debugging.
+- `usage` backs `/status`'s conversation line: `{ context, window, costUsd }`. The context is the LAST assistant event's input tokens, cache included — `result.usage` sums every model call of the turn, so a three-tool run reported 90k against a 22k conversation. Cost is the opposite, a turn total, and accumulates across turns. Recorded on failed and cancelled turns too, which spent tokens all the same. Codex sets none: `turn.completed.usage` is a turn total and Codex exposes no context window, so nothing there answers "how full is this conversation".
 - A full reset drops the active agent session ID, and with it the channel's non-isolated jobs (see "Non-isolated jobs"). Isolated jobs are untouched.
 - Startup purge (`src/index.js::purgeInvalidChannels`) drops entries whose Discord channel no longer exists. Runs after `login()` and after `reconcileRemotes()` (which needs to stop any remote agent first, before the entry vanishes). Strict: only `DiscordAPIError code 10003` (Unknown Channel) triggers removal; transient errors are logged and skipped. Removing the entry takes the channel's non-isolated jobs with it, through the same observer as a reset; its isolated jobs are intentionally kept — their lifecycle is managed by hand.
 

@@ -178,7 +178,7 @@ Details:
 |---------|-------------|
 | `/new` | Reset the active agent session of the current channel (new conversation) |
 | `/stop` | Stop the prompt currently running in this channel — the conversation survives, and anything queued behind it starts next |
-| `/status` | Show the channel's mode, agent and runtime status |
+| `/status` | Show the channel's mode, agent, conversation size and cost, and runtime status |
 | `/usage` | Show Claude and Codex account usage for the current mode |
 | `/version` | Show the Claude and Codex CLI versions (one line per agent, plus a warning if the sandbox disagrees) |
 | `/skills` | List the skills of both agents in both environments (admin + sandbox) |

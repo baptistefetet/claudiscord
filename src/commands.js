@@ -382,13 +382,35 @@ async function handleSandbox({ channel, channelId, mode }) {
 	return true;
 }
 
+/**
+ * How big the conversation has grown and what it has cost, from what the last
+ * turn reported. Empty before the first turn, and after `/new` — there is no
+ * conversation to measure.
+ */
+function conversationLine(channelId) {
+	const usage = sessions.getUsage(channelId);
+	if (!usage) return '';
+	// Rounding to thousands turns a first short turn into "0k"; below that,
+	// show the count.
+	const tokens = n => (n < 1000 ? `${n}` : `${Math.round(n / 1000)}k`);
+	const parts = [];
+	if (usage.context) {
+		parts.push(usage.window
+			? `${tokens(usage.context)} / ${tokens(usage.window)} tokens (${Math.round((usage.context / usage.window) * 100)}%)`
+			: `${tokens(usage.context)} tokens`);
+	}
+	// Two decimals read as $0.00 for a cheap conversation, which looks free.
+	if (usage.costUsd) parts.push(`$${usage.costUsd < 0.01 ? usage.costUsd.toFixed(4) : usage.costUsd.toFixed(2)}`);
+	return parts.length ? `\nConversation: ${parts.join(' · ')}` : '';
+}
+
 async function handleStatus({ channel, channelId, mode, agent, remoteId }) {
 	const dockerNote = DOCKER_AVAILABLE ? '' : '\nSandbox unavailable on this host.';
 	const remoteLine = remoteId ? `\nRemote: \`${remoteId}\`` : '';
 	const codexLine = isCodexAvailable(mode) ? '' : `\nCodex unavailable in **${mode}** mode.`;
 	const voiceLine = getActiveVoiceChannelId() === channelId ? '\nVoice assistant: **active**' : '';
 	const autojoinLine = sessions.getAutojoin(channelId) ? '\nAutojoin: **on**' : '';
-	await channel.send(`Channel mode: **${mode}**\nAgent: **${agent}**${voiceLine}${autojoinLine}${remoteLine}${dockerNote}${codexLine}`);
+	await channel.send(`Channel mode: **${mode}**\nAgent: **${agent}**${conversationLine(channelId)}${voiceLine}${autojoinLine}${remoteLine}${dockerNote}${codexLine}`);
 	return true;
 }
 
@@ -518,7 +540,7 @@ async function handleRestart({ channel }) {
 const COMMANDS = [
 	{ name: '/new', help: 'Reset session for this channel (new conversation)', handler: handleNew },
 	{ name: '/stop', help: 'Stop the prompt currently running in this channel', handler: handleStop },
-	{ name: '/status', help: 'Show current mode, agent and runtime status', remoteAllowed: true, handler: handleStatus },
+	{ name: '/status', help: 'Show mode, agent, conversation size and cost, runtime status', remoteAllowed: true, handler: handleStatus },
 	{ name: '/usage', help: 'Show Claude and Codex usage for the current mode', remoteAllowed: true, handler: handleUsage },
 	{ name: '/version', help: 'Show the Claude and Codex CLI versions', remoteAllowed: true, handler: handleVersion },
 	{ name: '/skills', help: 'List each agent\'s skills (admin + sandbox)', remoteAllowed: true, handler: handleSkills },
