@@ -12,6 +12,7 @@ Works in both DMs and private guild channels. Each channel is an independent con
 - **Channel topic = mini CLAUDE.md** — renaming or rewriting the topic immediately changes the agent's context
 - **Two execution modes per channel** — `admin` runs the selected agent on the host, `sandbox` runs it in the Docker container
 - **Two model tiers per agent** — your prompts always run the agent's high model (Claude `opus`, Codex `gpt-5.6-sol`), scheduled jobs always run its medium one (`sonnet` / `gpt-5.6-terra`); reasoning effort is `xhigh` everywhere. Nothing to pick, nothing to configure
+- **Live progress** — while a prompt runs, a single message shows the tool the agent is using or what it is saying, updated in place and removed once the answer arrives. Scheduled jobs and voice turns don't stream
 - **Per-channel queues** — prompts stay FIFO within a channel or thread while different channels can run concurrently
 - **Single-user authorization** — only the Discord user whose ID is in `AUTHORIZED_USER_ID` can talk to the bot; everyone else is silently dropped
 - **Optional Docker** — sandbox mode is disabled gracefully if Docker isn't installed; admin mode still works

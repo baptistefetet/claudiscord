@@ -9,7 +9,7 @@ const sessions = require('./sessions');
 const { ensureImage, DOCKER_AVAILABLE } = require('./container');
 const { executePrompt } = require('./executor');
 const { isBusy } = require('./queue');
-const { createClient, login, sendChunked, startTypingIndicator, resolveChannelName } = require('./discord');
+const { createClient, login, sendChunked, startTypingIndicator, startProgressReporter, resolveChannelName } = require('./discord');
 const { handleCommand, dispatchSlashCommand, getRegisteredCommands } = require('./commands');
 const { reconcileRemotes } = require('./remote');
 const { transcribeVoiceMessage } = require('./stt');
@@ -195,12 +195,17 @@ client.on(Events.MessageCreate, async message => {
 	}
 
 	let stopTyping = null;
+	const progress = startProgressReporter(channel);
 	try {
 		stopTyping = startTypingIndicator(channel);
-		const result = await executePrompt(agent, mode, prompt, promptOptions);
+		const result = await executePrompt(agent, mode, prompt, { ...promptOptions, onProgress: progress.update });
 
 		stopTyping();
 		stopTyping = null;
+		// Before the answer, not in the finally: the progress line has nothing
+		// left to report, and clearing it afterwards would leave it standing next
+		// to the reply it was describing.
+		progress.clear();
 
 		const agentLabel = agent === 'codex' ? 'Codex' : 'Claude Code';
 		const responseText = result.result || `Empty response from ${agentLabel}.`;
@@ -230,6 +235,7 @@ client.on(Events.MessageCreate, async message => {
 		}
 		if (errMsg) await channel.send(errMsg).catch(e => log.error('Failed to send error message:', e));
 	} finally {
+		progress.clear();
 		if (!isBusy(channelId)) waitingNotice.delete(channelId);
 		scheduler.reloadJobs(); // the agent may have edited a jobs file, even on error
 	}

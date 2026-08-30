@@ -43,9 +43,9 @@ src/
   config.js           # .env loading + paths + constants
   prompts.js          # Shared system prompt builder (agent-agnostic — no per-agent sections)
   logger.js           # stdout/stderr logging (journald-friendly)
-  discord.js          # Client, sendToChannel, sendChunked (splitMessage now private), typing indicator
+  discord.js          # Client, sendToChannel, sendChunked (splitMessage now private), typing indicator, startProgressReporter
   queue.js            # Per-channel FIFOs + global maintenance gate + the run currently executing per key (/stop)
-  spawn.js            # spawnCollect: generic subprocess runner (unbounded, no timeout, cancellable); probeVersion: `--version` probe
+  spawn.js            # spawnCollect: generic subprocess runner (unbounded, no timeout, cancellable, line-streaming via onLine); probeVersion: `--version` probe
   claude.js           # Claude exec/login (host + sandbox), stream-json parse, OAuth usage (getClaudeUsage), CLI version (getClaudeVersion)
   codex.js            # Codex exec/login (host + sandbox), JSONL parse, account usage (getCodexUsage), CLI version (getCodexVersion)
   container.js        # Docker: image/container, sandbox env factories (sandboxClaudeEnv/sandboxCodexEnv)
@@ -171,6 +171,17 @@ The user can drop files/photos into a channel (with no text). An upload does NOT
 
 `src/prompts.js` builds the system prompt from `{ channelAgent, mode, channelName, threadName, channelTopic, isDM, botName, userName }`. The prompt is agent-agnostic — it always includes channel context, uploads, scheduling and Discord response rules, with no per-agent conditional sections. `channelAgent` only feeds the "Current channel agent" context line.
 
+## Progress relay
+
+An interactive prompt shows what the agent is doing while it runs: `spawn.js` hands each complete stdout line to `onLine`, each agent turns it into `{ icon, summary, detail? }` (`claudeProgress` / `codexProgress`), and `discord.js` assembles and shortens that into one message kept updated with the latest activity, deleted when the answer is ready. The agents describe, the display formats — how much fits is a Discord constraint, not an agent one.
+
+- Both CLIs emit one JSON event per line, which is what makes this possible without a streaming protocol.
+- Edits are throttled to `PROGRESS_EDIT_MS` and fire-and-forget: a rate-limited or failed progress line must never disturb the run it describes, and neither must an exception thrown by the callback (`spawnCollect` catches those).
+- Only the newest line is kept, so the display summarizes rather than accumulates.
+- A tool call is shown as a sentence plus its target (`TOOL_ACTIVITY` in `claude.js`), not as the raw tool name: `Grep: startProgress` means nothing to a reader who does not know the tool set. An agent's own narration wins over the tool call it sits next to — the sentence says why, the tool only says what.
+- Progress deliberately shows the narration `finalTextFromEvents` strips from the final answer: in a transient line, "let me check the logs" is the useful part, and it is gone once the run ends.
+- Jobs and voice turns pass no `onProgress` — nobody is watching a job, and a voice turn is spoken.
+
 ## Execution queues
 
 Interactive prompts, voice turns and scheduled jobs go through `src/queue.js::runQueued(channelId, ...)`. A channel or thread stays strictly FIFO, including its job runs, while distinct IDs may execute without a global concurrency limit. `src/index.js` sends the one-shot "⏳ Waiting for previous prompt..." notice only when that same channel is busy. Rare operations (`/login`, `!shell`, `/upgrade`, `/remote` transitions) use `runMaintenance`: they are refused while any execution is pending, then briefly stop new queue work while they run. The single sandbox container accepts concurrent `docker exec` processes, so sandbox channels share its 1 CPU, home and filesystem. SQLite arbitrates concurrent jobs writes.
@@ -278,7 +289,7 @@ bash scripts/rebuild-sandbox.sh
 - Optional host integration, detected at startup from `CODEX_BIN` (default `codex`); the sandbox runs that same host install through a read-only mount
 - `codex exec --yolo --skip-git-repo-check --json -c model_reasoning_effort="xhigh" -m <model> -` for a new conversation
 - `codex exec resume` uses the same flags plus `<uuid>` before the trailing `-` for subsequent prompts. `-m` and `-c` belong to the OPTIONS block, which precedes `<SESSION_ID>` in both forms
-- Prompts are passed through stdin; progress is not relayed to Discord
+- Prompts are passed through stdin
 - `thread.started.thread_id` supplies the session UUID and the last completed `agent_message` supplies the response
 - The shared Discord prompt is injected through the `developer_instructions` config override
 - Model and reasoning effort are both forced by claudiscord (`AGENT_MODELS` / `REASONING_EFFORT` in `config.js`), overriding `config.toml`; only authentication remains owned by the Codex CLI

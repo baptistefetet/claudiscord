@@ -209,6 +209,46 @@ function errorTextFromResultEvent(resultEvent) {
 		: (resultEvent.subtype || null);
 }
 
+// What each tool is doing, in words, plus which of its inputs identifies the
+// target. A raw `Grep: startProgress` says nothing to someone who does not know
+// the tool names.
+const TOOL_ACTIVITY = {
+	Bash: ['Running a command', i => i.command],
+	Read: ['Reading a file', i => i.file_path],
+	Write: ['Writing a file', i => i.file_path],
+	Edit: ['Editing a file', i => i.file_path],
+	Glob: ['Finding files', i => i.pattern],
+	Grep: ['Searching the code', i => i.pattern],
+	WebSearch: ['Searching the web', i => i.query],
+	WebFetch: ['Reading a web page', i => i.url],
+	Task: ['Running a subagent', i => i.description],
+};
+
+function toolActivity(block) {
+	const [summary, pick] = TOOL_ACTIVITY[block.name] || [];
+	if (!summary) return { icon: '🔧', summary: block.name };
+	return { icon: '🔧', summary, detail: pick(block.input || {}) };
+}
+
+/**
+ * What a stream-json event is doing, as `{ icon, summary, detail? }`, or null
+ * for the events with nothing to show. Assembling and shortening the line is
+ * the display's job — how much fits is a Discord constraint, not an agent one.
+ */
+function claudeProgress(line) {
+	let event;
+	try { event = JSON.parse(line); } catch { return null; }
+	if (event?.type !== 'assistant' || !Array.isArray(event.message?.content)) return null;
+	// Narration wins over the tool call it sits next to: the agent's own sentence
+	// says why, the tool only says what.
+	let tool = null;
+	for (const block of event.message.content) {
+		if (block?.type === 'text' && block.text?.trim()) return { icon: '💬', summary: block.text };
+		if (block?.type === 'tool_use' && !tool) tool = block;
+	}
+	return tool ? toolActivity(tool) : null;
+}
+
 /**
  * Collect the user-visible final answer from the event stream.
  *
@@ -306,6 +346,7 @@ async function executeClaude(prompt, options = {}, env) {
 		cancelKey = null,
 		timeoutMs = 0,
 		stopInfo,
+		onProgress = null,
 	} = options;
 
 	if (!systemPrompt) {
@@ -322,7 +363,10 @@ async function executeClaude(prompt, options = {}, env) {
 
 	let result;
 	try {
-		result = await env.spawn(args, { cancelKey, timeoutMs, stopInfo });
+		result = await env.spawn(args, {
+			cancelKey, timeoutMs, stopInfo,
+			onLine: onProgress ? line => onProgress(claudeProgress(line)) : null,
+		});
 	} catch (err) {
 		err.sessionId = sessionIdFromEvents(parseStreamJsonEvents(err.stdout));
 		throw err;

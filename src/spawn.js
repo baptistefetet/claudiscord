@@ -17,7 +17,7 @@ const VERSION_TIMEOUT_MS = 10_000;
  * them. A run past its deadline rejects with code TIMEOUT rather than
  * CANCELLED, so a failure is not read as a decision.
  *
- * `cancelKey` (a channelId) publishes the run to `runs.js` so `/stop` can reach
+ * `cancelKey` (a channelId) publishes the run to `queue.js` so `/stop` can reach
  * it; a cancelled run rejects with code CANCELLED, carrying the output produced
  * so far so the caller can still recover the session id from it.
  *
@@ -42,6 +42,9 @@ function spawnCollect(cmd, args, options = {}) {
 		// defaults must not be the only wording available: someone who started no
 		// prompt would be told their prompt was stopped.
 		stopInfo = {},
+		// Called with each complete stdout line as it arrives. Both agents emit
+		// one JSON event per line, which is what makes progress relayable at all.
+		onLine = null,
 	} = options;
 	const stopLabel = stopInfo.label || 'the current prompt';
 	const stopNote = stopInfo.note || 'the conversation is intact';
@@ -122,10 +125,38 @@ function spawnCollect(cmd, args, options = {}) {
 			markSettled();
 		};
 
-		child.stdout.on('data', chunk => { stdout += chunk; });
+		// Decoded by the stream, not by coercing each Buffer: a multi-byte
+		// character split across two chunks would otherwise decode as two
+		// replacement characters, in the collected stdout as much as in onLine.
+		child.stdout.setEncoding('utf8');
+		child.stderr.setEncoding('utf8');
+
+		// A caller's progress line must never take the run down with it.
+		const emitLine = (line) => {
+			try { onLine(line); } catch (err) { log.warn(`${label} onLine failed:`, err.message); }
+		};
+
+		let pending = '';
+		child.stdout.on('data', chunk => {
+			stdout += chunk;
+			if (!onLine) return;
+			pending += chunk;
+			// Cut at the last newline instead of splitting the whole accumulator on
+			// every chunk: `pending` then never grows past a single line.
+			const cut = pending.lastIndexOf('\n');
+			if (cut === -1) return;
+			const complete = pending.slice(0, cut);
+			pending = pending.slice(cut + 1);
+			for (const line of complete.split('\n')) {
+				if (line.trim()) emitLine(line);
+			}
+		});
 		child.stderr.on('data', chunk => { stderr += chunk; });
 
 		child.on('close', (code) => {
+			// A last event without its trailing newline is still an event.
+			if (onLine && pending.trim()) emitLine(pending);
+			pending = '';
 			settle();
 			if (stderr) log.warn(`${label} stderr:`, stderr.slice(0, 500));
 			if (run.cancelled) {

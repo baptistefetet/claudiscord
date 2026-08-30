@@ -72,6 +72,12 @@ const JOB_TIMEOUT_MS = 3_600_000;
 const STOP_REPORT_TIMEOUT_MS = 15_000;
 const DISCORD_MAX_MSG_LENGTH = 2000;
 const TYPING_INTERVAL_MS = 8000;
+// Minimum delay between two edits of the progress message. Discord rate-limits
+// edits per channel, and a line that changes faster than this is unreadable.
+const PROGRESS_EDIT_MS = 2000;
+// Longest activity line shown. Well under the message limit, and a tool input is
+// rarely informative past that.
+const PROGRESS_MAX = 160;
 
 // Voice assistant tuning: silence that ends an utterance, and inactivity
 // before the bot leaves the voice channel on its own.
@@ -126,6 +132,8 @@ module.exports = {
 	KILL_GRACE_MS,
 	DISCORD_MAX_MSG_LENGTH,
 	TYPING_INTERVAL_MS,
+	PROGRESS_EDIT_MS,
+	PROGRESS_MAX,
 	DOCKER_IMAGE,
 	CONTAINER_CPUS,
 	VALID_AGENTS,

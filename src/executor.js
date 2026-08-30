@@ -30,6 +30,7 @@ function executePrompt(agent, mode, prompt, options = {}) {
 		tier = 'high',
 		requireSession = false,
 		stopInfo,
+		onProgress,
 		...rest
 	} = options;
 	return runQueued(queueKey, async () => {
@@ -73,6 +74,8 @@ function executePrompt(agent, mode, prompt, options = {}) {
 			// How `/stop` names this run. Only a caller nobody is watching needs to
 			// say; an interactive prompt takes spawn.js's default.
 			...(stopInfo ? { stopInfo } : {}),
+			// Interactive prompts only: a job has nobody watching it stream.
+			...(onProgress ? { onProgress } : {}),
 		};
 		const sessionContextIsCurrent = () => (
 			!channelId

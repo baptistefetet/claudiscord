@@ -195,6 +195,30 @@ function parseCodexOutput(stdout) {
 	return { result, sessionId };
 }
 
+/**
+ * What a JSONL event is doing, as `{ icon, summary, detail? }`, or null when
+ * there is nothing to show. `item.started` is used for commands so the line
+ * appears while the command runs rather than once it is over.
+ */
+function codexProgress(line) {
+	let event;
+	try { event = JSON.parse(line); } catch { return null; }
+	const item = event?.item;
+	if (!item) return null;
+	if (item.type === 'command_execution' && event.type === 'item.started') {
+		// Codex wraps every command in `bash -lc '…'`; the wrapper and the quotes
+		// it adds are noise.
+		const command = String(item.command || '')
+			.replace(/^\/?(?:bin\/)?(?:ba)?sh\s+-l?c\s+/, '')
+			.replace(/^(['"])([\s\S]*)\1$/, '$2');
+		return { icon: '🔧', summary: 'Running a command', detail: command };
+	}
+	if (item.type === 'agent_message' && event.type === 'item.completed' && item.text?.trim()) {
+		return { icon: '💬', summary: item.text };
+	}
+	return null;
+}
+
 function isCodexAuthError(stdout = '', stderr = '') {
 	const output = `${stderr}\n${stdout}`.toLowerCase();
 	return output.includes('not logged in')
@@ -405,6 +429,7 @@ async function executeCodex(prompt, options = {}, env) {
 		cancelKey = null,
 		timeoutMs = 0,
 		stopInfo,
+		onProgress = null,
 	} = options;
 
 	if (env.precheck) env.precheck();
@@ -419,7 +444,10 @@ async function executeCodex(prompt, options = {}, env) {
 	try {
 		execution = await env.spawn(
 			buildCodexArgs({ sessionId, systemPrompt, model }),
-			{ input: prompt, cancelKey, timeoutMs, stopInfo },
+			{
+				input: prompt, cancelKey, timeoutMs, stopInfo,
+				onLine: onProgress ? line => onProgress(codexProgress(line)) : null,
+			},
 		);
 	} catch (err) {
 		err.sessionId = parseCodexOutput(err.stdout).sessionId;
