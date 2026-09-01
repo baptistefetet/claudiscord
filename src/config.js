@@ -79,6 +79,18 @@ const PROGRESS_EDIT_MS = 2000;
 // rarely informative past that.
 const PROGRESS_MAX = 160;
 
+// Messages one whole `/diff` report may span — summary and truncation notice
+// included. A safety net against a runaway working tree, not a target: a normal
+// review has to fit whole, since half a file is not worth reading. Discord
+// throttles a burst this size, so the report lands over several seconds.
+const DIFF_MAX_MESSAGES = 30;
+// How long `/diff` waits for the repository path it asked for, before dropping
+// the question rather than swallowing the channel's next ordinary message.
+const DIFF_PATH_TIMEOUT_MS = 300_000;
+// Longest diff kept for a single file, before paging. Bounds the damage of a
+// generated or minified file that is not gitignored.
+const DIFF_MAX_FILE_CHARS = 20_000;
+
 // Voice assistant tuning: silence that ends an utterance, and inactivity
 // before the bot leaves the voice channel on its own.
 const VOICE_SILENCE_MS = 900;
@@ -134,6 +146,9 @@ module.exports = {
 	TYPING_INTERVAL_MS,
 	PROGRESS_EDIT_MS,
 	PROGRESS_MAX,
+	DIFF_MAX_MESSAGES,
+	DIFF_MAX_FILE_CHARS,
+	DIFF_PATH_TIMEOUT_MS,
 	DOCKER_IMAGE,
 	CONTAINER_CPUS,
 	VALID_AGENTS,

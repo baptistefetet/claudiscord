@@ -16,6 +16,7 @@ const log = require('./logger');
  *       "sessionId": "<uuid>",
  *       "remoteId": null | "<agentId>",
  *       "autojoin": true|false,
+ *       "depotPath": null | "<git repository root>",
  *       "lastName": "..."
  *     }
  *   }
@@ -115,6 +116,7 @@ function load() {
 					autojoin: entry.autojoin === true,
 					lastName: typeof entry.lastName === 'string' ? entry.lastName : null,
 					usage: sanitizeUsage(entry.usage),
+					depotPath: typeof entry.depotPath === 'string' ? entry.depotPath : null,
 				});
 			}
 		}
@@ -259,6 +261,24 @@ function getUsage(channelId) {
 	return channels.get(channelId)?.usage || null;
 }
 
+/**
+ * The git repository `/diff` reports on for this channel. Channel configuration,
+ * not conversation state: `/new` and a mode or agent switch leave it alone. It is
+ * only a repository root — the agent still runs from its environment's home.
+ */
+function getDepotPath(channelId) {
+	return channels.get(channelId)?.depotPath || null;
+}
+
+function setDepotPath(channelId, depotPath) {
+	const entry = ensureChannel(channelId);
+	const next = typeof depotPath === 'string' && depotPath ? depotPath : null;
+	if (entry.depotPath === next) return;
+	entry.depotPath = next;
+	persist();
+	log.info(`Channel ${channelId} depot path set to: ${next}`);
+}
+
 function setLastName(channelId, name) {
 	const entry = ensureChannel(channelId);
 	if (entry.lastName === name) return;
@@ -339,6 +359,8 @@ module.exports = {
 	setSessionId,
 	setUsage,
 	getUsage,
+	getDepotPath,
+	setDepotPath,
 	setLastName,
 	clearChannel,
 	listChannelIds,

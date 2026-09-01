@@ -30,6 +30,7 @@ const {
 	clearAutojoinSuppression,
 } = require('./voice');
 const { getClient, resolveChannelName, sendChunked } = require('./discord');
+const { handleDiff, finishPendingDepotPath, cancelPendingDepotPath } = require('./diff');
 const { listSkills } = require('./skills');
 const { loadAllJobs } = require('./jobs-store');
 const scheduler = require('./scheduler');
@@ -410,7 +411,9 @@ async function handleStatus({ channel, channelId, mode, agent, remoteId }) {
 	const codexLine = isCodexAvailable(mode) ? '' : `\nCodex unavailable in **${mode}** mode.`;
 	const voiceLine = getActiveVoiceChannelId() === channelId ? '\nVoice assistant: **active**' : '';
 	const autojoinLine = sessions.getAutojoin(channelId) ? '\nAutojoin: **on**' : '';
-	await channel.send(`Channel mode: **${mode}**\nAgent: **${agent}**${conversationLine(channelId)}${voiceLine}${autojoinLine}${remoteLine}${dockerNote}${codexLine}`);
+	const depotPath = sessions.getDepotPath(channelId);
+	const depotLine = depotPath ? `\nRepository: \`${depotPath}\`` : '';
+	await channel.send(`Channel mode: **${mode}**\nAgent: **${agent}**${conversationLine(channelId)}${depotLine}${voiceLine}${autojoinLine}${remoteLine}${dockerNote}${codexLine}`);
 	return true;
 }
 
@@ -546,6 +549,7 @@ const COMMANDS = [
 	{ name: '/skills', help: 'List each agent\'s skills (admin + sandbox)', remoteAllowed: true, handler: handleSkills },
 	{ name: '/login', help: 'Refresh current agent login via a Discord-friendly link', remoteAllowed: true, handler: handleLogin },
 	{ name: '/jobs', help: 'List all scheduled jobs (admin + sandbox)', remoteAllowed: true, handler: handleJobs },
+	{ name: '/diff', help: 'Show the uncommitted changes of this channel\'s repository', remoteAllowed: true, modes: ['admin'], modeError: '`/diff` is only available in admin mode: it reads a repository on the host.', handler: handleDiff },
 	{ name: '/admin', help: 'Switch this channel to admin mode (host)', handler: handleAdmin },
 	{ name: '/sandbox', help: 'Switch this channel to sandbox mode (container)', handler: handleSandbox },
 	{ name: '/claude', help: 'Use Claude for this channel', handler: handleAgent },
@@ -573,6 +577,10 @@ async function handleCommand(message) {
 	const agent = sessions.getAgent(channelId);
 
 	if (await finishPendingLogin(channel, content)) return true;
+	// Before the remote gate: answering a question the bot asked is not a command,
+	// and `isCommand` is what tells a repository path from a slash command, since
+	// both start with a slash.
+	if (await finishPendingDepotPath(channel, content, isCommand)) return true;
 
 	// Remote-mode gating (shared with the slash path via remoteGateHint): while the
 	// channel is driven by the Claude mobile app, only REMOTE_ALLOWED commands are
@@ -597,6 +605,11 @@ async function handleCommand(message) {
 	// runCommand). An unknown command → runCommand returns false → the message is
 	// handled as a normal prompt.
 	return runCommand({ channel, channelId, name: content, mode, agent, remoteId, message });
+}
+
+/** Whether `name` is a dispatchable command, `!shell` included. */
+function isCommand(name) {
+	return name.startsWith('!') || COMMANDS.some(c => !c.helpOnly && c.name === name);
 }
 
 /**
@@ -636,6 +649,9 @@ async function runCommand({ channel, channelId, name, mode, agent, remoteId, mes
  * included). Same gating as handleCommand, but keyed on the name.
  */
 async function dispatchSlashCommand({ channel, channelId, name }) {
+	// A native command never passes through handleCommand, so a `/diff` question
+	// left open would still be waiting and would swallow the next plain message.
+	if (name !== '/diff') cancelPendingDepotPath(channelId);
 	const mode = sessions.getMode(channelId);
 	const agent = sessions.getAgent(channelId);
 	const remoteId = sessions.getRemoteId(channelId);

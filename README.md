@@ -26,6 +26,11 @@ A single-user Discord bot that drives [Claude Code](https://docs.anthropic.com/e
 - **Jobs written by asking** — "check the disk every morning and only tell me if it's above 90%" creates the job; the agent owns the schedule, no config file to edit
 - **Delivered where they belong** — each job notifies its channel, and can stay silent when it has nothing to report
 
+**Reviewing changes**
+
+- **`/diff`** — the uncommitted work of the channel's repository, read straight in Discord: one coloured `diff` block per file, split on line boundaries so a `+` or `-` never gets cut off, with the hunk header repeated on every continuation. Nothing is uploaded anywhere and nothing has to be committed first
+- **One repository per channel** — asked for the first time you run `/diff`, then remembered; `/status` shows it
+
 **Voice**
 
 - **Voice messages** — the mic button is transcribed via Groq Whisper and handed to the channel's agent
@@ -184,6 +189,7 @@ Details:
 | `/skills` | List the skills of both agents in both environments (admin + sandbox) |
 | `/login` | Refresh the current agent login in the current mode via a Discord-friendly browser flow |
 | `/jobs` | List all scheduled jobs (admin first, then sandbox) |
+| `/diff` | Admin only — show the uncommitted changes of the channel's repository, one paginated `diff` block per file. Asks for the repository path the first time, like `/login` asks for its code |
 | `/admin` | Switch the current channel to admin mode (host) |
 | `/sandbox` | Switch the current channel to sandbox mode (container) |
 | `/claude` | Use Claude for this channel (default) |
@@ -202,7 +208,7 @@ Some turns want the full Claude app rather than a chat bubble: permission prompt
 - `/remote` starts a backgrounded Claude agent for this channel and stops answering in Discord. The session appears in the app under the channel's name, so several channels stay distinct.
 - `/remote` again stops it and returns the channel to Discord.
 - **Going out keeps the history, coming back does not.** The Discord conversation is copied into the app session, but the return trip starts fresh — the app manages its own session id and claudiscord does not adopt it.
-- While remote, the channel accepts only `/remote`, `/status`, `/jobs`, `/usage`, `/version`, `/skills` and `/login`. Anything else, voice messages included, is refused rather than run, so two processes never share one session. Uploads are still saved.
+- While remote, the channel accepts only `/remote`, `/status`, `/jobs`, `/diff`, `/usage`, `/version`, `/skills` and `/login`. Anything else, voice messages included, is refused rather than run, so two processes never share one session. Uploads are still saved.
 - Claude only: a Codex channel must `/claude` first. In sandbox mode the container needs its own Claude login (`/sandbox`, `/claude`, `/login`) before `/remote` works.
 - Isolated jobs keep firing during a remote session. Non-isolated ones do not survive it: `/remote` resets the channel session, and a job bound to that exact conversation is deleted with it, like on `/new`.
 

@@ -72,6 +72,62 @@ async function sendChunked(channel, text) {
 }
 
 /**
+ * Lay one file's diff out as ready-to-send messages, each a self-contained
+ * ```diff block — Discord colours a line from its first character, so `+` and
+ * `-` must stay in front.
+ *
+ * Deliberately not splitMessage: that one falls back to cutting mid-line, and
+ * half a diff line loses its marker, then renders as unchanged context and
+ * misstates the change. Here a line is the atom. Continuation pages repeat the
+ * last `@@` header, without which page 2 says nothing about where it starts.
+ */
+function formatDiffPages(rawTitle, diff) {
+	const title = rawTitle.length > 120 ? `${rawTitle.slice(0, 119)}…` : rawTitle;
+	// Margin below the hard cap, as in sendChunked, plus what wraps every page.
+	const overhead = title.length + ' [999/999]'.length + '```diff\n\n```'.length;
+	const budget = DISCORD_MAX_MSG_LENGTH - 100 - overhead;
+	const pages = [];
+	let current = [];
+	let size = 0;
+	let hunk = '';
+
+	const flush = () => {
+		if (current.length) pages.push(current.join('\n'));
+		current = [];
+		size = 0;
+	};
+
+	// A ``` inside the diff would close the block early and spill the rest as
+	// plain text; a zero-width space between the backticks keeps it inert.
+	for (const raw of diff.replace(/```/g, '`​``').split('\n')) {
+		const line = raw.length > budget ? `${raw.slice(0, budget - 1)}…` : raw;
+		if (size + line.length + 1 > budget && current.length) {
+			// A hunk header that lands at the very end of a page heads content
+			// that is not on it. It belongs to the next page, and leaving it here
+			// would print it twice in a row.
+			if (current[current.length - 1] === hunk) current.pop();
+			flush();
+			// The repeated header is itself content: re-emitting it blind is how a
+			// page ends up over the cap, so it only goes in when both still fit.
+			const repeat = hunk.length > 120 ? `${hunk.slice(0, 119)}…` : hunk;
+			if (repeat && !line.startsWith('@@') && repeat.length + line.length + 2 <= budget) {
+				current.push(repeat);
+				size = repeat.length + 1;
+			}
+		}
+		if (line.startsWith('@@')) hunk = line;
+		current.push(line);
+		size += line.length + 1;
+	}
+	flush();
+
+	return pages.map((page, i) => {
+		const counter = pages.length > 1 ? ` [${i + 1}/${pages.length}]` : '';
+		return `${title}${counter}\n\`\`\`diff\n${page}\n\`\`\``;
+	});
+}
+
+/**
  * Same as sendChunked, but resolves the channel by id first (used where only an
  * id is known, e.g. scheduled-job notifications).
  */
@@ -165,4 +221,4 @@ function startTypingIndicator(channel) {
 	return () => clearInterval(interval);
 }
 
-module.exports = { createClient, getClient, login, sendChunked, sendToChannel, startTypingIndicator, startProgressReporter, resolveChannelName };
+module.exports = { createClient, getClient, login, sendChunked, sendToChannel, formatDiffPages, startTypingIndicator, startProgressReporter, resolveChannelName };

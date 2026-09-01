@@ -43,7 +43,7 @@ src/
   config.js           # .env loading + paths + constants
   prompts.js          # Shared system prompt builder (agent-agnostic — no per-agent sections)
   logger.js           # stdout/stderr logging (journald-friendly)
-  discord.js          # Client, sendToChannel, sendChunked (splitMessage now private), typing indicator, startProgressReporter
+  discord.js          # Client, sendToChannel, sendChunked (splitMessage now private), formatDiffPages (line-atomic diff paging for /diff), typing indicator, startProgressReporter
   queue.js            # Per-channel FIFOs + global maintenance gate + the run currently executing per key (/stop)
   spawn.js            # spawnCollect: generic subprocess runner (unbounded, no timeout, cancellable, line-streaming via onLine); probeVersion: `--version` probe
   claude.js           # Claude exec/login (host + sandbox), stream-json parse, OAuth usage (getClaudeUsage), CLI version (getClaudeVersion)
@@ -51,10 +51,11 @@ src/
   container.js        # Docker: image/container, sandbox env factories (sandboxClaudeEnv/sandboxCodexEnv)
   executor.js         # executePrompt(agent, mode) → resolve tier→model → pick env (host const / sandbox factory) → executeClaude|executeCodex; queue
   jobs-store.js       # SQLite jobs store via sqlite3 CLI: loadAllJobs (admin+sandbox), recordJobRun, deleteJob, deleteNonIsolatedJobs, ensureDb, jobKey
-  sessions.js         # { channels: { channelId -> { mode, agent, sessionId, usage, ... } } }; onSessionCleared observer
+  sessions.js         # { channels: { channelId -> { mode, agent, sessionId, usage, depotPath, ... } } }; onSessionCleared observer
   scheduler.js        # minute-resolution ticker, reloadJobs, executeJob, handleSessionCleared, per-key lock
-  commands.js         # COMMANDS registry → dispatch + native slash metadata; /new /stop /status /usage /version /skills /login /jobs /admin /sandbox /claude /codex /remote /voice /upgrade /restart !shell; transport-neutral dispatchSlashCommand + getRegisteredCommands (Discord plumbing stays in index.js); /login and !shell handlers live in login.js / shell.js
+  commands.js         # COMMANDS registry → dispatch + native slash metadata; /new /stop /status /usage /version /skills /login /jobs /diff /admin /sandbox /claude /codex /remote /voice /upgrade /restart !shell; transport-neutral dispatchSlashCommand + getRegisteredCommands (Discord plumbing stays in index.js); /login and !shell handlers live in login.js / shell.js
   login.js            # /login flow state machine: pending login, URL relay, Discord code input, timeouts
+  diff.js             # /diff: git collection + per-file split + report assembly; asks for the channel's repository path on first use (sessions.depotPath)
   shell.js            # !shell: executeShell (host/container, SIGTERM→SIGKILL) + gating, output truncation
   skills.js           # listSkills(agent, mode): skill names read from <home>/.claude|.codex/skills
   remote.js           # /remote helpers: startRemote, stopRemote, reconcileRemotes
@@ -389,7 +390,7 @@ A job's output is sent to its `channel_id`, unless it ends with `NOTIFY_NONE` �
 - Implementation: `src/remote.js` spawns `claude --bg [--resume <channelSessionId>] --remote-control <channelName>` (host for admin, `docker exec` for sandbox). The CLI prints `backgrounded · <agentId>` on stdout — we parse the 8-hex agent ID and persist it as `remoteId` in the sessions file.
 - Asymmetric continuity: `--resume` makes `claude --bg` copy the existing Discord conversation into the bg session's JSONL, so the mobile user picks up where Discord left off. But `--bg` manages its own UUID and we don't reconcile back — `setRemoteId` wipes the channel's `sessionId`, so the next Discord message after `/remote` stop starts a fresh session. Going Discord → mobile keeps history; coming back Discord → fresh.
 - Naming: the mobile app shows each session under `<channelName>` (DM = username), so multiple channels can run in parallel and stay discoverable.
-- Gating (`src/commands.js`): while `remoteId` is set, only `/remote`, `/status`, `/jobs`, `/usage`, `/version`, `/skills`, `/login` are accepted in that channel. Every other input (plain text, `!shell`, other slash commands) returns an invalidation hint and does **not** spawn `claude -p` — this prevents two concurrent processes touching the same session. Voice messages are also dropped *before* Groq STT (`src/index.js`), so a vocal in remote mode neither pays for transcription nor leaks the `🎙️ <transcript>` echo.
+- Gating (`src/commands.js`): while `remoteId` is set, only `/remote`, `/status`, `/jobs`, `/diff`, `/usage`, `/version`, `/skills`, `/login` are accepted in that channel. Every other input (plain text, `!shell`, other slash commands) returns an invalidation hint and does **not** spawn `claude -p` — this prevents two concurrent processes touching the same session. Voice messages are also dropped *before* Groq STT (`src/index.js`), so a vocal in remote mode neither pays for transcription nor leaks the `🎙️ <transcript>` echo.
 - Sandbox `!shell` lockout: while *any* channel holds a sandbox remote, sandbox `!shell` is refused (`hasActiveSandboxRemote()` check in `commands.js`). Reason: `executeShell`'s timeout pkills by command pattern inside the container, which can match the live remote daemon. Prompts and scheduled jobs are unaffected — they run concurrently with a remote by design.
 - Stop: `/remote` while active runs `claude stop <agentId>` (host or container), then deletes `~/.claude/jobs/<agentId>/` so the agent stops showing up in `claude agents` as a stopped session (`claude stop` keeps the conversation around by design). Strict 8-hex guard on the agentId before any `rm -rf`. Finally clears `remoteId` and calls `scheduler.reloadJobs()` — Claude may have edited the jobs databases during the mobile session, and we did not go through the executor path that normally triggers a reload.
 - Startup reconciliation: `reconcileRemotes()` runs after `sessions.load()` and best-effort-stops every persisted `remoteId` (also doing the jobs/ cleanup). After a machine reboot the daemon is gone and the stop fails harmlessly; the channel reverts to Discord mode either way.
