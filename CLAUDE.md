@@ -55,7 +55,7 @@ src/
   scheduler.js        # minute-resolution ticker, reloadJobs, executeJob, handleSessionCleared, per-key lock
   commands.js         # COMMANDS registry → dispatch + native slash metadata; /new /stop /status /usage /version /skills /login /jobs /diff /admin /sandbox /claude /codex /remote /voice /upgrade /restart !shell; transport-neutral dispatchSlashCommand + getRegisteredCommands (Discord plumbing stays in index.js); /login and !shell handlers live in login.js / shell.js
   login.js            # /login flow state machine: pending login, URL relay, Discord code input, timeouts
-  diff.js             # /diff: git collection + per-file split + report assembly; asks for the channel's repository path on first use (sessions.depotPath)
+  diff.js             # /diff: git collection + per-file split + report assembly; asks for the channel's repository path on first use (sessions.depotPath, cleared on mode change since git runs on the host or in the container)
   shell.js            # !shell: executeShell (host/container, SIGTERM→SIGKILL) + gating, output truncation
   skills.js           # listSkills(agent, mode): skill names read from <home>/.claude|.codex/skills
   remote.js           # /remote helpers: startRemote, stopRemote, reconcileRemotes

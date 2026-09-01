@@ -2,8 +2,11 @@ const { execFile } = require('child_process');
 const path = require('path');
 const { promisify } = require('util');
 const execFileAsync = promisify(execFile);
-const { DIFF_MAX_MESSAGES, DIFF_MAX_FILE_CHARS, DIFF_PATH_TIMEOUT_MS } = require('./config');
+const {
+	DIFF_MAX_MESSAGES, DIFF_MAX_FILE_CHARS, DIFF_PATH_TIMEOUT_MS, CONTAINER_NAME,
+} = require('./config');
 const { formatDiffPages } = require('./discord');
+const { ensureContainer } = require('./container');
 const sessions = require('./sessions');
 const log = require('./logger');
 
@@ -13,28 +16,25 @@ const log = require('./logger');
  * The repository is per channel (`depotPath` in the sessions file) and asked for
  * the first time the command runs, the way `/login` asks for its code — so no
  * path is hardcoded anywhere and each channel points at its own project.
+ *
+ * Both environments are supported: the path is read where the channel runs, on
+ * the host or inside the container. It is therefore dropped when the channel
+ * changes mode, since it names a filesystem that changed too.
  */
 
 /**
- * Run git and return its stdout. `core.quotePath=false` keeps non-ASCII paths
- * verbatim instead of C-quoted, so a filename with an accent stays usable both
- * as a label and as an argument on the way back in.
+ * Run git in the channel's environment and return its stdout.
+ * `core.quotePath=false` keeps non-ASCII paths verbatim instead of C-quoted, so
+ * a filename with an accent stays usable both as a label and as an argument on
+ * the way back in.
  */
-async function git(repo, args) {
-	try {
-		const { stdout } = await execFileAsync(
-			'git', ['-C', repo, '-c', 'core.quotePath=false', ...args],
-			{ maxBuffer: 32 * 1024 * 1024 },
-		);
-		return stdout;
-	} catch (err) {
-		// Exit 1 is how `diff --no-index` reports "these differ", the normal
-		// outcome here. Nothing else may pass: a maxBuffer overflow also leaves
-		// partial stdout behind, and accepting it would report a truncated diff
-		// as if it were the whole change.
-		if (err.code === 1) return err.stdout || '';
-		throw err;
-	}
+async function git(mode, repo, args) {
+	const gitArgs = ['-C', repo, '-c', 'core.quotePath=false', ...args];
+	const [cmd, argv] = mode === 'sandbox'
+		? ['docker', ['exec', CONTAINER_NAME, 'git', ...gitArgs]]
+		: ['git', gitArgs];
+	const { stdout } = await execFileAsync(cmd, argv, { maxBuffer: 32 * 1024 * 1024 });
+	return stdout;
 }
 
 /**
@@ -42,10 +42,10 @@ async function git(repo, args) {
  * the root means a path given anywhere inside the project still works, and the
  * stored value is always the same for a given repository.
  */
-async function resolveRepoRoot(dir) {
+async function resolveRepoRoot(mode, dir) {
 	if (!dir.startsWith('/')) return { error: 'not an absolute path' };
 	try {
-		const root = (await git(dir, ['rev-parse', '--show-toplevel'])).trim();
+		const root = (await git(mode, dir, ['rev-parse', '--show-toplevel'])).trim();
 		return root ? { root } : { error: 'not a git repository' };
 	} catch (err) {
 		// Git refuses over ownership or permissions with the same exit code as
@@ -130,25 +130,31 @@ function splitDiffByFile(raw) {
 }
 
 /** A repository's uncommitted work, or null when it is clean. */
-async function collectRepoDiff(root) {
-	const status = (await git(root, ['status', '--porcelain'])).trim();
+async function collectRepoDiff(mode, root) {
+	const status = (await git(mode, root, ['status', '--porcelain'])).trim();
 	if (!status) return null;
-	const branch = (await git(root, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
+	const branch = (await git(mode, root, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
 	// `diff HEAD` covers the index and the working tree in one pass, but no form
 	// of `git diff` knows about untracked files — without the second half, a file
 	// the agent just created would be missing from the report entirely.
 	// -U1 rather than git's three lines of context: on a file with long lines,
 	// three lines around each change fill a Discord message with text nobody
 	// asked about, and the budget is spent before the changes are.
-	let raw = await git(root, ['diff', 'HEAD', '--no-color', '-U1']);
+	let raw = await git(mode, root, ['diff', 'HEAD', '--no-color', '-U1']);
 	// -z: a filename may contain a newline, and splitting on one would hand git
 	// two paths that do not exist.
-	const untracked = (await git(root, ['ls-files', '--others', '--exclude-standard', '-z'])).split('\0').filter(Boolean);
+	const untracked = (await git(mode, root, ['ls-files', '--others', '--exclude-standard', '-z'])).split('\0').filter(Boolean);
 	for (const file of untracked) {
 		try {
-			raw += await git(root, ['diff', '--no-index', '--no-color', '-U1', '--', '/dev/null', file]);
+			raw += await git(mode, root, ['diff', '--no-index', '--no-color', '-U1', '--', '/dev/null', file]);
 		} catch (err) {
-			log.warn(`/diff: ${root}/${file}: ${err.message}`);
+			// Exit 1 is how `diff --no-index` reports "these differ" — the expected
+			// outcome here, and the only place a non-zero exit is not a failure.
+			// Its stdout only counts when there is some: `docker exec` also exits 1
+			// when the container is gone, and taking that for a diff would drop the
+			// file from the report without a word.
+			if (err.code === 1 && err.stdout) raw += err.stdout;
+			else log.warn(`/diff: ${root}/${file}: ${err.message}`);
 		}
 	}
 	const files = splitDiffByFile(raw);
@@ -239,6 +245,23 @@ function cancelPendingDepotPath(channelId) {
 }
 
 /**
+ * The environment to read the repository in, or null once the reason it cannot
+ * be read has been sent. A sandbox channel runs git inside the container, which
+ * nothing has necessarily started yet.
+ */
+async function modeFor(channel) {
+	const mode = sessions.getMode(channel.id);
+	if (mode !== 'sandbox') return mode;
+	try {
+		ensureContainer();
+		return mode;
+	} catch (err) {
+		await channel.send(`Sandbox unavailable: ${err.message}`);
+		return null;
+	}
+}
+
+/**
  * Consume a message that answers the pending path question. Returns true when it
  * was consumed. `isCommand` lets a slash command typed instead of a path run
  * normally — a path also starts with `/`, so the two cannot be told apart by
@@ -258,28 +281,31 @@ async function finishPendingDepotPath(channel, content, isCommand) {
 		return true;
 	}
 	if (isCommand(trimmed)) return false;
-	// The channel may have left admin mode since the question was asked, and the
-	// answer would then set up a host repository the command itself refuses.
-	if (sessions.getMode(channel.id) !== 'admin') {
-		await channel.send('Channel is no longer in admin mode — `/diff` cancelled.');
-		return true;
-	}
 
-	const { root, error } = await resolveRepoRoot(trimmed);
+	const mode = await modeFor(channel);
+	if (!mode) return true;
+	const { root, error } = await resolveRepoRoot(mode, trimmed);
 	if (!root) {
 		// The question is reopened: a typo should cost one retry, not the command.
 		askForPath(channel, `\`${trimmed.slice(0, 200)}\`: ${error}.`);
 		return true;
 	}
+	// Validation took a round trip, and `/admin` or `/sandbox` may have landed
+	// during it: storing the path now would resurrect the one the mode switch
+	// just dropped, pointing at the filesystem the channel has left.
+	if (sessions.getMode(channel.id) !== mode) {
+		await channel.send('Channel changed environment — `/diff` cancelled.');
+		return true;
+	}
 	sessions.setDepotPath(channel.id, root);
 	await channel.send(`Repository set to \`${root}\`.`);
-	await reportSafely(channel, root);
+	await reportSafely(channel, mode, root);
 	return true;
 }
 
-async function reportSafely(channel, root) {
+async function reportSafely(channel, mode, root) {
 	try {
-		const repo = await collectRepoDiff(root);
+		const repo = await collectRepoDiff(mode, root);
 		if (!repo) {
 			await channel.send(`No uncommitted changes in \`${root}\`.`);
 			return;
@@ -305,7 +331,8 @@ async function handleDiff({ channel, channelId }) {
 		await askForPath(channel);
 		return true;
 	}
-	await reportSafely(channel, root);
+	const mode = await modeFor(channel);
+	if (mode) await reportSafely(channel, mode, root);
 	return true;
 }
 

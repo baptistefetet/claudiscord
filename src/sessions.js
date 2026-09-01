@@ -179,6 +179,9 @@ function setMode(channelId, mode) {
 	const entry = ensureChannel(channelId);
 	if (entry.mode === mode) return;
 	entry.mode = mode;
+	// The repository path names a filesystem the channel just left: the same
+	// path in the other environment is another directory, or none.
+	entry.depotPath = null;
 	persist();
 	log.info(`Channel ${channelId} mode set to: ${mode}`);
 }

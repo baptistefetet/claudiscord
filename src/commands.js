@@ -549,7 +549,7 @@ const COMMANDS = [
 	{ name: '/skills', help: 'List each agent\'s skills (admin + sandbox)', remoteAllowed: true, handler: handleSkills },
 	{ name: '/login', help: 'Refresh current agent login via a Discord-friendly link', remoteAllowed: true, handler: handleLogin },
 	{ name: '/jobs', help: 'List all scheduled jobs (admin + sandbox)', remoteAllowed: true, handler: handleJobs },
-	{ name: '/diff', help: 'Show the uncommitted changes of this channel\'s repository', remoteAllowed: true, modes: ['admin'], modeError: '`/diff` is only available in admin mode: it reads a repository on the host.', handler: handleDiff },
+	{ name: '/diff', help: 'Show the uncommitted changes of this channel\'s repository', remoteAllowed: true, handler: handleDiff },
 	{ name: '/admin', help: 'Switch this channel to admin mode (host)', handler: handleAdmin },
 	{ name: '/sandbox', help: 'Switch this channel to sandbox mode (container)', handler: handleSandbox },
 	{ name: '/claude', help: 'Use Claude for this channel', handler: handleAgent },

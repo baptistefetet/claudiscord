@@ -1,10 +1,10 @@
 # Claudiscord
 
-A single-user Discord bot that drives [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and the [Codex CLI](https://developers.openai.com/codex/cli) from any Discord client, in DMs or private guild channels.
+A single-user Discord bot that drives [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and the [Codex CLI](https://developers.openai.com/codex/cli) from any Discord client, in DMs or private guild channels, on a VPS or a plain Raspberry Pi.
 
 **Two agents, one interface.** `/claude` and `/codex` switch which agent answers in a channel, and nothing else changes: same commands, same scheduler, same uploads, same voice. Each agent keeps its own session and its own login, so switching back resumes where you left it.
 
-**Two environments, one bot.** An `admin` channel runs the agent on the host with your own rights. A `sandbox` channel runs it inside a Docker container with separate credentials, separate skills and its own agent instructions file. Same commands on both sides, two blast radii that never touch. Jobs, uploads and shell commands all follow the channel's environment.
+**Two environments, one bot.** An `admin` channel runs the agent on the host with your own rights. A `sandbox` channel runs it inside a Docker container with separate credentials, separate skills and its own agent instructions file. Same commands on both sides. Jobs, uploads and shell commands all follow the channel's environment.
 
 ## Features
 
@@ -19,7 +19,7 @@ A single-user Discord bot that drives [Claude Code](https://docs.anthropic.com/e
 
 - **Live progress** — while a prompt runs, one message shows what the agent is doing, updated in place and removed when the answer arrives
 - **Fixed models** — your prompts use the agent's high model (Claude `opus`, Codex `gpt-5.6-sol`), scheduled jobs its medium one (`sonnet` / `gpt-5.6-terra`), reasoning effort `xhigh` everywhere. Nothing to pick
-- **Escape hatches** — stop a runaway prompt, or hand a channel's Claude session to the Claude mobile app when you want permission prompts, reasoning and diffs
+- **Escape hatches** — stop a runaway prompt, or hand a channel's Claude session to the Claude mobile app when you want permission prompts and the reasoning view
 
 **Scheduling**
 
@@ -28,13 +28,13 @@ A single-user Discord bot that drives [Claude Code](https://docs.anthropic.com/e
 
 **Reviewing changes**
 
-- **`/diff`** — the uncommitted work of the channel's repository, read straight in Discord: one coloured `diff` block per file, split on line boundaries so a `+` or `-` never gets cut off, with the hunk header repeated on every continuation. Nothing is uploaded anywhere and nothing has to be committed first
-- **One repository per channel** — asked for the first time you run `/diff`, then remembered; `/status` shows it
+- **Uncommitted work, read in Discord** — one coloured `diff` block per file, split on line boundaries so a `+` or `-` never gets cut off, with the hunk header repeated on every continuation. Nothing is uploaded anywhere and nothing has to be committed first
+- **One repository per channel** — asked for the first time you ask for a diff, then remembered. Host or container, following the channel's environment
 
 **Voice**
 
 - **Voice messages** — the mic button is transcribed via Groq Whisper and handed to the channel's agent
-- **Voice assistant** — talk to the bot in a voice channel (`/voice`): transcribed, answered by the channel's agent, spoken back via OpenAI TTS, with an ambient pad covering the latency
+- **Voice assistant** — talk to the bot in a voice channel: transcribed, answered by the channel's agent, spoken back via OpenAI TTS, with an ambient pad covering the latency
 
 **Files**
 
@@ -80,7 +80,7 @@ bash scripts/rebuild-sandbox.sh
 
 The container runs the host's own Claude and Codex binaries through read-only bind-mounts, so you install and update each agent once, on the host, and the sandbox follows. Configuration stays separate — credentials, skills and `CLAUDE.md`/`AGENTS.md` are read from each environment's home, so an admin channel and a sandbox channel remain distinct agents.
 
-The mounts are established when the container is created. `/version` probes the container and reports a line only when it disagrees with the host; rerun `rebuild-sandbox.sh` to recreate the container if it does.
+Because both sides run the same binaries, both report the same version. `/version` checks it: when the sandbox answers something else, its mount is pointing at a binary you have since replaced, and recreating the container with `rebuild-sandbox.sh` is what fixes it — the mounts are fixed when the container is created and never re-resolved.
 
 ## Systemd service
 
@@ -161,7 +161,7 @@ Same for the rest of the lifecycle: `/jobs` lists them, and asking to reschedule
 
 A run notifies its channel unless the job's own prompt told it to stay quiet when there is nothing to report — that condition belongs in the wording you asked for, which is why "only if there are any" above is enough. Runs are capped at one hour, and a job stopped mid-run keeps its schedule.
 
-**Isolated or not.** By default a job runs in a fresh session each time: it knows nothing of the channel's conversation and leaves it untouched, which is what you want for anything recurring. Ask for a follow-up instead — "check that build again in ten minutes" — and the job runs *inside* the channel's ongoing conversation, so its result lands as a turn you can reply to. That kind of job is tied to that exact conversation: resetting the session with `/new`, or switching the channel's mode or agent, deletes it rather than firing it into a conversation nobody is reading.
+**Isolated or not.** By default a job runs in a fresh session each time: it knows nothing of the channel's conversation and leaves it untouched, which is what you want for anything recurring. Ask for a follow-up instead — "in an hour, run that same check again and tell me whether the leak is still growing" — and the job runs *inside* the channel's ongoing conversation, which is the only place "that same check" means anything. Its result lands as a turn you can reply to. That kind of job is tied to that exact conversation: resetting the session with `/new`, or switching the channel's mode or agent, deletes it rather than firing it into a conversation nobody is reading.
 
 **The environment is the channel's, not the job's choice.** A job created in a sandbox channel always runs in the sandbox, whichever channel it reports to — writing to the other environment's job list is not something an agent can do.
 
@@ -185,11 +185,11 @@ Details:
 | `/stop` | Stop the prompt currently running in this channel — the conversation survives, and anything queued behind it starts next |
 | `/status` | Show the channel's mode, agent, conversation size and cost, and runtime status |
 | `/usage` | Show Claude and Codex account usage for the current mode |
-| `/version` | Show the Claude and Codex CLI versions (one line per agent, plus a warning if the sandbox disagrees) |
+| `/version` | Show the Claude and Codex CLI versions (one line per agent, plus a warning when the sandbox reports a different one, meaning its mount went stale) |
 | `/skills` | List the skills of both agents in both environments (admin + sandbox) |
 | `/login` | Refresh the current agent login in the current mode via a Discord-friendly browser flow |
 | `/jobs` | List all scheduled jobs (admin first, then sandbox) |
-| `/diff` | Admin only — show the uncommitted changes of the channel's repository, one paginated `diff` block per file. Asks for the repository path the first time, like `/login` asks for its code |
+| `/diff` | Show the uncommitted changes of the channel's repository, one paginated `diff` block per file. Asks for the repository path the first time, like `/login` asks for its code; the path is read in the channel's own environment, so switching mode asks again |
 | `/admin` | Switch the current channel to admin mode (host) |
 | `/sandbox` | Switch the current channel to sandbox mode (container) |
 | `/claude` | Use Claude for this channel (default) |
@@ -203,7 +203,7 @@ Details:
 
 ## Remote control
 
-Some turns want the full Claude app rather than a chat bubble: permission prompts, the reasoning view, file diffs. `/remote` hands the channel's session over to the [Claude mobile app](https://claude.com/product/claude-code) and back.
+Some turns want the full Claude app rather than a chat bubble: permission prompts, the reasoning view. `/remote` hands the channel's session over to the [Claude mobile app](https://claude.com/product/claude-code) and back.
 
 - `/remote` starts a backgrounded Claude agent for this channel and stops answering in Discord. The session appears in the app under the channel's name, so several channels stay distinct.
 - `/remote` again stops it and returns the channel to Discord.
