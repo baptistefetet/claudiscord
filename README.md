@@ -28,7 +28,7 @@ A single-user Discord bot that drives [Claude Code](https://docs.anthropic.com/e
 
 **Reviewing changes**
 
-- **Uncommitted work, read in Discord** — one coloured `diff` block per file, split on line boundaries so a `+` or `-` never gets cut off, with the hunk header repeated on every continuation. Nothing is uploaded anywhere and nothing has to be committed first
+- **Uncommitted work, whole** — one line in the channel, and the patch itself as a secret gist however large it is. Nothing has to be committed first
 - **One repository per channel** — asked for the first time you ask for a diff, then remembered. Host or container, following the channel's environment
 
 **Voice**
@@ -189,7 +189,7 @@ Details:
 | `/skills` | List the skills of both agents in both environments (admin + sandbox) |
 | `/login` | Refresh the current agent login in the current mode via a Discord-friendly browser flow |
 | `/jobs` | List all scheduled jobs (admin first, then sandbox) |
-| `/diff` | Show the uncommitted changes of the channel's repository, one paginated `diff` block per file. Asks for the repository path the first time, like `/login` asks for its code; the path is read in the channel's own environment, so switching mode asks again |
+| `/diff` | Show the uncommitted changes of the channel's repository: one message with the file and line counts, carrying a link to the patch as a secret gist. Requires `GITHUB_TOKEN`. Asks for the repository path the first time, like `/login` asks for its code; the path is read in the channel's own environment, so switching mode asks again |
 | `/admin` | Switch the current channel to admin mode (host) |
 | `/sandbox` | Switch the current channel to sandbox mode (container) |
 | `/claude` | Use Claude for this channel (default) |
@@ -255,6 +255,7 @@ If an environment is not authenticated, the corresponding agent reports an authe
 | `TTS_MODEL` | OpenAI TTS model id | Optional (defaults to `gpt-4o-mini-tts`) |
 | `TTS_VOICE` | OpenAI TTS voice | Optional (defaults to `ash`) |
 | `TTS_SPEED` | Speech rate multiplier, 0.25–4.0 | Optional (defaults to `1`) |
+| `GITHUB_TOKEN` | GitHub PAT with the `gist` scope, to publish `/diff` patches as gists | Optional (`/diff` refuses to run if unset) |
 
 ## License
 

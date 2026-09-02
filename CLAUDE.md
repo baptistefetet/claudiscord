@@ -43,7 +43,7 @@ src/
   config.js           # .env loading + paths + constants
   prompts.js          # Shared system prompt builder (agent-agnostic — no per-agent sections)
   logger.js           # stdout/stderr logging (journald-friendly)
-  discord.js          # Client, sendToChannel, sendChunked (splitMessage now private), formatDiffPages (line-atomic diff paging for /diff), typing indicator, startProgressReporter
+  discord.js          # Client, sendToChannel, sendChunked (splitMessage now private), typing indicator, startProgressReporter
   queue.js            # Per-channel FIFOs + global maintenance gate + the run currently executing per key (/stop)
   spawn.js            # spawnCollect: generic subprocess runner (unbounded, no timeout, cancellable, line-streaming via onLine); probeVersion: `--version` probe
   claude.js           # Claude exec/login (host + sandbox), stream-json parse, OAuth usage (getClaudeUsage), CLI version (getClaudeVersion)
@@ -55,7 +55,8 @@ src/
   scheduler.js        # minute-resolution ticker, reloadJobs, executeJob, handleSessionCleared, per-key lock
   commands.js         # COMMANDS registry → dispatch + native slash metadata; /new /stop /status /usage /version /skills /login /jobs /diff /admin /sandbox /claude /codex /remote /voice /upgrade /restart !shell; transport-neutral dispatchSlashCommand + getRegisteredCommands (Discord plumbing stays in index.js); /login and !shell handlers live in login.js / shell.js
   login.js            # /login flow state machine: pending login, URL relay, Discord code input, timeouts
-  diff.js             # /diff: git collection + per-file split + report assembly; asks for the channel's repository path on first use (sessions.depotPath, cleared on mode change since git runs on the host or in the container)
+  diff.js             # /diff: git collection (numstat + porcelain), one-line header, patch published via gist.js; asks for the channel's repository path on first use (sessions.depotPath, cleared on mode change since git runs on the host or in the container)
+  gist.js             # Secret-gist upload for /diff: one gist per channel rewritten in place, URL carries the revision SHA so old links keep their content. GITHUB_TOKEN gates /diff entirely — there is no fallback
   shell.js            # !shell: executeShell (host/container, SIGTERM→SIGKILL) + gating, output truncation
   skills.js           # listSkills(agent, mode): skill names read from <home>/.claude|.codex/skills
   remote.js           # /remote helpers: startRemote, stopRemote, reconcileRemotes
@@ -371,13 +372,14 @@ A job's output is sent to its `channel_id`, unless it ends with `NOTIFY_NONE` �
 
 - `ADMIN_USER_HOME/.claudiscord/sessions.json` shape:
   ```json
-  { "channels": { "<channelId>": { "mode": "admin"|"sandbox", "agent": "claude"|"codex", "sessionId": "<uuid>", "remoteId": null|"<agentId>", "usage": null|{...}, "lastName": "..." } } }
+  { "channels": { "<channelId>": { "mode": "admin"|"sandbox", "agent": "claude"|"codex", "sessionId": "<uuid>", "remoteId": null|"<agentId>", "usage": null|{...}, "lastName": "...", "depotPath": null|"/abs/path", "diffGistId": null|"<gistId>" } } }
   ```
 - `sessionId` belongs to the active agent. Both Claude and Codex allocate it on the first invocation and emit it early in JSON output; `executor.js` persists it inside the channel queue. Context-mutating commands (`/new`, mode/agent switch) are refused while the channel is busy (`isBusy(channelId)` — a prompt or job running), so a late result cannot restore a session the user just changed; the executor still re-checks agent/mode before persisting (covers a context switch during a thread's pre-enqueue first-turn window). Remote mode blocks these commands upstream via `remoteGateHint`.
 - Spawn errors retain partial stdout so the agent adapter can attach an already-emitted UUID before the error is surfaced. The next prompt can therefore resume even when the first failed after session initialization.
 - Legacy entries without `agent` load as Claude. A legacy `sessionStarted: false` drops its possibly uncreated UUID, and a legacy `model` key is ignored; both disappear on the next persistence (`load()` rebuilds each entry field by field).
 - `remoteId` is `null` when the channel is in Discord mode (default), or an 8-hex agent ID when the channel is currently driven from the Claude mobile app via `/remote`. See "Remote control" below.
 - `lastName` is a display snapshot to make the sessions file readable during debugging.
+- `depotPath` is the repository `/diff` reports on, cleared by a mode switch (the path names a filesystem the channel left). `diffGistId` is the gist it rewrites, and survives a mode switch: it names an output, not a filesystem.
 - `usage` backs `/status`'s conversation line: `{ context, window, costUsd }`. The context is the LAST assistant event's input tokens, cache included — `result.usage` sums every model call of the turn, so a three-tool run reported 90k against a 22k conversation. Cost is the opposite, a turn total, and accumulates across turns. Recorded on failed and cancelled turns too, which spent tokens all the same. Codex sets none: `turn.completed.usage` is a turn total and Codex exposes no context window, so nothing there answers "how full is this conversation".
 - A full reset drops the active agent session ID, and with it the channel's non-isolated jobs (see "Non-isolated jobs"). Isolated jobs are untouched.
 - Startup purge (`src/index.js::purgeInvalidChannels`) drops entries whose Discord channel no longer exists. Runs after `login()` and after `reconcileRemotes()` (which needs to stop any remote agent first, before the entry vanishes). Strict: only `DiscordAPIError code 10003` (Unknown Channel) triggers removal; transient errors are logged and skipped. Removing the entry takes the channel's non-isolated jobs with it, through the same observer as a reset; its isolated jobs are intentionally kept — their lifecycle is managed by hand.

@@ -117,6 +117,7 @@ function load() {
 					lastName: typeof entry.lastName === 'string' ? entry.lastName : null,
 					usage: sanitizeUsage(entry.usage),
 					depotPath: typeof entry.depotPath === 'string' ? entry.depotPath : null,
+					diffGistId: typeof entry.diffGistId === 'string' ? entry.diffGistId : null,
 				});
 			}
 		}
@@ -282,6 +283,23 @@ function setDepotPath(channelId, depotPath) {
 	log.info(`Channel ${channelId} depot path set to: ${next}`);
 }
 
+/**
+ * The gist `/diff` rewrites for this channel, so its reports keep reusing one
+ * gist instead of leaving a new one behind on every run. Unlike `depotPath` it
+ * survives a mode switch: it names an output, not a filesystem.
+ */
+function getDiffGistId(channelId) {
+	return channels.get(channelId)?.diffGistId || null;
+}
+
+function setDiffGistId(channelId, gistId) {
+	const entry = ensureChannel(channelId);
+	const next = typeof gistId === 'string' && gistId ? gistId : null;
+	if (entry.diffGistId === next) return;
+	entry.diffGistId = next;
+	persist();
+}
+
 function setLastName(channelId, name) {
 	const entry = ensureChannel(channelId);
 	if (entry.lastName === name) return;
@@ -364,6 +382,8 @@ module.exports = {
 	getUsage,
 	getDepotPath,
 	setDepotPath,
+	getDiffGistId,
+	setDiffGistId,
 	setLastName,
 	clearChannel,
 	listChannelIds,

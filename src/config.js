@@ -37,6 +37,10 @@ const TTS_VOICE = process.env.TTS_VOICE || 'ash';
 // Speech rate multiplier, clamped to the endpoint's accepted range (0.25–4).
 const TTS_SPEED = Math.min(4, Math.max(0.25, parseFloat(process.env.TTS_SPEED) || 1));
 
+// Required by `/diff`, which publishes the patch as a secret gist and refuses
+// to run without it. Needs the `gist` scope.
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN || null;
+
 // --- Paths ---
 const ADMIN_USER_HOME = os.homedir();
 const SANDBOX_USER_HOME = '/home/claude';
@@ -79,17 +83,16 @@ const PROGRESS_EDIT_MS = 2000;
 // rarely informative past that.
 const PROGRESS_MAX = 160;
 
-// Messages one whole `/diff` report may span — summary and truncation notice
-// included. A safety net against a runaway working tree, not a target: a normal
-// review has to fit whole, since half a file is not worth reading. Discord
-// throttles a burst this size, so the report lands over several seconds.
-const DIFF_MAX_MESSAGES = 30;
 // How long `/diff` waits for the repository path it asked for, before dropping
 // the question rather than swallowing the channel's next ordinary message.
 const DIFF_PATH_TIMEOUT_MS = 300_000;
-// Longest diff kept for a single file, before paging. Bounds the damage of a
-// generated or minified file that is not gitignored.
-const DIFF_MAX_FILE_CHARS = 20_000;
+// Hard ceiling on the collected patch. A safety net against a working tree
+// nobody meant to diff, not a budget: it truncates with a notice rather than
+// pushing a gist no browser will render.
+const DIFF_MAX_BYTES = 5 * 1024 * 1024;
+// A gist upload sits between the user and their diff, so it gives up and says so
+// rather than leaving the command hanging on a dead network.
+const GIST_TIMEOUT_MS = 15_000;
 
 // Voice assistant tuning: silence that ends an utterance, and inactivity
 // before the bot leaves the voice channel on its own.
@@ -125,6 +128,7 @@ module.exports = {
 	TTS_MODEL,
 	TTS_VOICE,
 	TTS_SPEED,
+	GITHUB_TOKEN,
 	VOICE_SILENCE_MS,
 	VOICE_IDLE_TIMEOUT_MS,
 	ADMIN_USER_HOME,
@@ -146,9 +150,9 @@ module.exports = {
 	TYPING_INTERVAL_MS,
 	PROGRESS_EDIT_MS,
 	PROGRESS_MAX,
-	DIFF_MAX_MESSAGES,
-	DIFF_MAX_FILE_CHARS,
 	DIFF_PATH_TIMEOUT_MS,
+	DIFF_MAX_BYTES,
+	GIST_TIMEOUT_MS,
 	DOCKER_IMAGE,
 	CONTAINER_CPUS,
 	VALID_AGENTS,
