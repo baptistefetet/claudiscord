@@ -18,7 +18,7 @@ A single-user Discord bot that drives [Claude Code](https://docs.anthropic.com/e
 **Running prompts**
 
 - **Live progress** — while a prompt runs, one message shows what the agent is doing, updated in place and removed when the answer arrives
-- **Fixed models** — your prompts use the agent's high model (Claude `opus`, Codex `gpt-5.6-sol`), scheduled jobs its medium one (`sonnet` / `gpt-5.6-terra`), reasoning effort `xhigh` everywhere. Nothing to pick
+- **Fixed models** — your prompts use the agent's high model (Claude `opus`, Codex `gpt-6-astra`), scheduled jobs its medium one (`sonnet` / `gpt-5.6-terra`), reasoning effort `xhigh` everywhere. Nothing to pick
 - **Escape hatches** — stop a runaway prompt, or hand a channel's Claude session to the Claude mobile app when you want permission prompts and the reasoning view
 
 **Scheduling**
