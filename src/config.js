@@ -16,9 +16,10 @@ const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 // binary for the user running the service. Override via .env if you have
 // it elsewhere.
 const CLAUDE_BIN = process.env.CLAUDE_BIN || path.join(os.homedir(), '.local/bin/claude');
-// Optional. Keep PATH lookup as the default because Codex installation paths
-// vary between package managers. Availability is detected in src/codex.js.
-const CODEX_BIN = process.env.CODEX_BIN || 'codex';
+// Default to ~/.local/bin/codex — where chatgpt.com/codex/install.sh drops the
+// binary. An absolute path rather than a PATH lookup because the service runs
+// under systemd, whose PATH does not include ~/.local/bin.
+const CODEX_BIN = process.env.CODEX_BIN || path.join(os.homedir(), '.local/bin/codex');
 // Optional: only required when sandbox mode is used. If unset, sandbox
 // is reported as unavailable just like when Docker is missing.
 const SANDBOX_HOST_HOME = process.env.SANDBOX_HOME || null;

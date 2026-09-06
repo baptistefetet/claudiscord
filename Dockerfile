@@ -11,23 +11,30 @@ ARG SANDBOX_GID=1001
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates git openssh-client chromium sqlite3 && rm -rf /var/lib/apt/lists/*
 # Both agents come from the host: container.js bind-mounts them read-only at
-# /opt/claude-bin and /opt/codex, so one install serves admin and sandbox
-# alike. They execute inside the container's namespaces like any other file —
-# only their bytes come from the host, which works because the two share a
-# kernel and an architecture. Claude is a self-contained ELF needing at most
+# /opt/claude-bin and /opt/codex-releases, so one install serves admin and
+# sandbox alike. They execute inside the container's namespaces like any other
+# file — only their bytes come from the host, which works because the two share
+# a kernel and an architecture. Claude is a self-contained ELF needing at most
 # GLIBC_2.26 (this image ships 2.36) and Codex vendors a statically linked
 # musl binary, so neither pulls in a host library.
-# /usr/local/bin/claude runs the highest version present in the mount, the
-# same choice the host installer's own `claude` symlink makes.
+# Each wrapper runs the highest version present in its mount, the same choice
+# the host installers' own symlinks make. An absent mount is reported as "not
+# found", which is what container.js keys the agent-unavailable message on.
 RUN printf '%s\n' \
       '#!/bin/sh' \
       'set -e' \
       'bin=$(find /opt/claude-bin -maxdepth 1 -type f -perm -u+x -printf "%f\\n" 2>/dev/null | sort -V | tail -1)' \
-      '[ -n "$bin" ] || { echo "claude: /opt/claude-bin is empty" >&2; exit 127; }' \
+      '[ -n "$bin" ] || { echo "claude: not found (/opt/claude-bin is empty)" >&2; exit 127; }' \
       'exec "/opt/claude-bin/$bin" "$@"' \
       > /usr/local/bin/claude \
-    && chmod 755 /usr/local/bin/claude \
-    && ln -s /opt/codex-scope/codex/bin/codex.js /usr/local/bin/codex
+    && printf '%s\n' \
+      '#!/bin/sh' \
+      'set -e' \
+      'rel=$(find /opt/codex-releases -maxdepth 1 -mindepth 1 -type d -printf "%f\\n" 2>/dev/null | sort -V | tail -1)' \
+      '[ -n "$rel" ] || { echo "codex: not found (/opt/codex-releases is empty)" >&2; exit 127; }' \
+      'exec "/opt/codex-releases/$rel/bin/codex" "$@"' \
+      > /usr/local/bin/codex \
+    && chmod 755 /usr/local/bin/claude /usr/local/bin/codex
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
     && cp /root/.local/bin/uv /usr/local/bin/uv \
     && cp /root/.local/bin/uvx /usr/local/bin/uvx \

@@ -24,11 +24,11 @@ const DOCKERFILE_DIR = path.resolve(__dirname, '..');
 const SANDBOX_CODEX_CONFIG = `cli_auth_credentials_store = "file"
 `;
 
-// Where the host CLIs appear inside the container. The image reaches them
-// through a wrapper at /usr/local/bin/claude reading CLAUDE_BIN_MOUNT, and a
-// symlink /usr/local/bin/codex -> CODEX_SCOPE_MOUNT/codex/bin/codex.js.
+// Where the host CLIs appear inside the container. The image reaches each one
+// through a wrapper in /usr/local/bin that picks the highest version present in
+// the corresponding mount.
 const CLAUDE_BIN_MOUNT = '/opt/claude-bin';
-const CODEX_SCOPE_MOUNT = '/opt/codex-scope';
+const CODEX_RELEASES_MOUNT = '/opt/codex-releases';
 
 // Env var naming a run's process tree inside the container, for `/stop`.
 const RUN_MARKER = 'CLAUDISCORD_RUN';
@@ -192,13 +192,18 @@ function claudeMountSource() {
 }
 
 /**
- * Mount source for the host Codex: the `@openai` npm scope directory, the
- * resolved binary being `@openai/codex/bin/codex.js`. The scope rather than
- * the package because `npm install -g` replaces the package directory with a
- * fresh inode — a mount of the package would survive as a detached copy of the
- * version installed at creation time, while npm leaves the scope dir in place.
- * The launcher finds its vendored musl binary relative to itself, so the
- * package runs from any mount point.
+ * Mount source for the host Codex: the Codex installer's `releases/` directory,
+ * the resolved binary being `releases/<version>-<target>/bin/codex`. The parent
+ * rather than the release because an update unpacks a new release next to the
+ * old one and moves the `current` symlink — mounting one release would pin the
+ * container to the version present at creation time. The image's wrapper picks
+ * the highest version at each run.
+ *
+ * `releases/` and not `packages/standalone/` or CODEX_HOME itself: the Codex
+ * installer puts the binaries under ~/.codex, alongside auth.json and
+ * config.toml, and the sandbox has no business reading the admin's credentials.
+ * The release dir also holds codex-resources/ and codex-path/, which the binary
+ * resolves relative to itself, so the whole tree has to come along.
  *
  * null unless the resolved path has exactly that layout, so an unusual
  * `CODEX_BIN` cannot mount an unrelated tree into the sandbox.
@@ -209,13 +214,17 @@ function codexMountSource() {
 		log.warn(`Codex binary '${CODEX_BIN}' not found — sandbox Codex disabled`);
 		return null;
 	}
-	const pkgRoot = path.dirname(path.dirname(codex));
-	const scope = path.dirname(pkgRoot);
-	if (path.basename(codex) !== 'codex.js' || path.basename(pkgRoot) !== 'codex' || path.basename(scope) !== '@openai') {
-		log.warn(`'${CODEX_BIN}' does not resolve into an @openai/codex npm package — sandbox Codex disabled`);
+	const binDir = path.dirname(codex);
+	const releaseDir = path.dirname(binDir);
+	const releases = path.dirname(releaseDir);
+	if (path.basename(binDir) !== 'bin' || path.basename(releases) !== 'releases') {
+		log.warn(`'${CODEX_BIN}' does not resolve into a Codex installer releases/ dir — sandbox Codex disabled`);
 		return null;
 	}
-	return scope;
+	if ((fs.statSync(releases).mode & 0o005) !== 0o005) {
+		log.warn(`${releases} is not traversable by the container user — sandbox Codex will fail`);
+	}
+	return releases;
 }
 
 /**
@@ -228,7 +237,7 @@ function hostBinMounts() {
 	const claude = claudeMountSource();
 	if (claude) mounts.push('-v', `${claude}:${CLAUDE_BIN_MOUNT}:ro`);
 	const codex = codexMountSource();
-	if (codex) mounts.push('-v', `${codex}:${CODEX_SCOPE_MOUNT}:ro`);
+	if (codex) mounts.push('-v', `${codex}:${CODEX_RELEASES_MOUNT}:ro`);
 	return mounts;
 }
 

@@ -56,7 +56,7 @@ A single-user Discord bot that drives [Claude Code](https://docs.anthropic.com/e
 - When generating the bot's invite link (portal **OAuth2 → URL Generator**, or the **Installation** page), select **both** the `bot` and `applications.commands` scopes — without `applications.commands` the native slash commands cannot be registered
 - In that same invite step, grant the bot the **View Channels**, **Send Messages** and **Read Message History** permissions so it can read and reply in the channels you add it to (DMs need no extra permission). For the voice assistant, also grant **Connect** and **Speak** (or add them later on the bot's role / the voice channel). The `Guilds` / `Guild Messages` / `Direct Messages` / `Guild Voice States` gateway intents are non-privileged and already enabled in code — nothing to toggle on the portal for them
 - Claude Code CLI installed on the host (`curl -fsSL https://claude.ai/install.sh | bash`) — claudiscord defaults to `~/.local/bin/claude` (the install script's default location); set `CLAUDE_BIN` in `.env` only if it's elsewhere
-- **Optional**: Codex CLI installed and authenticated on the host; set `CODEX_BIN` only if it isn't available as `codex` in `PATH`. Each agent is a host-side prerequisite for sandbox mode too — the container borrows the host's copy, so an agent absent from the host is absent from the sandbox as well
+- **Optional**: Codex CLI installed and authenticated on the host (`curl -fsSL https://chatgpt.com/codex/install.sh | sh`) — claudiscord defaults to `~/.local/bin/codex`; set `CODEX_BIN` only if it's elsewhere. Sandbox Codex additionally needs the installer's own layout, so a package-manager install (npm, brew…) leaves Codex working on the host but unavailable in the sandbox. Each agent is a host-side prerequisite for sandbox mode too — the container borrows the host's copy, so an agent absent from the host is absent from the sandbox as well
 - **Optional**: Docker (only required for sandbox mode)
 
 ## Installation
@@ -68,8 +68,8 @@ npm install
 
 cp .env.example .env
 # Fill DISCORD_TOKEN and AUTHORIZED_USER_ID (enable Discord Developer Mode,
-# right-click your avatar → "Copy User ID"). Set CLAUDE_BIN only if claude
-# isn't at ~/.local/bin/claude. Set CODEX_BIN only if Codex isn't in PATH.
+# right-click your avatar → "Copy User ID"). Set CLAUDE_BIN / CODEX_BIN only
+# if the agents aren't at ~/.local/bin/.
 # Set SANDBOX_HOME only if you plan to use sandbox mode.
 
 # Only if you want sandbox mode:
@@ -246,7 +246,7 @@ If an environment is not authenticated, the corresponding agent reports an authe
 | `AUTHORIZED_USER_ID` | Discord user ID of the only user allowed to talk to the bot | Yes |
 | `DISCORD_TOKEN` | Discord bot token | Yes |
 | `CLAUDE_BIN` | Path to Claude Code binary on the host | Optional (defaults to `~/.local/bin/claude`) |
-| `CODEX_BIN` | Path or command name for Codex CLI on the host | Optional (defaults to `codex`) |
+| `CODEX_BIN` | Path to Codex CLI binary on the host | Optional (defaults to `~/.local/bin/codex`) |
 | `SANDBOX_HOME` | Directory bind-mounted into the container as `/home/claude` | Optional (required only for sandbox mode) |
 | `GROQ_API_KEY` | Groq API key for transcribing Discord voice messages via Whisper | Optional (voice messages ignored if unset) |
 | `STT_MODEL` | Groq Whisper model id | Optional (defaults to `whisper-large-v3`) |
