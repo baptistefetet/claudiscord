@@ -19,7 +19,7 @@ A single-user Discord bot that drives [Claude Code](https://docs.anthropic.com/e
 
 - **Live progress** — while a prompt runs, one message shows what the agent is doing, updated in place and removed when the answer arrives
 - **Fixed models** — your prompts use the agent's high model (Claude `opus`, Codex `gpt-6-astra`), scheduled jobs its medium one (`sonnet` / `gpt-5.6-terra`), reasoning effort `xhigh` everywhere. Nothing to pick
-- **Escape hatches** — stop a runaway prompt, or hand a channel's Claude session to the Claude mobile app when you want permission prompts and the reasoning view
+- **Escape hatch** — stop a runaway prompt without losing the conversation; anything queued behind it starts next
 
 **Scheduling**
 
@@ -197,23 +197,11 @@ Details:
 | `/sandbox` | Switch the current channel to sandbox mode (container) |
 | `/claude` | Use Claude for this channel (default) |
 | `/codex` | Use Codex for this channel |
-| `/remote` | Claude only — toggle the channel between Discord mode and remote control via the Claude mobile app |
 | `/voice` | Voice channels only — toggle the voice assistant in this voice channel (join/leave) |
 | `/autojoin` | Voice channels only — toggle autojoin for this voice channel (the bot joins on its own when you connect) |
 | `/upgrade` | Sandbox only — update the container's packages (the agents follow the host install) |
 | `/restart` | Admin only — restart the claudiscord service |
 | `!<command>` | Run a shell command (host if the channel is admin, container if sandbox) |
-
-## Remote control
-
-Some turns want the full Claude app rather than a chat bubble: permission prompts, the reasoning view. `/remote` hands the channel's session over to the [Claude mobile app](https://claude.com/product/claude-code) and back.
-
-- `/remote` starts a backgrounded Claude agent for this channel and stops answering in Discord. The session appears in the app under the channel's name, so several channels stay distinct.
-- `/remote` again stops it and returns the channel to Discord.
-- **Going out keeps the history, coming back does not.** The Discord conversation is copied into the app session, but the return trip starts fresh — the app manages its own session id and claudiscord does not adopt it.
-- While remote, the channel accepts only `/remote`, `/status`, `/jobs`, `/diff`, `/usage`, `/version`, `/skills` and `/login`. Anything else, voice messages included, is refused rather than run, so two processes never share one session. Uploads are still saved.
-- Claude only: a Codex channel must `/claude` first. In sandbox mode the container needs its own Claude login (`/sandbox`, `/claude`, `/login`) before `/remote` works.
-- Isolated jobs keep firing during a remote session. Non-isolated ones do not survive it: `/remote` resets the channel session, and a job bound to that exact conversation is deleted with it, like on `/new`.
 
 ## Voice assistant
 

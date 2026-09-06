@@ -10,7 +10,7 @@ while THINKING, realtime voice front-end) were dropped, not carried over.
 - `claude -p --resume <uuid> --fork-session` resumes a session while allocating
   a NEW session id — the parent transcript is never touched.
 - The Codex CLI has no fork equivalent (`codex exec resume` only), so every
-  fork-based feature below is **Claude-only**, gated like `/remote`.
+  fork-based feature below is **Claude-only**.
 
 ## 1. `/btw <question>` — side question on a forked context
 
@@ -61,7 +61,6 @@ Minimal HTTP server in the same process (`node:http`, no framework):
 - Flow: resolve mode/agent from sessions → build the system prompt →
   `executePrompt` through the channel FIFO → result posted to the Discord
   channel. HTTP answers `202` immediately (a prompt has no bounded duration).
-- Respect the remote gate (refuse when `remoteId` is set), like the text path.
 - Exposure beyond localhost: Apache reverse proxy + TLS + fail2ban (existing
   infra on this host). Optional channel allowlist in `.env`.
 - Use cases: iOS Shortcuts, CI, home automation.

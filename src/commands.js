@@ -22,7 +22,6 @@ const { getClaudeUsage, getClaudeVersion } = require('./claude');
 const { handleLogin, finishPendingLogin } = require('./login');
 const { handleShell } = require('./shell');
 const { runMaintenance, isBusy, stopRun } = require('./queue');
-const { startRemote, stopRemote } = require('./remote');
 const {
 	isVoiceModeAvailable,
 	isSupportedVoiceChannel,
@@ -36,15 +35,9 @@ const { getClient, resolveChannelName, sendChunked } = require('./discord');
 const { handleDiff, finishPendingDepotPath, cancelPendingDepotPath } = require('./diff');
 const { listSkills } = require('./skills');
 const { loadAllJobs } = require('./jobs-store');
-const scheduler = require('./scheduler');
 const log = require('./logger');
 
 const UPDATE_SANDBOX_SCRIPT = path.resolve(__dirname, '..', 'scripts', 'update-sandbox.sh');
-
-// Per-channel lock for a whole `/remote` toggle. `remoteId` is not set until the
-// spawn completes, so without it a concurrent message would pass the remote gate,
-// and two back-to-back toggles would both take the start branch.
-const remoteOpInFlight = new Set();
 
 /**
  * Multi-line rendering of a scheduled job for the /jobs command.
@@ -72,78 +65,6 @@ function formatJobBlock(job) {
 		lines.push(`📝 ${d}`);
 	}
 	return lines.join('\n');
-}
-
-/**
- * /remote — toggle the channel between Discord mode and Claude-mobile remote mode.
- * Claude-only. Holds a per-channel lock for the whole toggle (see remoteOpInFlight).
- */
-async function handleRemote({ channel, channelId, mode, agent, remoteId }) {
-	if (agent !== 'claude') {
-		await channel.send('`/remote` is only available with the **claude** agent. Use `/claude` first.');
-		return true;
-	}
-	// Hold the per-channel lock for the entire toggle. The gating above
-	// honours it, so the channel stays inert until the transition settles.
-	if (remoteOpInFlight.has(channelId)) {
-		await channel.send('⏳ A `/remote` toggle is already in progress for this channel.');
-		return true;
-	}
-	remoteOpInFlight.add(channelId);
-	try {
-		const existing = remoteId;
-		if (existing) {
-			if (isBusy()) {
-				await channel.send('⏳ An execution or maintenance operation is running. Retry `/remote` when the bot is idle.');
-				return true;
-			}
-			let stoppedCleanly = false;
-			try {
-				stoppedCleanly = await runMaintenance(
-					() => stopRemote({ mode, remoteId: existing }),
-				);
-			} catch (err) {
-				log.error('remote stop error:', err.message);
-			}
-			sessions.setRemoteId(channelId, null);
-			// Claude may have edited a jobs file during the mobile session — and
-			// we did NOT go through executor.js, so reload jobs here.
-			scheduler.reloadJobs();
-			const suffix = stoppedCleanly ? '' : ' (stop reported an error, state cleared)';
-			await channel.send(`Back to Discord mode. The next message starts a fresh conversation${suffix}.`);
-			return true;
-		}
-
-		if (mode === 'sandbox' && !DOCKER_AVAILABLE) {
-			await channel.send('Sandbox is not available — `/remote` requires either admin mode or a working sandbox.');
-			return true;
-		}
-
-		const channelName = resolveChannelName(channel);
-		if (isBusy()) {
-			await channel.send('⏳ An execution or maintenance operation is running. Retry `/remote` when the bot is idle.');
-			return true;
-		}
-		try {
-			const agentId = await runMaintenance(async () => {
-				if (mode === 'sandbox') ensureContainer();
-				// Hand the existing Discord session to `claude --bg --resume`
-				// so the mobile user starts with the channel's history. Read
-				// BEFORE setRemoteId, which wipes the sessionId.
-				const { sessionId } = sessions.getSession(channelId);
-				const id = await startRemote({ mode, sessionId, channelName });
-				sessions.setRemoteId(channelId, id);
-				return id;
-			});
-			await channel.send(`\u{1F6F0}️ Remote control enabled for **${channelName}** (agent \`${agentId}\`). Open the Claude mobile app to continue. Send \`/remote\` again to return to Discord mode.`);
-		} catch (err) {
-			log.error('remote start error:', err.message);
-			await channel.send(`Remote start failed: ${err.message.slice(0, 300)}`);
-		}
-		return true;
-	} finally {
-		remoteOpInFlight.delete(channelId);
-	}
 }
 
 /**
@@ -311,10 +232,6 @@ async function handleUpgrade({ channel, mode }) {
 		await channel.send('Docker is not installed — cannot upgrade.');
 		return true;
 	}
-	if (sessions.hasActiveSandboxRemote()) {
-		await channel.send('🛰️ A sandbox `/remote` session is active — stop it before upgrading the container.');
-		return true;
-	}
 	if (isBusy()) {
 		await channel.send('⏳ An execution or maintenance operation is running. Retry `/upgrade` when the bot is idle.');
 		return true;
@@ -346,8 +263,7 @@ function isAgentAvailable(agent, mode) {
 
 // Context-mutating commands (mode/agent switch, session reset) are refused while
 // an execution is in flight on this channel: queuing prompts is useful, silently
-// mutating the context a running prompt or job depends on is not. Remote mode is
-// gated upstream by remoteGateHint.
+// mutating the context a running prompt or job depends on is not.
 async function rejectIfChannelBusy(channel, channelId) {
 	if (!isBusy(channelId)) return false;
 	await channel.send('⏳ A prompt or job is running on this channel — retry when it is done.');
@@ -411,16 +327,15 @@ function conversationLine(channelId) {
 	return parts.length ? `\nConversation: ${parts.join(' · ')}` : '';
 }
 
-async function handleStatus({ channel, channelId, mode, agent, remoteId }) {
+async function handleStatus({ channel, channelId, mode, agent }) {
 	const dockerNote = DOCKER_AVAILABLE ? '' : '\nSandbox unavailable on this host.';
-	const remoteLine = remoteId ? `\nRemote: \`${remoteId}\`` : '';
 	const missing = ['claude', 'codex'].filter(a => !isAgentAvailable(a, mode));
 	const agentLine = missing.length ? `\nUnavailable in **${mode}** mode: ${missing.join(', ')}.` : '';
 	const voiceLine = getActiveVoiceChannelId() === channelId ? '\nVoice assistant: **active**' : '';
 	const autojoinLine = sessions.getAutojoin(channelId) ? '\nAutojoin: **on**' : '';
 	const depotPath = sessions.getDepotPath(channelId);
 	const depotLine = depotPath ? `\nRepository: \`${depotPath}\`` : '';
-	await channel.send(`Channel mode: **${mode}**\nAgent: **${agent}**${conversationLine(channelId)}${depotLine}${voiceLine}${autojoinLine}${remoteLine}${dockerNote}${agentLine}`);
+	await channel.send(`Channel mode: **${mode}**\nAgent: **${agent}**${conversationLine(channelId)}${depotLine}${voiceLine}${autojoinLine}${dockerNote}${agentLine}`);
 	return true;
 }
 
@@ -541,36 +456,31 @@ async function handleRestart({ channel }) {
  * Single source of truth for slash commands. Fields:
  *   - modes:         allowed channel modes (omit = all). Typing it in another
  *                    mode replies `modeError` instead of falling through.
- *   - remoteAllowed: accepted while the channel is in /remote mode.
  *   - helpOnly:      excluded from slash registration and registry dispatch
  *                    (e.g. the `!` shell, matched by prefix before the registry).
- *   - handler:       ({ message, channel, channelId, content, mode, agent,
- *                    remoteId }) => Promise<boolean>.
+ *   - handler:       ({ message, channel, channelId, content, mode, agent })
+ *                    => Promise<boolean>.
  */
 const COMMANDS = [
 	{ name: '/new', help: 'Reset session for this channel (new conversation)', handler: handleNew },
 	{ name: '/stop', help: 'Stop the prompt currently running in this channel', handler: handleStop },
-	{ name: '/status', help: 'Show mode, agent, conversation size and cost, runtime status', remoteAllowed: true, handler: handleStatus },
-	{ name: '/usage', help: 'Show Claude and Codex usage for the current mode', remoteAllowed: true, handler: handleUsage },
-	{ name: '/version', help: 'Show the Claude and Codex CLI versions', remoteAllowed: true, handler: handleVersion },
-	{ name: '/skills', help: 'List each agent\'s skills (admin + sandbox)', remoteAllowed: true, handler: handleSkills },
-	{ name: '/login', help: 'Refresh current agent login via a Discord-friendly link', remoteAllowed: true, handler: handleLogin },
-	{ name: '/jobs', help: 'List all scheduled jobs (admin + sandbox)', remoteAllowed: true, handler: handleJobs },
-	{ name: '/diff', help: 'Show the uncommitted changes of this channel\'s repository', remoteAllowed: true, handler: handleDiff },
+	{ name: '/status', help: 'Show mode, agent, conversation size and cost, runtime status', handler: handleStatus },
+	{ name: '/usage', help: 'Show Claude and Codex usage for the current mode', handler: handleUsage },
+	{ name: '/version', help: 'Show the Claude and Codex CLI versions', handler: handleVersion },
+	{ name: '/skills', help: 'List each agent\'s skills (admin + sandbox)', handler: handleSkills },
+	{ name: '/login', help: 'Refresh current agent login via a Discord-friendly link', handler: handleLogin },
+	{ name: '/jobs', help: 'List all scheduled jobs (admin + sandbox)', handler: handleJobs },
+	{ name: '/diff', help: 'Show the uncommitted changes of this channel\'s repository', handler: handleDiff },
 	{ name: '/admin', help: 'Switch this channel to admin mode (host)', handler: handleAdmin },
 	{ name: '/sandbox', help: 'Switch this channel to sandbox mode (container)', handler: handleSandbox },
 	{ name: '/claude', help: 'Use Claude for this channel', handler: handleAgent },
 	{ name: '/codex', help: 'Use Codex for this channel', handler: handleAgent },
-	{ name: '/remote', help: 'Toggle this channel between Discord mode and remote mode (Claude mobile app)', remoteAllowed: true, handler: handleRemote },
 	{ name: '/voice', help: 'Toggle the voice assistant in this voice channel (join/leave)', handler: handleVoice },
 	{ name: '/autojoin', help: 'Toggle autojoin for this voice channel (join on my own when you connect)', handler: handleAutojoin },
 	{ name: '!<command>', help: 'Execute a shell command (host if admin, container if sandbox)', helpOnly: true },
 	{ name: '/upgrade', help: 'Update sandbox container packages (Claude and Codex follow the host install)', modes: ['sandbox'], modeError: '`/upgrade` is only available in sandbox mode.', handler: handleUpgrade },
 	{ name: '/restart', help: 'Restart the claudiscord service', modes: ['admin'], modeError: '`/restart` is only available in admin mode.', handler: handleRestart },
 ];
-
-// Commands accepted while a channel is driven by the Claude mobile app.
-const REMOTE_ALLOWED = new Set(COMMANDS.filter(c => c.remoteAllowed).map(c => c.name));
 
 /**
  * Handle special commands. Returns true if the message was a command.
@@ -584,22 +494,9 @@ async function handleCommand(message) {
 	const agent = sessions.getAgent(channelId);
 
 	if (await finishPendingLogin(channel, content)) return true;
-	// Before the remote gate: answering a question the bot asked is not a command,
-	// and `isCommand` is what tells a repository path from a slash command, since
-	// both start with a slash.
+	// `isCommand` is what tells a repository path from a slash command, since both
+	// start with a slash.
 	if (await finishPendingDepotPath(channel, content, isCommand)) return true;
-
-	// Remote-mode gating (shared with the slash path via remoteGateHint): while the
-	// channel is driven by the Claude mobile app, only REMOTE_ALLOWED commands are
-	// accepted. Applies to everything — plain messages, !shell, other slash commands
-	// — so we never spawn a parallel `claude -p` against the live remote session.
-	// Keyed on the full content here; the slash path keys on the command name.
-	const remoteId = sessions.getRemoteId(channelId);
-	const hint = remoteGateHint(channelId, content);
-	if (hint) {
-		await channel.send(hint);
-		return true;
-	}
 
 	// Shell: !<command> — runs in host (admin mode) or container (sandbox mode)
 	if (content.startsWith('!')) {
@@ -611,7 +508,7 @@ async function handleCommand(message) {
 	// Registry dispatch (single source of truth, shared with the slash path via
 	// runCommand). An unknown command → runCommand returns false → the message is
 	// handled as a normal prompt.
-	return runCommand({ channel, channelId, name: content, mode, agent, remoteId, message });
+	return runCommand({ channel, channelId, name: content, mode, agent, message });
 }
 
 /** Whether `name` is a dispatchable command, `!shell` included. */
@@ -620,40 +517,24 @@ function isCommand(name) {
 }
 
 /**
- * Remote-mode gate. Returns a hint to show the user when the channel is driven by
- * the Claude mobile app and `key` is not allowed there, else null. `key` is the
- * raw content (text path) or the command name (slash path).
- */
-function remoteGateHint(channelId, key) {
-	const remoteId = sessions.getRemoteId(channelId);
-	const transitioning = remoteOpInFlight.has(channelId);
-	if ((remoteId || transitioning) && !REMOTE_ALLOWED.has(key)) {
-		return !remoteId && transitioning
-			? '⏳ A `/remote` toggle is in progress for this channel.'
-			: `\u{1F6F0}️ This channel is in remote mode (agent \`${remoteId}\`). Send \`/remote\` to return to Discord mode.`;
-	}
-	return null;
-}
-
-/**
  * Registry dispatch: mode-gate + lookup + handler call. Touches only
  * `channel.send`, so any transport can drive it. False when `name` is not a
  * registered command (text path: fall through to a normal prompt).
  */
-async function runCommand({ channel, channelId, name, mode, agent, remoteId, message }) {
+async function runCommand({ channel, channelId, name, mode, agent, message }) {
 	const cmd = COMMANDS.find(c => !c.helpOnly && c.name === name);
 	if (!cmd) return false;
 	if (cmd.modes && !cmd.modes.includes(mode)) {
 		await channel.send(cmd.modeError);
 		return true;
 	}
-	return cmd.handler({ message, channel, channelId, content: name, mode, agent, remoteId });
+	return cmd.handler({ message, channel, channelId, content: name, mode, agent });
 }
 
 /**
  * Slash-command entry point. The adapter (index.js) owns the interaction plumbing
  * and calls this with the resolved channel and command name (leading slash
- * included). Same gating as handleCommand, but keyed on the name.
+ * included). Same mode gating as handleCommand, but keyed on the name.
  */
 async function dispatchSlashCommand({ channel, channelId, name }) {
 	// A native command never passes through handleCommand, so a `/diff` question
@@ -661,14 +542,8 @@ async function dispatchSlashCommand({ channel, channelId, name }) {
 	if (name !== '/diff') cancelPendingDepotPath(channelId);
 	const mode = sessions.getMode(channelId);
 	const agent = sessions.getAgent(channelId);
-	const remoteId = sessions.getRemoteId(channelId);
 
-	const hint = remoteGateHint(channelId, name);
-	if (hint) {
-		await channel.send(hint);
-		return;
-	}
-	const handled = await runCommand({ channel, channelId, name, mode, agent, remoteId, message: null });
+	const handled = await runCommand({ channel, channelId, name, mode, agent, message: null });
 	if (!handled) await channel.send('Unknown command.');
 }
 

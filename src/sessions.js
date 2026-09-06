@@ -14,7 +14,6 @@ const log = require('./logger');
  *       "mode": "admin"|"sandbox",
  *       "agent": "claude"|"codex",
  *       "sessionId": "<uuid>",
- *       "remoteId": null | "<agentId>",
  *       "autojoin": true|false,
  *       "depotPath": null | "<git repository root>",
  *       "lastName": "..."
@@ -28,14 +27,9 @@ const log = require('./logger');
  * executor persists it after the first spawn, including on error.
  *
  * autojoin: per-voice-channel policy, see src/voice.js.
- *
- * remoteId, when non-null, means the channel is driven from the Claude mobile app
- * (`claude --bg --remote-control`) and only accepts remoteAllowed commands
- * (src/commands.js). Entering remote mode wipes sessionId — `claude --bg` manages
- * its own UUID and we don't reconcile back.
  */
 
-/** @type {Map<string, {mode?: string, agent?: string, sessionId?: string, remoteId?: string|null, autojoin?: boolean, lastName?: string}>} */
+/** @type {Map<string, {mode?: string, agent?: string, sessionId?: string, autojoin?: boolean, lastName?: string}>} */
 const channels = new Map();
 
 // In-memory only. Gates the one-time thread-starter injection against the race
@@ -64,8 +58,8 @@ function fireSessionCleared(channelId, reason) {
 }
 
 /**
- * Single choke point for dropping a channel's agent session — /new, a mode or
- * agent switch and the /remote handover all land here. Going through one
+ * Single choke point for dropping a channel's agent session — /new and a mode or
+ * agent switch both land here. Going through one
  * function is what makes the observer exhaustive: a future command that resets
  * a session cannot forget to notify it. Persists first, so the observer never
  * sees a state that is not on disk yet.
@@ -100,13 +94,11 @@ function load() {
 			for (const [id, entry] of Object.entries(data.channels)) {
 				if (!entry || typeof entry !== 'object') continue;
 				const mode = entry.mode === 'sandbox' ? 'sandbox' : 'admin';
-				const remoteId = typeof entry.remoteId === 'string' ? entry.remoteId : null;
 				// An entry without an agent predates ensureChannel() stamping one:
 				// back then the default was always Claude, so its session id is a
 				// Claude one whatever this host's current default is.
-				let agent = VALID_AGENTS.includes(entry.agent) ? entry.agent : 'claude';
+				const agent = VALID_AGENTS.includes(entry.agent) ? entry.agent : 'claude';
 				let sessionId = typeof entry.sessionId === 'string' ? entry.sessionId : null;
-				if (remoteId) agent = 'claude';
 				// Legacy: a false bit means that UUID may never have been created.
 				if (entry.sessionStarted === false) sessionId = null;
 				// Rebuilt field by field, not spread: a new persisted field must be
@@ -115,7 +107,6 @@ function load() {
 					mode,
 					agent,
 					sessionId,
-					remoteId,
 					autojoin: entry.autojoin === true,
 					lastName: typeof entry.lastName === 'string' ? entry.lastName : null,
 					usage: sanitizeUsage(entry.usage),
@@ -157,7 +148,6 @@ function ensureFromParent(channelId, parentId) {
 		mode: parent?.mode === 'sandbox' ? 'sandbox' : 'admin',
 		agent: VALID_AGENTS.includes(parent?.agent) ? parent.agent : CHANNEL_DEFAULT_AGENT,
 		sessionId: null,
-		remoteId: null,
 		// Threads are never voice channels; kept for a uniform entry shape.
 		autojoin: false,
 		lastName: null,
@@ -334,43 +324,6 @@ function removeChannel(channelId) {
 	return true;
 }
 
-function getRemoteId(channelId) {
-	const entry = channels.get(channelId);
-	return entry?.remoteId || null;
-}
-
-function setRemoteId(channelId, remoteId) {
-	const entry = ensureChannel(channelId);
-	const next = typeof remoteId === 'string' && remoteId ? remoteId : null;
-	if (entry.remoteId === next) return;
-	entry.remoteId = next;
-	// `claude --bg` manages its own UUID
-	if (next) dropSession(entry, channelId, 'remote handover');
-	else persist();
-	log.info(`Channel ${channelId} remoteId set to: ${next}`);
-}
-
-function listRemoteChannels() {
-	const out = [];
-	for (const [channelId, entry] of channels.entries()) {
-		if (typeof entry.remoteId === 'string' && entry.remoteId) {
-			out.push({ channelId, mode: entry.mode || 'admin', remoteId: entry.remoteId });
-		}
-	}
-	return out;
-}
-
-/**
- * Gates sandbox `!shell`: its timeout path pkills by command pattern inside the
- * container, which can match and kill a live remote daemon.
- */
-function hasActiveSandboxRemote() {
-	for (const entry of channels.values()) {
-		if (entry.mode === 'sandbox' && typeof entry.remoteId === 'string' && entry.remoteId) return true;
-	}
-	return false;
-}
-
 module.exports = {
 	load,
 	onSessionCleared,
@@ -395,8 +348,4 @@ module.exports = {
 	clearChannel,
 	listChannelIds,
 	removeChannel,
-	getRemoteId,
-	setRemoteId,
-	listRemoteChannels,
-	hasActiveSandboxRemote,
 };

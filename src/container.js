@@ -284,8 +284,8 @@ function ensureContainer() {
  * `docker exec` leaves what it started running when its client dies, so a
  * sandbox `/stop` that only killed the local client would orphan the agent.
  * The target is found through a marker env var injected at exec time rather
- * than by command name: `pkill -f claude` would also hit a `/remote` daemon
- * living in the same container.
+ * than by command name: `pkill -f claude` would also hit the other channels'
+ * agents, which share the single container.
  */
 function killContainerRun(runId, signal) {
 	// Both values are built here, never user input, but they end up in a shell

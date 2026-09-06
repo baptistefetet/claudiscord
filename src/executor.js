@@ -49,7 +49,7 @@ function executePrompt(agent, mode, prompt, options = {}) {
 
 		// Checked here rather than by the caller: the FIFO wait can last as long as
 		// the prompt ahead, and every context transition (/new, mode or agent
-		// switch, /remote) nulls the session id. A check made before enqueuing
+		// switch) nulls the session id. A check made before enqueuing
 		// would let a reset during that wait through, and the run would silently
 		// open a fresh session — whose id is then written back to the channel.
 		if (requireSession && !sessionId) {

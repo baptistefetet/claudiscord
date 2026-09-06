@@ -6,7 +6,6 @@ const {
 	CONTAINER_NAME,
 	ADMIN_USER_HOME,
 } = require('./config');
-const sessions = require('./sessions');
 const { ensureContainer, DOCKER_AVAILABLE } = require('./container');
 const { runMaintenance, isBusy } = require('./queue');
 const log = require('./logger');
@@ -84,10 +83,6 @@ function executeShell(command, { inContainer } = {}) {
 async function handleShell(channel, mode, command) {
 	if (mode === 'sandbox' && !DOCKER_AVAILABLE) {
 		await channel.send('Sandbox is not available — shell requires either admin mode or a working sandbox.');
-		return true;
-	}
-	if (mode === 'sandbox' && sessions.hasActiveSandboxRemote()) {
-		await channel.send('\u{1F6F0}️ A sandbox `/remote` session is active — sandbox `!shell` is paused to avoid killing it. Stop the remote first.');
 		return true;
 	}
 	if (isBusy()) {

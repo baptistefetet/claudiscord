@@ -168,12 +168,6 @@ async function handleTurn(session, pcm) {
 	const { channelId } = session;
 	if (pcm.length < MIN_TURN_MS * PCM_BYTES_PER_MS) return;
 
-	// Same gate as the text path; handleCommand is bypassed here.
-	if (sessions.getRemoteId(channelId)) {
-		await postToChat(session, '\u{1F6F0}️ This channel is in remote mode — voice turns are ignored. Send `/remote` to return to Discord mode.');
-		return;
-	}
-
 	const wav = captureToWav(pcm);
 	const text = (await transcribeAudio(wav, {
 		apiKey: config.GROQ_API_KEY,

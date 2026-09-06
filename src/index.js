@@ -11,7 +11,6 @@ const { executePrompt } = require('./executor');
 const { isBusy } = require('./queue');
 const { createClient, login, sendChunked, startTypingIndicator, startProgressReporter, resolveChannelName } = require('./discord');
 const { handleCommand, dispatchSlashCommand, getRegisteredCommands } = require('./commands');
-const { reconcileRemotes } = require('./remote');
 const { transcribeVoiceMessage } = require('./stt');
 const { leaveVoice, handleVoiceStateUpdate, scanAutojoinOnBoot } = require('./voice');
 const { saveUploads } = require('./uploads');
@@ -58,13 +57,6 @@ client.on(Events.MessageCreate, async message => {
 	// Before commands/uploads, so they see the inherited mode.
 	if (isPublicThread) sessions.ensureFromParent(channel.id, channel.parentId);
 
-	// Drop before paying for Groq STT: handleCommand would reject it anyway, but
-	// only after transcription.
-	if (isVoice && !content && sessions.getRemoteId(channel.id)) {
-		await channel.send(`\u{1F6F0}️ This channel is in remote mode — voice messages are ignored. Send \`/remote\` to return to Discord mode.`).catch(() => {});
-		return;
-	}
-
 	// Voice message → transcription via Groq Whisper. Text wins if both present.
 	let prompt = content;
 	if (!prompt && isVoice) {
@@ -89,8 +81,9 @@ client.on(Events.MessageCreate, async message => {
 		}
 	}
 
-	// Before handleCommand, so uploads work in /remote mode too (they spawn no
-	// agent). A voice message's lone attachment is the audio, handled by STT above.
+	// Before handleCommand: an upload spawns no agent, so it is saved even when the
+	// text alongside it is a command. A voice message's lone attachment is the audio,
+	// handled by STT above.
 	if (!isVoice && message.attachments.size > 0) {
 		const uploadMode = sessions.getMode(channel.id);
 		try {
@@ -417,8 +410,6 @@ async function start() {
 	} else {
 		log.warn('Starting without Docker — sandbox mode disabled');
 	}
-	// Settle any remote sessions persisted from a previous run before going live.
-	try { await reconcileRemotes(); } catch (err) { log.warn('reconcileRemotes failed:', err.message); }
 	await login();
 }
 

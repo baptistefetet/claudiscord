@@ -533,7 +533,6 @@ async function getClaudeUsage(mode = 'admin') {
 }
 
 module.exports = {
-	ADMIN_ENV,
 	executeClaude,
 	hostClaudeEnv,
 	getClaudeUsage,
