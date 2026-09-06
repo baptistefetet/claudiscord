@@ -101,7 +101,10 @@ function load() {
 				if (!entry || typeof entry !== 'object') continue;
 				const mode = entry.mode === 'sandbox' ? 'sandbox' : 'admin';
 				const remoteId = typeof entry.remoteId === 'string' ? entry.remoteId : null;
-				let agent = VALID_AGENTS.includes(entry.agent) ? entry.agent : CHANNEL_DEFAULT_AGENT;
+				// An entry without an agent predates ensureChannel() stamping one:
+				// back then the default was always Claude, so its session id is a
+				// Claude one whatever this host's current default is.
+				let agent = VALID_AGENTS.includes(entry.agent) ? entry.agent : 'claude';
 				let sessionId = typeof entry.sessionId === 'string' ? entry.sessionId : null;
 				if (remoteId) agent = 'claude';
 				// Legacy: a false bit means that UUID may never have been created.
@@ -134,8 +137,12 @@ function persist() {
 	fs.renameSync(tmp, ADMIN_SESSIONS_FILE);
 }
 
+// New entries record the agent explicitly. CHANNEL_DEFAULT_AGENT depends on
+// which CLIs are installed, so an entry that omitted it would be re-read under a
+// different default once that changes — pairing one agent's session id with the
+// other agent.
 function ensureChannel(channelId) {
-	if (!channels.has(channelId)) channels.set(channelId, {});
+	if (!channels.has(channelId)) channels.set(channelId, { agent: CHANNEL_DEFAULT_AGENT });
 	return channels.get(channelId);
 }
 

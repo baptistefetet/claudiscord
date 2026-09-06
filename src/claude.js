@@ -3,15 +3,18 @@ const path = require('path');
 const { spawn, execFileSync } = require('child_process');
 const {
 	CLAUDE_BIN,
+	CLAUDE_AVAILABLE,
 	ADMIN_USER_HOME,
 	SANDBOX_HOST_HOME,
 	CONTAINER_NAME,
 	SANDBOX_USER_HOME,
 	REASONING_EFFORT,
 } = require('./config');
-const { ensureContainer } = require('./container');
+const { isClaudeAvailableInContainer } = require('./container');
 const { spawnCollect, probeVersion } = require('./spawn');
 const log = require('./logger');
+
+if (!CLAUDE_AVAILABLE) log.warn('Claude Code not detected — Claude agent disabled');
 
 // Claude-only; Codex governs its tools via --yolo. `claude -p` already drops the
 // interactive tools, so DISALLOWED_TOOLS only lists what would conflict with
@@ -105,7 +108,9 @@ function buildClaudeLoginFlow(mode, child) {
 function startClaudeLogin(mode) {
 	let child;
 	if (mode === 'sandbox') {
-		ensureContainer();
+		if (!isClaudeAvailableInContainer()) {
+			throw Object.assign(new Error('CLAUDE_NOT_AVAILABLE'), { code: 'CLAUDE_NOT_AVAILABLE' });
+		}
 		child = spawn('docker', [
 			'exec',
 			'-i',
@@ -119,6 +124,9 @@ function startClaudeLogin(mode) {
 			stdio: ['pipe', 'pipe', 'pipe'],
 		});
 	} else if (mode === 'admin') {
+		if (!CLAUDE_AVAILABLE) {
+			throw Object.assign(new Error('CLAUDE_NOT_AVAILABLE'), { code: 'CLAUDE_NOT_AVAILABLE' });
+		}
 		child = spawn(CLAUDE_BIN, ['auth', 'login', '--claudeai'], {
 			cwd: ADMIN_USER_HOME,
 			env: ADMIN_ENV,
@@ -379,9 +387,13 @@ function finalizeClaudeResult(result, label) {
 /**
  * Execute Claude in the given environment. The `env` descriptor abstracts where
  * and how the process runs, so host and sandbox share this one executor:
- *   - label:     log / diagnostic label
- *   - extraArgs: extra CLI flags (e.g. --dangerously-skip-permissions in sandbox)
- *   - spawn:     (args) => Promise<{ stdout, stderr, code }>
+ *   - label:         log / diagnostic label
+ *   - extraArgs:     extra CLI flags (e.g. --dangerously-skip-permissions in sandbox)
+ *   - spawn:         (args) => Promise<{ stdout, stderr, code }>
+ *   - precheck?:     () => void — throw before spawning if the env is unusable
+ *   - onSpawnError?: (err) => void — mutate a spawn rejection (e.g. ENOENT remap)
+ *   - isUnavailable?:(result) => bool — true when a non-zero exit means the
+ *                    binary is missing rather than the run having failed
  * On spawn rejection the partial session id is attached; otherwise the
  * stream-json output is parsed once and finalized (or thrown).
  */
@@ -400,6 +412,8 @@ async function executeClaude(prompt, options = {}, env) {
 		throw new Error('executeClaude requires systemPrompt');
 	}
 
+	if (env.precheck) env.precheck();
+
 	const args = buildClaudeArgs(prompt, {
 		sessionId, systemPrompt, model,
 		extraArgs: env.extraArgs,
@@ -415,12 +429,16 @@ async function executeClaude(prompt, options = {}, env) {
 			onLine: onProgress ? line => onProgress(claudeProgress(line)) : null,
 		});
 	} catch (err) {
+		if (env.onSpawnError) env.onSpawnError(err);
 		const events = parseStreamJsonEvents(err.stdout);
 		err.sessionId = sessionIdFromEvents(events);
 		// Covers a cancelled or timed-out run: whatever it emitted before dying
 		// still counts.
 		err.usage = usageFromEvents(events, lastResultEvent(events));
 		throw err;
+	}
+	if (result.code !== 0 && env.isUnavailable && env.isUnavailable(result)) {
+		throw Object.assign(new Error('CLAUDE_NOT_AVAILABLE'), { code: 'CLAUDE_NOT_AVAILABLE' });
 	}
 	return finalizeClaudeResult(result, env.label);
 }
@@ -429,10 +447,21 @@ async function executeClaude(prompt, options = {}, env) {
 const hostClaudeEnv = {
 	label: 'Claude',
 	extraArgs: [],
+	precheck: () => {
+		if (!CLAUDE_AVAILABLE) {
+			throw Object.assign(new Error('CLAUDE_NOT_AVAILABLE'), { code: 'CLAUDE_NOT_AVAILABLE' });
+		}
+	},
 	spawn: (args, opts = {}) => spawnCollect(
 		CLAUDE_BIN, args,
 		{ cwd: ADMIN_USER_HOME, env: ADMIN_ENV, label: 'Claude', detached: true, ...opts },
 	),
+	onSpawnError: (err) => {
+		if (err.code === 'ENOENT') {
+			err.code = 'CLAUDE_NOT_AVAILABLE';
+			err.message = 'CLAUDE_NOT_AVAILABLE';
+		}
+	},
 };
 
 /**
@@ -440,6 +469,7 @@ const hostClaudeEnv = {
  * version covers both environments: the sandbox bind-mounts this same binary.
  */
 async function getClaudeVersion() {
+	if (!CLAUDE_AVAILABLE) return null;
 	return probeVersion(CLAUDE_BIN, ['--version'], { env: ADMIN_ENV });
 }
 

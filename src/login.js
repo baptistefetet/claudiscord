@@ -127,8 +127,9 @@ async function handleLogin({ channel, channelId, mode, agent }) {
 	try {
 		flow = agent === 'codex' ? startCodexLogin(mode) : startClaudeLogin(mode);
 	} catch (err) {
-		if (err.code === 'CODEX_NOT_AVAILABLE') {
-			await channel.send(`Codex is not installed or not available in **${mode}** mode.`);
+		if (err.code === 'CODEX_NOT_AVAILABLE' || err.code === 'CLAUDE_NOT_AVAILABLE') {
+			const label = err.code === 'CODEX_NOT_AVAILABLE' ? 'Codex' : 'Claude Code';
+			await channel.send(`${label} is not installed or not available in **${mode}** mode.`);
 			return true;
 		}
 		const label = agent === 'codex' ? 'Codex' : 'Claude';

@@ -220,6 +220,8 @@ client.on(Events.MessageCreate, async message => {
 		let errMsg;
 		if (err.code === 'CODEX_NOT_AVAILABLE') {
 			errMsg = `Codex is not installed or no longer available in **${mode}** mode.`;
+		} else if (err.code === 'CLAUDE_NOT_AVAILABLE') {
+			errMsg = `Claude Code is not installed or no longer available in **${mode}** mode.`;
 		} else if (err.code === 'CODEX_NOT_AUTHENTICATED') {
 			errMsg = 'Codex authentication failed. Select Codex in this channel and run `/login`.';
 		} else if (err.code === 'CANCELLED') {

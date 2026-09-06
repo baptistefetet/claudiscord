@@ -1,6 +1,6 @@
 # Claudiscord
 
-Single-user Discord relay to Claude Code CLI or optional Codex CLI + scheduled job runner. Single Node.js process.
+Single-user Discord relay to Claude Code CLI and/or Codex CLI + scheduled job runner. Single Node.js process.
 
 See `README.md` for installation, setup and Discord commands reference.
 
@@ -155,8 +155,11 @@ The user can drop files/photos into a channel (with no text). An upload does NOT
 
 ## Agent and models (per channel)
 
-- Each channel has an agent (`claude` or `codex`, default `claude`), and only the agent. It is persisted in `sessions.json` next to the mode.
-- `/claude` and `/codex` select it; either switch resets the channel session (the sessionId belongs to the agent — Claude UUIDs vs Codex thread ids). `/codex` reports an error and does not switch when the binary is missing in the channel's mode.
+- Each channel has an agent (`claude` or `codex`), and only the agent. It is persisted in `sessions.json` next to the mode.
+- **Both agents are optional; at least one must be installed.** `config.js` probes `CLAUDE_BIN` and `CODEX_BIN` once at startup and exports `CLAUDE_AVAILABLE` / `CODEX_AVAILABLE`; with neither present it throws rather than failing one prompt at a time. `CHANNEL_DEFAULT_AGENT` is `claude`, or `codex` when Claude is absent — it is also the fallback for a stored agent that is no longer valid.
+- The probe is host-only. Sandbox availability is a live container probe (`isClaudeAvailableInContainer` / `isCodexAvailableInContainer`), because the mount can break independently of the host install. `commands.js::isAgentAvailable(agent, mode)` picks the right one.
+- `/claude` and `/codex` select the agent; either switch resets the channel session (the sessionId belongs to the agent — Claude UUIDs vs Codex thread ids). Either reports an error and does not switch when that agent is unavailable in the channel's mode.
+- A missing binary surfaces as `CLAUDE_NOT_AVAILABLE` / `CODEX_NOT_AVAILABLE` through the env descriptor's `precheck` (before spawning), `onSpawnError` (ENOENT remap) and `isUnavailable` (the container wrapper's "not found" on an empty mount).
 - Each agent has **two model tiers** (`AGENT_MODELS` in `config.js`):
 
   | agent | `high` | `medium` |
@@ -376,7 +379,7 @@ A job's output is sent to its `channel_id`, unless it ends with `NOTIFY_NONE` �
   ```
 - `sessionId` belongs to the active agent. Both Claude and Codex allocate it on the first invocation and emit it early in JSON output; `executor.js` persists it inside the channel queue. Context-mutating commands (`/new`, mode/agent switch) are refused while the channel is busy (`isBusy(channelId)` — a prompt or job running), so a late result cannot restore a session the user just changed; the executor still re-checks agent/mode before persisting (covers a context switch during a thread's pre-enqueue first-turn window). Remote mode blocks these commands upstream via `remoteGateHint`.
 - Spawn errors retain partial stdout so the agent adapter can attach an already-emitted UUID before the error is surfaced. The next prompt can therefore resume even when the first failed after session initialization.
-- Legacy entries without `agent` load as Claude. A legacy `sessionStarted: false` drops its possibly uncreated UUID, and a legacy `model` key is ignored; both disappear on the next persistence (`load()` rebuilds each entry field by field).
+- Legacy entries without `agent` load as Claude — that was the unconditional default when they were written, so their session id is a Claude one. `ensureChannel()` stamps `agent` on every new entry precisely so this stays a legacy-only path: `CHANNEL_DEFAULT_AGENT` depends on which CLIs are installed, and an agent-less entry would otherwise be re-read under a different default after an install change, pairing one agent's session id with the other agent. A legacy `sessionStarted: false` drops its possibly uncreated UUID, and a legacy `model` key is ignored; both disappear on the next persistence (`load()` rebuilds each entry field by field).
 - `remoteId` is `null` when the channel is in Discord mode (default), or an 8-hex agent ID when the channel is currently driven from the Claude mobile app via `/remote`. See "Remote control" below.
 - `lastName` is a display snapshot to make the sessions file readable during debugging.
 - `depotPath` is the repository `/diff` reports on, cleared by a mode switch (the path names a filesystem the channel left). `diffGistId` is the gist it rewrites, and survives a mode switch: it names an output, not a filesystem.

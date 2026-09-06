@@ -6,15 +6,18 @@ const {
 	UPGRADE_TIMEOUT_MS,
 	STOP_REPORT_TIMEOUT_MS,
 	SANDBOX_HOST_HOME,
+	CLAUDE_AVAILABLE,
+	CODEX_AVAILABLE,
 } = require('./config');
 const sessions = require('./sessions');
 const {
 	ensureContainer,
 	DOCKER_AVAILABLE,
+	isClaudeAvailableInContainer,
 	isCodexAvailableInContainer,
 	getSandboxVersions,
 } = require('./container');
-const { CODEX_AVAILABLE, getCodexUsage, getCodexVersion } = require('./codex');
+const { getCodexUsage, getCodexVersion } = require('./codex');
 const { getClaudeUsage, getClaudeVersion } = require('./claude');
 const { handleLogin, finishPendingLogin } = require('./login');
 const { handleShell } = require('./shell');
@@ -332,10 +335,13 @@ async function handleUpgrade({ channel, mode }) {
 	return true;
 }
 
-// Codex availability for the channel's mode: the host startup probe in admin, a
+// Agent availability for the channel's mode: the host startup probe in admin, a
 // live container probe in sandbox (which already returns false without Docker).
-function isCodexAvailable(mode) {
-	return mode === 'admin' ? CODEX_AVAILABLE : isCodexAvailableInContainer();
+function isAgentAvailable(agent, mode) {
+	if (agent === 'codex') {
+		return mode === 'admin' ? CODEX_AVAILABLE : isCodexAvailableInContainer();
+	}
+	return mode === 'admin' ? CLAUDE_AVAILABLE : isClaudeAvailableInContainer();
 }
 
 // Context-mutating commands (mode/agent switch, session reset) are refused while
@@ -408,12 +414,13 @@ function conversationLine(channelId) {
 async function handleStatus({ channel, channelId, mode, agent, remoteId }) {
 	const dockerNote = DOCKER_AVAILABLE ? '' : '\nSandbox unavailable on this host.';
 	const remoteLine = remoteId ? `\nRemote: \`${remoteId}\`` : '';
-	const codexLine = isCodexAvailable(mode) ? '' : `\nCodex unavailable in **${mode}** mode.`;
+	const missing = ['claude', 'codex'].filter(a => !isAgentAvailable(a, mode));
+	const agentLine = missing.length ? `\nUnavailable in **${mode}** mode: ${missing.join(', ')}.` : '';
 	const voiceLine = getActiveVoiceChannelId() === channelId ? '\nVoice assistant: **active**' : '';
 	const autojoinLine = sessions.getAutojoin(channelId) ? '\nAutojoin: **on**' : '';
 	const depotPath = sessions.getDepotPath(channelId);
 	const depotLine = depotPath ? `\nRepository: \`${depotPath}\`` : '';
-	await channel.send(`Channel mode: **${mode}**\nAgent: **${agent}**${conversationLine(channelId)}${depotLine}${voiceLine}${autojoinLine}${remoteLine}${dockerNote}${codexLine}`);
+	await channel.send(`Channel mode: **${mode}**\nAgent: **${agent}**${conversationLine(channelId)}${depotLine}${voiceLine}${autojoinLine}${remoteLine}${dockerNote}${agentLine}`);
 	return true;
 }
 
@@ -497,8 +504,8 @@ const VOICE_AGENT_LOCK = 'Agent switch is locked while the voice assistant is ac
 // agent that has since disappeared would be the more misleading answer.
 async function handleAgent({ channel, channelId, content, mode, agent }) {
 	const target = content.slice(1);
-	if (target === 'codex' && !isCodexAvailable(mode)) {
-		await channel.send(`Codex is not installed or not available in **${mode}** mode.`);
+	if (!isAgentAvailable(target, mode)) {
+		await channel.send(`${target === 'codex' ? 'Codex' : 'Claude Code'} is not installed or not available in **${mode}** mode.`);
 		return true;
 	}
 	if (agent === target) {

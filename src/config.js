@@ -1,5 +1,6 @@
 const os = require('os');
 const path = require('path');
+const { execFileSync } = require('child_process');
 const ENV_PATH = path.resolve(__dirname, '..', '.env');
 require('dotenv').config({ path: ENV_PATH });
 
@@ -101,7 +102,29 @@ const VOICE_SILENCE_MS = 900;
 const VOICE_IDLE_TIMEOUT_MS = 900_000; // 15 min
 
 const VALID_AGENTS = ['claude', 'codex'];
-const CHANNEL_DEFAULT_AGENT = 'claude';
+
+// Both agents are optional, but at least one has to be installed. Probed once
+// here rather than per-module so every caller sees the same answer and the
+// process refuses to start rather than failing one prompt at a time. Host
+// probes only: the sandbox is probed live, in src/container.js.
+function probeAgent(bin) {
+	try {
+		execFileSync(bin, ['--version'], { stdio: 'ignore', timeout: 5000 });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+const CLAUDE_AVAILABLE = probeAgent(CLAUDE_BIN);
+const CODEX_AVAILABLE = probeAgent(CODEX_BIN);
+if (!CLAUDE_AVAILABLE && !CODEX_AVAILABLE) {
+	throw new Error(`No agent CLI found (looked for '${CLAUDE_BIN}' and '${CODEX_BIN}'). Install Claude Code or Codex, or set CLAUDE_BIN/CODEX_BIN.`);
+}
+
+// New channels use Claude when it is installed, Codex otherwise. Also the
+// fallback for a stored agent that is no longer valid.
+const CHANNEL_DEFAULT_AGENT = CLAUDE_AVAILABLE ? 'claude' : 'codex';
 
 // Two model tiers per agent. Interactive prompts (text + voice) use `high`,
 // scheduled jobs use `medium`. src/executor.js is the only resolver — no caller
@@ -158,6 +181,8 @@ module.exports = {
 	CONTAINER_CPUS,
 	VALID_AGENTS,
 	CHANNEL_DEFAULT_AGENT,
+	CLAUDE_AVAILABLE,
+	CODEX_AVAILABLE,
 	AGENT_MODELS,
 	REASONING_EFFORT,
 	DOCKER_CMD_TIMEOUT,

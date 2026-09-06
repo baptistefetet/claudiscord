@@ -55,8 +55,11 @@ A single-user Discord bot that drives [Claude Code](https://docs.anthropic.com/e
 - On the portal **Bot** page: enable the **Message Content Intent**
 - When generating the bot's invite link (portal **OAuth2 → URL Generator**, or the **Installation** page), select **both** the `bot` and `applications.commands` scopes — without `applications.commands` the native slash commands cannot be registered
 - In that same invite step, grant the bot the **View Channels**, **Send Messages** and **Read Message History** permissions so it can read and reply in the channels you add it to (DMs need no extra permission). For the voice assistant, also grant **Connect** and **Speak** (or add them later on the bot's role / the voice channel). The `Guilds` / `Guild Messages` / `Direct Messages` / `Guild Voice States` gateway intents are non-privileged and already enabled in code — nothing to toggle on the portal for them
-- Claude Code CLI installed on the host (`curl -fsSL https://claude.ai/install.sh | bash`) — claudiscord defaults to `~/.local/bin/claude` (the install script's default location); set `CLAUDE_BIN` in `.env` only if it's elsewhere
-- **Optional**: Codex CLI installed and authenticated on the host (`curl -fsSL https://chatgpt.com/codex/install.sh | sh`) — claudiscord defaults to `~/.local/bin/codex`; set `CODEX_BIN` only if it's elsewhere. Sandbox Codex additionally needs the installer's own layout, so a package-manager install (npm, brew…) leaves Codex working on the host but unavailable in the sandbox. Each agent is a host-side prerequisite for sandbox mode too — the container borrows the host's copy, so an agent absent from the host is absent from the sandbox as well
+- At least one agent CLI installed and authenticated on the host — either or both, whichever you want to drive:
+  - Claude Code (`curl -fsSL https://claude.ai/install.sh | bash`), defaulting to `~/.local/bin/claude`; set `CLAUDE_BIN` in `.env` only if it's elsewhere
+  - Codex (`curl -fsSL https://chatgpt.com/codex/install.sh | sh`), defaulting to `~/.local/bin/codex`; set `CODEX_BIN` only if it's elsewhere. Sandbox Codex additionally needs the installer's own layout, so a package-manager install (npm, brew…) leaves Codex working on the host but unavailable in the sandbox
+
+  Claudiscord refuses to start when neither is present, and disables whichever is missing: it is not offered by `/claude` / `/codex`, `/status` says so, and a new channel defaults to the one you do have. Each agent is a host-side prerequisite for sandbox mode too — the container borrows the host's copy, so an agent absent from the host is absent from the sandbox as well
 - **Optional**: Docker (only required for sandbox mode)
 
 ## Installation
@@ -150,7 +153,7 @@ If sandbox mode is configured you'll also see `Docker image 'claudiscord-sandbox
 - Invite the bot to any guild channel you want (private or not — the bot only talks back to the authorized user anyway).
 - Set the channel's **topic** to whatever you want the agent to keep in mind for this conversation — it's injected into the system prompt alongside the channel name.
 - The first message in a new channel defaults to **admin** mode. Switch with `/sandbox` if you'd rather keep that channel to a containerized workspace.
-- Claude Code is the default agent. `/codex` selects Codex in either mode; `/claude` selects Claude again. Either switch resets the channel session.
+- Claude Code is the default agent, or Codex when Claude is not installed. `/codex` selects Codex in either mode; `/claude` selects Claude again. Either switch resets the channel session, and is refused when the target agent is unavailable in the channel's mode.
 - Model and reasoning effort are forced by claudiscord for both agents, host and sandbox alike (`AGENT_MODELS` and `REASONING_EFFORT` in `src/config.js`) — they override any local CLI configuration.
 
 ## Scheduling

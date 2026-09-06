@@ -1,6 +1,7 @@
 const { execFileSync, spawn } = require('child_process');
 const {
 	CODEX_BIN,
+	CODEX_AVAILABLE,
 	ADMIN_USER_HOME,
 	CONTAINER_NAME,
 	SANDBOX_USER_HOME,
@@ -17,16 +18,7 @@ const CODEX_LOGIN_URL_TIMEOUT_MS = 15 * 1000;
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 const URL_RE = /https?:\/\/[^\s<>"')]+/g;
 
-let CODEX_AVAILABLE = true;
-try {
-	execFileSync(CODEX_BIN, ['--version'], {
-		stdio: 'ignore',
-		timeout: 5000,
-	});
-} catch {
-	CODEX_AVAILABLE = false;
-	log.warn('Codex not detected — Codex agent disabled');
-}
+if (!CODEX_AVAILABLE) log.warn('Codex not detected — Codex agent disabled');
 
 function stripAnsi(output) {
 	return output.replace(ANSI_RE, '');
@@ -517,7 +509,6 @@ const hostCodexEnv = {
 };
 
 module.exports = {
-	CODEX_AVAILABLE,
 	getCodexUsage,
 	getCodexVersion,
 	executeCodex,

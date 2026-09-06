@@ -310,6 +310,19 @@ function sandboxRunMarker() {
 	return { runId, env: ['-e', `${RUN_MARKER}=${runId}`] };
 }
 
+function isClaudeAvailableInContainer() {
+	if (!DOCKER_AVAILABLE) return false;
+	try {
+		ensureContainer();
+		execFileSync('docker', [
+			'exec', CONTAINER_NAME, 'claude', '--version',
+		], { stdio: 'ignore', timeout: 10000 });
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 // Sandbox environment for Claude: run `claude` inside the container with
 // permissions skipped (the container IS the sandbox boundary). A factory because
 // ensureContainer() must run before each use.
@@ -326,6 +339,10 @@ function sandboxClaudeEnv() {
 				{ label, ...opts, killInContainer: signal => killContainerRun(runId, signal) },
 			);
 		},
+		// Missing-binary detection is env-specific: docker exec exits non-zero
+		// with a "not found" stderr rather than ENOENT.
+		isUnavailable: (execution) => execution.stderr.includes('executable file not found')
+			|| execution.stderr.includes('claude: not found'),
 	};
 }
 
@@ -410,6 +427,7 @@ module.exports = {
 	DOCKER_AVAILABLE,
 	ensureImage,
 	ensureContainer,
+	isClaudeAvailableInContainer,
 	sandboxClaudeEnv,
 	isCodexAvailableInContainer,
 	sandboxCodexEnv,
