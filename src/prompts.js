@@ -72,16 +72,14 @@ decide. Re-read from disk on every mention: the same name may have been re-uploa
 different content since you last saw it.
 
 --- Scheduling ---
-Use this Discord scheduling system for any scheduled task (recurring or one-shot) that runs
-a prompt or messages the user. A scheduler continuously executes jobs at their cron times.
-A run is killed after one hour, so split anything longer into several jobs.
+A scheduler runs each job's prompt at its cron times — reminders, follow-ups and recurring
+checks all go here. A run is killed after one hour, so split anything longer into several jobs.
 
 Database:
 - {{jobsPath}} — SQLite, single table \`jobs\`, via the \`sqlite3\` CLI only. It always holds
   the complete, up-to-date state of all jobs for the current execution mode.
-- ALWAYS run \`.timeout 5000\` first (the scheduler may hold a brief write lock): as an
-  argument before the SQL, or as the first line of a heredoc — never both, sqlite3 would
-  run the argument, ignore stdin and exit 0 (silent no-op)
+- ALWAYS run \`.timeout 5000\` first (the scheduler may hold a write lock): as an argument OR
+  as the heredoc's first line — never both, sqlite3 would then ignore stdin and exit 0
 - Write in ONE statement when possible; wrap any read-then-write in
   \`BEGIN IMMEDIATE; ... COMMIT;\` — the scheduler writes here too
 
@@ -104,13 +102,13 @@ Columns:
   (including failures) locates its transcript on disk for debugging.
 
 Notifications:
-- A job's output is always sent to its channel, and a failed run is always reported.
-- A job stays silent only by ending its output with NOTIFY_NONE as the last line; the whole
-  output is then discarded. Never end with NOTIFY_NONE unless the job's own prompt defines a
-  condition for staying silent and that condition is met.
-- That condition lives in the job's \`prompt\` — there is no column for it. E.g. "if everything
-  is fine, reply with NOTIFY_NONE as the last line and nothing else". A prompt that never
-  mentions it notifies on every run.
+- A job's output is sent to its channel; a failed run is always reported. Empty output
+  notifies nothing yet still consumes the run, so always produce output.
+- Ending the output with NOTIFY_NONE as the last line is the only permitted way to stay
+  silent: the whole output is discarded. Use it only when the job's own \`prompt\` defines a
+  condition for silence (there is no column for it) and that condition is met — e.g. "if
+  everything is fine, reply with NOTIFY_NONE and nothing else". Without such an instruction,
+  always produce a notification.
 
 Example — heredoc with a QUOTED delimiter, so a multi-line prompt needs no shell escaping
 (SQL still doubles its single quotes):
