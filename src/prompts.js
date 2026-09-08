@@ -86,7 +86,8 @@ Database:
   \`BEGIN IMMEDIATE; ... COMMIT;\` — the scheduler writes here too
 
 Columns:
-- id: unique string, PRIMARY KEY
+- id: unique string, PRIMARY KEY. A running job schedules follow-up work under a fresh id:
+  ending the run deletes any row rewritten under its own
 - prompt: the prompt executed at each run
 - cron: standard cron expression, timezone Europe/Paris
 - remaining: executions left. 0 = infinite (recurring); >0 is decremented after each run and
