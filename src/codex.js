@@ -185,9 +185,9 @@ function parseCodexOutput(stdout) {
 	}
 
 	// No conversation size: `turn.completed.usage` totals every model call of the
-	// turn, and Codex exposes no per-request input or context window, so there is
-	// nothing here that answers "how full is this conversation".
-	return { result, sessionId, usage: null };
+	// turn, and Codex exposes no per-request input, so there is nothing here that
+	// answers "how full is this conversation".
+	return { result, sessionId, context: null };
 }
 
 /**

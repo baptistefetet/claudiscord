@@ -315,36 +315,21 @@ function inputTokens(usage) {
 }
 
 /**
- * How full the conversation is and what the turn cost: `{ context, window,
- * costUsd }`, any field null when absent.
+ * How full the conversation is, in tokens, or null when the stream says nothing.
  *
- * The context comes from the LAST assistant event, not from `result.usage`:
- * that one sums every model call of the turn, so a run with three tool calls
- * reported 90k against a 22k conversation. The last request's input is the
- * conversation as the model last saw it. Cost is the opposite — it is a total
- * for the turn, and `result` is where it lives.
- *
- * `window` is the model's raw context window. Claude Code auto-compacts well
- * below it, at `autoCompactWindow` from its own settings, which the stream
- * exposes nowhere — so the conversation can reset at a fraction of `window`.
+ * Taken from the LAST assistant event, not from `result.usage`: that one sums
+ * every model call of the turn, so a run with three tool calls reported 90k
+ * against a 22k conversation. The last request's input is the conversation as
+ * the model last saw it.
  */
-function usageFromEvents(events, resultEvent) {
+function contextFromEvents(events) {
 	let context = 0;
 	for (const e of events) {
 		if (e.type !== 'assistant') continue;
 		const turnInput = inputTokens(e.message?.usage);
 		if (turnInput) context = turnInput;
 	}
-	const windows = Object.values(resultEvent?.modelUsage || {})
-		.map(m => Number(m?.contextWindow) || 0)
-		.filter(Boolean);
-	const costUsd = Number(resultEvent?.total_cost_usd) || null;
-	if (!context && !costUsd) return null;
-	return {
-		context: context || null,
-		window: windows.length ? Math.max(...windows) : null,
-		costUsd,
-	};
+	return context || null;
 }
 
 /**
@@ -364,9 +349,8 @@ function finalizeClaudeResult(result, label) {
 		throw Object.assign(new Error(errMsg), {
 			code: result.code,
 			sessionId,
-			// A failed turn still spent tokens and money; dropping it would
-			// silently undercount the conversation.
-			usage: usageFromEvents(events, resultEvent),
+			// A failed turn still grew the conversation.
+			context: contextFromEvents(events),
 		});
 	}
 
@@ -380,7 +364,7 @@ function finalizeClaudeResult(result, label) {
 		// session_id but writes no conversation to disk, so a later --resume fails
 		// with "No conversation found". Don't surface it for persistence.
 		sessionId: resultEvent.num_turns === 0 ? null : sessionId,
-		usage: usageFromEvents(events, resultEvent),
+		context: contextFromEvents(events),
 	};
 }
 
@@ -434,7 +418,7 @@ async function executeClaude(prompt, options = {}, env) {
 		err.sessionId = sessionIdFromEvents(events);
 		// Covers a cancelled or timed-out run: whatever it emitted before dying
 		// still counts.
-		err.usage = usageFromEvents(events, lastResultEvent(events));
+		err.context = contextFromEvents(events);
 		throw err;
 	}
 	if (result.code !== 0 && env.isUnavailable && env.isUnavailable(result)) {

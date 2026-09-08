@@ -105,15 +105,15 @@ function executePrompt(agent, mode, prompt, options = {}) {
 
 			if (channelId && sessionContextIsCurrent()) {
 				if (result.sessionId) sessions.setSessionId(channelId, result.sessionId);
-				sessions.setUsage(channelId, result.usage);
+				sessions.setContext(channelId, result.context);
 			}
 			return result;
 		} catch (err) {
 			if (channelId && sessionContextIsCurrent()) {
 				if (err.sessionId) sessions.setSessionId(channelId, err.sessionId);
-				// A failed, cancelled or timed-out turn still spent tokens and
-				// money; dropping it would undercount the conversation.
-				sessions.setUsage(channelId, err.usage);
+				// A failed, cancelled or timed-out turn still grew the
+				// conversation; dropping it would undercount it.
+				sessions.setContext(channelId, err.context);
 			}
 			throw err;
 		}

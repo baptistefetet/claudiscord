@@ -306,25 +306,16 @@ async function handleSandbox({ channel, channelId, mode }) {
 }
 
 /**
- * How big the conversation has grown and what it has cost, from what the last
- * turn reported. Empty before the first turn, and after `/new` — there is no
- * conversation to measure.
+ * How big the conversation has grown, from what the last turn reported. Empty
+ * before the first turn, and after `/new` — there is no conversation to measure.
  */
 function conversationLine(channelId) {
-	const usage = sessions.getUsage(channelId);
-	if (!usage) return '';
+	const context = sessions.getContext(channelId);
+	if (!context) return '';
 	// Rounding to thousands turns a first short turn into "0k"; below that,
 	// show the count.
-	const tokens = n => (n < 1000 ? `${n}` : `${Math.round(n / 1000)}k`);
-	const parts = [];
-	if (usage.context) {
-		parts.push(usage.window
-			? `${tokens(usage.context)} / ${tokens(usage.window)} tokens (${Math.round((usage.context / usage.window) * 100)}%)`
-			: `${tokens(usage.context)} tokens`);
-	}
-	// Two decimals read as $0.00 for a cheap conversation, which looks free.
-	if (usage.costUsd) parts.push(`$${usage.costUsd < 0.01 ? usage.costUsd.toFixed(4) : usage.costUsd.toFixed(2)}`);
-	return parts.length ? `\nConversation: ${parts.join(' · ')}` : '';
+	const tokens = context < 1000 ? `${context}` : `${Math.round(context / 1000)}k`;
+	return `\nConversation: ${tokens} tokens`;
 }
 
 async function handleStatus({ channel, channelId, mode, agent }) {

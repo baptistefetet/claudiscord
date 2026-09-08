@@ -67,23 +67,10 @@ function fireSessionCleared(channelId, reason) {
 function dropSession(entry, channelId, reason) {
 	const had = Boolean(entry.sessionId);
 	entry.sessionId = null;
-	entry.usage = null;
+	entry.context = null;
 	starterClaimed.delete(channelId);
 	persist();
 	if (had) fireSessionCleared(channelId, reason);
-}
-
-// A hand-edited or older sessions.json can hold anything; a string costUsd would
-// concatenate on the next turn and then throw in toFixed.
-function sanitizeUsage(usage) {
-	if (!usage || typeof usage !== 'object') return null;
-	const num = value => (Number.isFinite(value) && value >= 0 ? value : null);
-	const clean = {
-		context: num(usage.context),
-		window: num(usage.window),
-		costUsd: num(usage.costUsd),
-	};
-	return (clean.context || clean.costUsd) ? clean : null;
 }
 
 function load() {
@@ -109,7 +96,7 @@ function load() {
 					sessionId,
 					autojoin: entry.autojoin === true,
 					lastName: typeof entry.lastName === 'string' ? entry.lastName : null,
-					usage: sanitizeUsage(entry.usage),
+					context: entry.context || null,
 					depotPath: typeof entry.depotPath === 'string' ? entry.depotPath : null,
 					diffGistId: typeof entry.diffGistId === 'string' ? entry.diffGistId : null,
 				});
@@ -151,7 +138,7 @@ function ensureFromParent(channelId, parentId) {
 		// Threads are never voice channels; kept for a uniform entry shape.
 		autojoin: false,
 		lastName: null,
-		usage: null,
+		context: null,
 	});
 	persist();
 	log.info(`Thread ${channelId} inherited config from parent ${parentId || '<none>'}`);
@@ -239,27 +226,18 @@ function setSessionId(channelId, sessionId) {
 }
 
 /**
- * Record what the turn that just finished reported. `costUsd` accumulates over
- * the conversation — each turn reports only its own — while context and window
- * are a snapshot, the conversation's current size. Persisted so it survives a
+ * Record the conversation size the turn that just finished reported — a
+ * snapshot, replaced each turn, not an accumulation. Persisted so it survives a
  * restart alongside the conversation it describes.
  */
-function setUsage(channelId, usage) {
-	if (!usage) return;
-	const entry = ensureChannel(channelId);
-	// Context and window describe the turn that just ran and are replaced, never
-	// carried over: keeping a previous window would let one agent's denominator
-	// survive into another's token count.
-	entry.usage = sanitizeUsage({
-		context: usage.context || null,
-		window: usage.window || null,
-		costUsd: ((entry.usage?.costUsd || 0) + (usage.costUsd || 0)) || null,
-	});
+function setContext(channelId, context) {
+	if (!context) return;
+	ensureChannel(channelId).context = context;
 	persist();
 }
 
-function getUsage(channelId) {
-	return channels.get(channelId)?.usage || null;
+function getContext(channelId) {
+	return channels.get(channelId)?.context || null;
 }
 
 /**
@@ -338,8 +316,8 @@ module.exports = {
 	listAutojoinChannelIds,
 	getSession,
 	setSessionId,
-	setUsage,
-	getUsage,
+	setContext,
+	getContext,
 	getDepotPath,
 	setDepotPath,
 	getDiffGistId,
