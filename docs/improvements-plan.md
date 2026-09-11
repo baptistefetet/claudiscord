@@ -200,6 +200,36 @@ channel.
 
 Effort: low-medium. Value: high.
 
+### Picking the path: autocomplete, not a button picker
+
+Typing an absolute path on a phone is the whole problem. disclaw ships both
+answers — a button-based filesystem browser (`dir-picker.ts`, 222 lines) and a
+plain string option taken straight from autocomplete when supplied
+(`interactions.ts:151`). Only the second one fits claudiscord.
+
+- The picker keeps its state in a module-level `Map` keyed by a short id
+  encoded in each button's `customId`, rebuilds the message on every click and
+  expires after 2 min; a restart drops pending pickers. It needs message
+  components and a stateful button router — irreducibly Discord-specific, so it
+  would live in `index.js` while `commands.js` stays SDK-free. In a sandbox
+  channel it would also have to list *inside* the container (`docker exec`) on
+  every click, since only `SANDBOX_HOST_HOME` is visible from the host.
+- Autocomplete has no state, no timeout, and works in DMs. The handler answers
+  one directory level filtered on what is typed — Discord caps a response at 25
+  choices and expects it within 3 s, so no recursive walk, and the sandbox
+  variant needs that budget in mind (cap the listing, or restrict suggestions
+  to paths under the sandbox home).
+- Suggestions are hints, not a whitelist: with autocomplete the user can submit
+  any string, so the path is still validated at dispatch (unlike static
+  choices, which Discord enforces).
+- **Shared prerequisite with §1**: `registerSlashCommands` (`index.js:356`)
+  emits only `name`/`description`/`type`/`dmPermission` — no `options` — and
+  the `InteractionCreate` listener returns unless `isChatInputCommand()`
+  (`index.js:302`), so autocomplete interactions are dropped. Extending the
+  neutral metadata in `commands.js` with an optional argument spec, and the
+  adapter with an autocomplete branch, unlocks `/btw <question>` and
+  `/cd <path>` at once. That is the real work; the picker is not.
+
 ## 10. Code-fence-aware message splitting
 
 `discord.js::splitMessage` cuts on the last `\n`, then the last space, then
@@ -236,7 +266,8 @@ Effort: low. Value: medium.
 and it pays off on every turn. `/btw` and the webhook have the best
 value/effort ratio among the bigger items; thread-fork is small once `/btw`
 exists. §10 and §11 are contained one-function changes; §9 is worth doing
-before more channels accumulate a `depotPath`. Voice: filter items 1–2 (§4)
+before more channels accumulate a `depotPath`, and its autocomplete UI shares
+the slash-command option support `/btw` needs — doing that once serves both. Voice: filter items 1–2 (§4)
 and the spoken ack (§7) are trivial; the `verbose_json` gate (§4.4) is a small,
 contained change to `stt.js` + `voice.js`; barge-in (§5) is the best UX win;
 streaming TTS (§6) is the heaviest item and can come last.
