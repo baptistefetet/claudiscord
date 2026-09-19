@@ -81,7 +81,7 @@ bash scripts/rebuild-sandbox.sh
 
 `rebuild-sandbox.sh` creates `SANDBOX_HOME` if needed and builds the image with the in-container `claude` user UID/GID matching the directory's owner, so bind-mounted files are read/write-able on both sides without manual chown setup. After a successful rebuild, it removes dangling images and the unused Docker build cache.
 
-The container runs the host's own Claude and Codex binaries through read-only bind-mounts, so you install and update each agent once, on the host, and the sandbox follows. Configuration stays separate — credentials, skills and `CLAUDE.md`/`AGENTS.md` are read from each environment's home, so an admin channel and a sandbox channel remain distinct agents.
+The container runs the host's own Claude and Codex binaries through read-only bind-mounts, so you install and update each agent once, on the host, and the sandbox follows. Configuration stays separate — credentials, skills and `AGENTS.md` are read from each environment's home, so an admin channel and a sandbox channel remain distinct agents.
 
 Because both sides run the same binaries, both report the same version. `/version` checks it: when the sandbox answers something else, its mount is pointing at a binary you have since replaced, and recreating the container with `rebuild-sandbox.sh` is what fixes it — the mounts are fixed when the container is created and never re-resolved.
 

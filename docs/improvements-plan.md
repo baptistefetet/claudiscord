@@ -59,7 +59,7 @@ Minimal HTTP server in the same process (`node:http`, no framework):
 
 - Require an EXISTING Discord `channelId` → this is a *trigger*, not a second
   transport: no session/jobs key namespacing, no scheduler notification
-  routing — the pending work listed in `CLAUDE.md` ("Adding a transport")
+  routing — the pending work listed in `AGENTS.md` ("Adding a transport")
   stays untouched.
 - Flow: resolve mode/agent from sessions → build the system prompt →
   `executePrompt` through the channel FIFO → result posted to the Discord
@@ -192,7 +192,7 @@ channel.
 - disclaw resolves through a chain: per-message `[~/path]` override > thread
   config > channel config > env > fallback. The per-message override is the
   cheap half and needs no persistence.
-- Side effect worth having: Claude auto-loads the cwd's `CLAUDE.md`, so a
+- Side effect worth having: Claude auto-loads the cwd's `AGENTS.md`, so a
   project channel picks up the project's instructions instead of `$HOME`'s.
 - Keep the mode-switch reset (the path names a filesystem the channel left),
   and validate existence before the spawn — a bad cwd fails the process with

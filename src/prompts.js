@@ -28,7 +28,7 @@ This conversation is in a thread named "{{threadName}}" under that channel.
 Channel ID: {{channelId}}
 {{/channelId}}
 {{#channelTopic}}
-Channel description (treat as context / mini CLAUDE.md for this conversation):
+Channel description (treat as context / mini AGENTS.md for this conversation):
 {{channelTopic}}
 {{/channelTopic}}
 Current channel agent: {{channelAgent}}
@@ -145,7 +145,7 @@ words were transcribed by Whisper, and your reply will be spoken aloud by TTS.
   system-changing actions: the user gets no visual echo of what you understood.
 {{/voice}}`;
 
-const DEFAULT_CLAUDE_MD = `# Claudiscord sandbox instructions
+const DEFAULT_AGENTS_MD = `# Claudiscord sandbox instructions
 Customize this file to tailor the agent's behavior to your needs.
 `;
 
@@ -222,8 +222,8 @@ function getSystemPrompt(options = {}) {
 	);
 }
 
-function getDefaultClaudeMd() {
-	return DEFAULT_CLAUDE_MD;
+function getDefaultAgentsMd() {
+	return DEFAULT_AGENTS_MD;
 }
 
-module.exports = { getSystemPrompt, getDefaultClaudeMd };
+module.exports = { getSystemPrompt, getDefaultAgentsMd };

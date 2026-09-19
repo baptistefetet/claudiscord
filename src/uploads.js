@@ -5,7 +5,7 @@ const { writeSandboxUpload, DOCKER_AVAILABLE } = require('./container');
 const log = require('./logger');
 
 // Build a filesystem-safe basename and make it unique within the current batch.
-// Across batches we intentionally overwrite by name (see CLAUDE.md "File uploads").
+// Across batches we intentionally overwrite by name (see AGENTS.md "File uploads").
 function uniqueName(rawName, used) {
 	const base = (path.basename(rawName || 'file').replace(/[\x00-\x1f]/g, '').trim()) || 'file';
 	if (!used.has(base)) { used.add(base); return base; }

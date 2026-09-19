@@ -15,7 +15,7 @@ const {
 	CONTAINER_CPUS,
 	DOCKER_CMD_TIMEOUT,
 } = require('./config');
-const { getDefaultClaudeMd } = require('./prompts');
+const { getDefaultAgentsMd } = require('./prompts');
 const { ensureDb } = require('./jobs-store');
 const { spawnCollect, probeVersion } = require('./spawn');
 const log = require('./logger');
@@ -108,12 +108,12 @@ function ensureStorage() {
 	fs.mkdirSync(home, { recursive: true });
 	if (isNew) chownContainerUser(home);
 
-	// Seed a default CLAUDE.md (customizable)
-	const claudeMd = path.join(home, 'CLAUDE.md');
-	if (!fs.existsSync(claudeMd)) {
-		fs.writeFileSync(claudeMd, getDefaultClaudeMd());
-		chownContainerUser(claudeMd);
-		log.info(`Created CLAUDE.md in ${home}`);
+	// Seed a default AGENTS.md (customizable)
+	const agentsMd = path.join(home, 'AGENTS.md');
+	if (!fs.existsSync(agentsMd)) {
+		fs.writeFileSync(agentsMd, getDefaultAgentsMd());
+		chownContainerUser(agentsMd);
+		log.info(`Created AGENTS.md in ${home}`);
 	}
 
 	// .claude: created root-owned when home is pre-populated externally,

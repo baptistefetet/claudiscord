@@ -255,7 +255,7 @@ The sandbox home also contains agent config:
 
 ```
 SANDBOX_HOST_HOME/
-  CLAUDE.md               # customisable
+  AGENTS.md               # customisable
   .claude/
     .credentials.json     # sandbox Claude auth, created by sandbox /login or CLI
     skills/               # user skills
@@ -284,7 +284,7 @@ bash scripts/rebuild-sandbox.sh
 - A first invocation omits session flags; Claude allocates an UUID and emits `session_id` in its JSON output. Subsequent invocations use `--resume <uuid>`.
 - `--dangerously-skip-permissions` in sandbox (the container IS the sandbox)
 - `--model` follows the execution tier (`opus` for prompts, `sonnet` for jobs); `--effort xhigh` always
-- Host cwd: `os.homedir()` of the user running the service (auto-loads `$HOME/CLAUDE.md`) — typically `/root` on Linux when the service runs as root, `/var/root` on macOS
+- Host cwd: `os.homedir()` of the user running the service (auto-loads `$HOME/AGENTS.md`) — typically `/root` on Linux when the service runs as root, `/var/root` on macOS
 - Sandbox cwd: `/home/claude`
 - Timeout: none — the CLI runs until it exits on its own
 
