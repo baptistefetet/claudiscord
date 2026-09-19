@@ -1,6 +1,8 @@
 const {
 	ADMIN_JOBS_FILE,
 	SANDBOX_JOBS_FILE,
+	ADMIN_SCHEDULING_DOC,
+	SANDBOX_SCHEDULING_DOC,
 	ADMIN_FILES_DIR,
 	SANDBOX_FILES_DIR,
 	VALID_AGENTS,
@@ -74,53 +76,8 @@ different content since you last saw it.
 --- Scheduling ---
 A scheduler runs each job's prompt at its cron times — reminders, follow-ups and recurring
 checks all go here. A run is killed after one hour, so split anything longer into several jobs.
-
-Database:
-- {{jobsPath}} — SQLite, single table \`jobs\`, via the \`sqlite3\` CLI only. It always holds
-  the complete, up-to-date state of all jobs for the current execution mode.
-- ALWAYS run \`.timeout 5000\` first (the scheduler may hold a write lock): as an argument OR
-  as the heredoc's first line — never both, sqlite3 would then ignore stdin and exit 0
-- Write in ONE statement when possible; wrap any read-then-write in
-  \`BEGIN IMMEDIATE; ... COMMIT;\` — the scheduler writes here too
-
-Columns:
-- id: unique string, PRIMARY KEY. A running job schedules follow-up work under a fresh id:
-  ending the run deletes any row rewritten under its own
-- prompt: the prompt executed at each run
-- cron: standard cron expression, timezone Europe/Paris
-- remaining: executions left. 0 = infinite (recurring); >0 is decremented after each run and
-  the job is auto-removed at 0; use 1 for a one-shot
-- isolated: 1 (default) = each run gets a fresh session. 0 = the run happens inside this
-  channel's ongoing conversation, so its result can be replied to; use it for short
-  follow-ups ("check X in 5 min"). If that conversation has been reset before the job
-  fires, the job is deleted instead of run — keep 1 for anything recurring or long-lived.
-- channel_id: REQUIRED — the current channel's ID (shown above), where notifications are sent
-- channel_name: REQUIRED — the current channel name shown above ("{{channelName}}")
-- description: free text
-- created: ISO date
-- last_run, last_session_id: auto-managed, do not modify. The session UUID of the last run
-  (including failures) locates its transcript on disk for debugging.
-
-Notifications:
-- A job's output is sent to its channel; a failed run is always reported. Empty output
-  notifies nothing yet still consumes the run, so always produce output.
-- Ending the output with NOTIFY_NONE as the last line is the only permitted way to stay
-  silent: the whole output is discarded. Use it only when the job's own \`prompt\` defines a
-  condition for silence (there is no column for it) and that condition is met — e.g. "if
-  everything is fine, reply with NOTIFY_NONE and nothing else". Without such an instruction,
-  always produce a notification.
-
-Example — heredoc with a QUOTED delimiter, so a multi-line prompt needs no shell escaping
-(SQL still doubles its single quotes):
-sqlite3 {{jobsPath}} <<'SQL'
-.timeout 5000
-INSERT INTO jobs (id, prompt, cron, remaining, channel_id, channel_name, created, description)
-VALUES ('disk', 'Check free disk space.
-If usage is above 90%, say so; otherwise reply with NOTIFY_NONE and nothing else.', '0 * * * *', 0, '{{channelId}}', '{{channelName}}', '2026-01-01T00:00:00Z', 'Hourly disk check');
-SQL
-
-Keep this mechanism internal: report a job by what it does and when, never by its columns,
-flags or cron syntax.
+Before creating, changing or reporting on a job, read {{schedulingDocPath}} — it holds the
+storage location, the schema and the notification rules.
 
 {{#textFormat}}
 --- Response format ---
@@ -145,6 +102,71 @@ words were transcribed by Whisper, and your reply will be spoken aloud by TTS.
   system-changing actions: the user gets no visual echo of what you understood.
 {{/voice}}`;
 
+// Written to <home>/.claudiscord/scheduling.md at startup (admin) and on the first
+// sandbox operation (sandbox); the system prompt carries only a pointer to it.
+const SCHEDULING_DOC = `# Scheduling reference
+
+Jobs are rows in a SQLite database read by claudiscord's scheduler. This file is the
+complete reference; the channel ID and name it asks for are in your instructions.
+
+## Database
+
+- {{jobsPath}} — single table \`jobs\`, via the \`sqlite3\` CLI only. It always holds the
+  complete, up-to-date state of all jobs for the current execution mode.
+- ALWAYS run \`.timeout 5000\` first (the scheduler may hold a write lock): as an argument OR
+  as the heredoc's first line — never both, sqlite3 would then ignore stdin and exit 0
+- Write in ONE statement when possible; wrap any read-then-write in
+  \`BEGIN IMMEDIATE; ... COMMIT;\` — the scheduler writes here too
+
+## Columns
+
+- id: unique string, PRIMARY KEY. A running job schedules follow-up work under a fresh id:
+  ending the run deletes any row rewritten under its own
+- prompt: the prompt executed at each run
+- cron: standard cron expression, timezone Europe/Paris
+- remaining: executions left. 0 = infinite (recurring); >0 is decremented after each run and
+  the job is auto-removed at 0; use 1 for a one-shot
+- isolated: 1 (default) = each run gets a fresh session. 0 = the run happens inside this
+  channel's ongoing conversation, so its result can be replied to; use it for short
+  follow-ups ("check X in 5 min"). If that conversation has been reset before the job
+  fires, the job is deleted instead of run — keep 1 for anything recurring or long-lived.
+- channel_id: REQUIRED — the channel ID shown in your instructions, where notifications are sent
+- channel_name: REQUIRED — the channel name shown in your instructions
+- description: free text
+- created: ISO date
+- last_run, last_session_id: auto-managed, do not modify. The session UUID of the last run
+  (including failures) locates its transcript on disk for debugging.
+
+## Notifications
+
+- A job's output is sent to its channel; a failed run is always reported. Empty output
+  notifies nothing yet still consumes the run, so always produce output.
+- Ending the output with NOTIFY_NONE as the last line is the only permitted way to stay
+  silent: the whole output is discarded. Use it only when the job's own \`prompt\` defines a
+  condition for silence (there is no column for it) and that condition is met — e.g. "if
+  everything is fine, reply with NOTIFY_NONE and nothing else". Without such an instruction,
+  always produce a notification.
+
+## Example
+
+Heredoc with a QUOTED delimiter, so a multi-line prompt needs no shell escaping (SQL still
+doubles its single quotes). Replace the channel id and name with the ones in your instructions:
+
+\`\`\`bash
+sqlite3 {{jobsPath}} <<'SQL'
+.timeout 5000
+INSERT INTO jobs (id, prompt, cron, remaining, channel_id, channel_name, created, description)
+VALUES ('disk', 'Check free disk space.
+If usage is above 90%, say so; otherwise reply with NOTIFY_NONE and nothing else.', '0 * * * *', 0, '<channel_id>', '<channel_name>', '2026-01-01T00:00:00Z', 'Hourly disk check');
+SQL
+\`\`\`
+
+## Reporting back
+
+Keep this mechanism internal: report a job by what it does and when, never by its columns,
+flags or cron syntax.
+`;
+
 const DEFAULT_AGENTS_MD = `# Claudiscord sandbox instructions
 Customize this file to tailor the agent's behavior to your needs.
 `;
@@ -152,8 +174,8 @@ Customize this file to tailor the agent's behavior to your needs.
 // Replace {{#flag}}...{{/flag}} blocks based on boolean flags.
 // The loop allows nested conditional blocks to collapse from the inside out.
 // After that, replace plain {{value}} placeholders with concrete strings.
-function renderSystemPrompt(values, flags) {
-	let output = SYSTEM_PROMPT;
+function render(template, values, flags = {}) {
+	let output = template;
 	let previous = null;
 
 	while (output !== previous) {
@@ -194,7 +216,8 @@ function getSystemPrompt(options = {}) {
 	if (!botName) throw new Error('getSystemPrompt requires botName');
 	if (!userName) throw new Error('getSystemPrompt requires userName');
 
-	return renderSystemPrompt(
+	return render(
+		SYSTEM_PROMPT,
 		{
 			botName,
 			userName,
@@ -204,7 +227,7 @@ function getSystemPrompt(options = {}) {
 			threadName: threadName || '',
 			channelTopic: channelTopic || '',
 			channelAgent: resolvedAgent,
-			jobsPath: isSandbox ? SANDBOX_JOBS_FILE : ADMIN_JOBS_FILE,
+			schedulingDocPath: isSandbox ? SANDBOX_SCHEDULING_DOC : ADMIN_SCHEDULING_DOC,
 			filesPath: isSandbox ? SANDBOX_FILES_DIR : ADMIN_FILES_DIR,
 		},
 		{
@@ -222,8 +245,14 @@ function getSystemPrompt(options = {}) {
 	);
 }
 
+function getSchedulingDoc(mode = 'admin') {
+	return render(SCHEDULING_DOC, {
+		jobsPath: mode === 'sandbox' ? SANDBOX_JOBS_FILE : ADMIN_JOBS_FILE,
+	});
+}
+
 function getDefaultAgentsMd() {
 	return DEFAULT_AGENTS_MD;
 }
 
-module.exports = { getSystemPrompt, getDefaultAgentsMd };
+module.exports = { getSystemPrompt, getSchedulingDoc, getDefaultAgentsMd };

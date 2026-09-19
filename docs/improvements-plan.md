@@ -5,8 +5,11 @@ codex-cli 0.146.0 and the current `src/`. Absorbs the former
 `docs/voice-improvements-plan.md` (§4–7); its deferred items (agent cancel
 while THINKING, realtime voice front-end) were dropped, not carried over.
 
-§8–11 were added 2026-09-11 from a review of `six-ddc/disclaw`, re-verified
+§8–10 were added 2026-09-11 from a review of `six-ddc/disclaw`, re-verified
 against Claude CLI 2.1.268 and codex-cli 0.154.0.
+
+Backlog only: a shipped item is removed from this file, not marked done — its
+reasoning belongs in `AGENTS.md` or the code.
 
 ## Verified capabilities
 
@@ -144,42 +147,7 @@ verbal acks). Reuse the cached-phrase mechanism (`PHRASES` +
 
 Files: `src/voice.js`. Effort: low. Value: UX polish.
 
-## 8. Scheduling as an internal skill
-
-Move the mechanics of the Scheduling section out of the system prompt and into
-a `SKILL.md` the agent opens only when it schedules something. The section is
-~3 KB of every system prompt today, paid on every turn of every channel, while
-most turns never touch a job.
-
-- Both CLIs read the same format and load only the frontmatter up front:
-  `/root/.codex/skills/.system/*/SKILL.md` carry `name` + `description`, and
-  `imagegen` is 19 KB — bodies are not inlined. `src/skills.js` already knows
-  both paths (`.claude/skills`, `.codex/skills`).
-- No spawn change needed: the `Skill` tool is not gated by `--allowedTools`
-  (`claude.js:167`) — a claudiscord run lists the host skills today.
-- **Stays in the prompt**: the trigger and the prohibitions ("recurring or
-  delayed work → the scheduling skill; never crontab/at/systemd timers/
-  `setTimeout`"). The agent opens a skill only if the always-loaded description
-  convinced it, so the interdiction must precede that decision — otherwise it
-  writes a crontab and never opens the file.
-- **Moves to the body**: table schema, `.timeout 5000`, column semantics,
-  `isolated`, `NOTIFY_NONE`. The token is safe to move: not knowing it means
-  not emitting it, and a job that must stay silent carries the instruction in
-  its own prompt, which is always in context.
-- Ship `skills/claudiscord-scheduling/SKILL.md` in the repo and install/refresh
-  it from `ensureStorage()` (which already prepares the sandbox config dirs)
-  into the four targets — `.claude/skills/` and `.codex/skills/` under both
-  homes. Versioned with the code instead of two hand-synced copies; document
-  that it is regenerated at startup, since that directory also holds the user's
-  own skills (listed by `/skills`).
-- Buys nothing on validation: no cron check before insert, no server-side
-  atomic write. `STRICT` and `recordJobRun`'s transaction remain the only
-  guards. An in-process MCP server would have added that, at the cost of
-  shipping every tool definition into every prompt — rejected on that trade.
-
-Effort: low. Value: high (context paid on every turn).
-
-## 9. Per-channel working directory
+## 8. Per-channel working directory
 
 Every run uses the home directory as cwd — `ADMIN_USER_HOME` on the host
 (`claude.js:131,441`, `codex.js:119,263,501`), `SANDBOX_USER_HOME` in the
@@ -230,7 +198,7 @@ plain string option taken straight from autocomplete when supplied
   adapter with an autocomplete branch, unlocks `/btw <question>` and
   `/cd <path>` at once. That is the real work; the picker is not.
 
-## 10. Code-fence-aware message splitting
+## 9. Code-fence-aware message splitting
 
 `discord.js::splitMessage` cuts on the last `\n`, then the last space, then
 hard at the limit, with no knowledge of ``` fences. A code block longer than a
@@ -245,7 +213,7 @@ renders as plain text.
 
 Effort: low, contained in one function. Value: medium.
 
-## 11. Reply context
+## 10. Reply context
 
 Replying to a message is the Discord-native way of pointing at something, and
 today nothing reads it: only a thread's starter message is injected
@@ -262,13 +230,12 @@ Effort: low. Value: medium.
 
 ## Priorities
 
-§8 (scheduling skill) is the cheapest real win — one file plus an install step,
-and it pays off on every turn. `/btw` and the webhook have the best
-value/effort ratio among the bigger items; thread-fork is small once `/btw`
-exists. §10 and §11 are contained one-function changes; §9 is worth doing
-before more channels accumulate a `depotPath`, and its autocomplete UI shares
-the slash-command option support `/btw` needs — doing that once serves both. Voice: filter items 1–2 (§4)
-and the spoken ack (§7) are trivial; the `verbose_json` gate (§4.4) is a small,
+`/btw` and the webhook have the best value/effort ratio among the bigger
+items; thread-fork is small once `/btw` exists. §9 and §10 are contained
+one-function changes; §8 is worth doing before more channels accumulate a
+`depotPath`, and its autocomplete UI shares the slash-command option support
+`/btw` needs — doing that once serves both. Voice: filter items 1–2 (§4) and
+the spoken ack (§7) are trivial; the `verbose_json` gate (§4.4) is a small,
 contained change to `stt.js` + `voice.js`; barge-in (§5) is the best UX win;
 streaming TTS (§6) is the heaviest item and can come last.
 
@@ -281,6 +248,6 @@ streaming TTS (§6) is the heaviest item and can come last.
 - Hermes — `voice_mixer.py` (source of `src/mixer.js`, ambient bed / duck
   gains):
   <https://github.com/NousResearch/hermes-agent/blob/main/plugins/platforms/discord/voice_mixer.py>
-- disclaw — Discord × Claude Code (source of §9–11: working-directory chain,
+- disclaw — Discord × Claude Code (source of §8–10: working-directory chain,
   fence-aware splitting, reply quoting):
   <https://github.com/six-ddc/disclaw>

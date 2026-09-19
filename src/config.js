@@ -55,6 +55,12 @@ const SANDBOX_HOST_JOBS_FILE = SANDBOX_HOST_HOME ? path.join(SANDBOX_HOST_HOME, 
 const ADMIN_SESSIONS_FILE = path.join(ADMIN_USER_HOME, STATE_DIR, ADMIN_SESSIONS_FILENAME);
 const SANDBOX_JOBS_FILE = path.posix.join(SANDBOX_USER_HOME, STATE_DIR, JOBS_FILENAME);
 
+// Agent-facing scheduling reference, regenerated from src/prompts.js (see
+// getSchedulingDoc). Sibling of jobs.db, same host/container path split.
+const SCHEDULING_DOC_FILENAME = 'scheduling.md';
+const ADMIN_SCHEDULING_DOC = path.join(ADMIN_USER_HOME, STATE_DIR, SCHEDULING_DOC_FILENAME);
+const SANDBOX_SCHEDULING_DOC = path.posix.join(SANDBOX_USER_HOME, STATE_DIR, SCHEDULING_DOC_FILENAME); // path seen inside the container (system prompt)
+
 // Uploaded files dropped by the user (see src/uploads.js). Sibling of jobs.db.
 const ADMIN_FILES_DIR = path.join(ADMIN_USER_HOME, STATE_DIR, 'files');
 const SANDBOX_HOST_FILES_DIR = SANDBOX_HOST_HOME ? path.join(SANDBOX_HOST_HOME, STATE_DIR, 'files') : null;
@@ -162,6 +168,9 @@ module.exports = {
 	SANDBOX_HOST_JOBS_FILE,
 	ADMIN_SESSIONS_FILE,
 	SANDBOX_JOBS_FILE,
+	ADMIN_SCHEDULING_DOC,
+	SCHEDULING_DOC_FILENAME,
+	SANDBOX_SCHEDULING_DOC,
 	ADMIN_FILES_DIR,
 	SANDBOX_HOST_FILES_DIR,
 	SANDBOX_FILES_DIR,

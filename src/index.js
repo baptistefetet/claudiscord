@@ -1,9 +1,9 @@
 const fs = require('fs');
 const path = require('path');
 const config = require('./config');
-const { ADMIN_USER_HOME, STATE_DIR, ADMIN_JOBS_FILE, ADMIN_FILES_DIR, SANDBOX_FILES_DIR } = config;
+const { ADMIN_USER_HOME, STATE_DIR, ADMIN_JOBS_FILE, ADMIN_SCHEDULING_DOC, ADMIN_FILES_DIR, SANDBOX_FILES_DIR } = config;
 const { ensureDb } = require('./jobs-store');
-const { getSystemPrompt } = require('./prompts');
+const { getSystemPrompt, getSchedulingDoc } = require('./prompts');
 const log = require('./logger');
 const sessions = require('./sessions');
 const { ensureImage, DOCKER_AVAILABLE } = require('./container');
@@ -400,6 +400,9 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 
 async function start() {
 	fs.mkdirSync(path.join(ADMIN_USER_HOME, STATE_DIR), { recursive: true });
+	// Regenerated, not seeded: the file is versioned with the code, so a local edit
+	// is overwritten here. The sandbox copy is written by container.js.
+	fs.writeFileSync(ADMIN_SCHEDULING_DOC, getSchedulingDoc('admin'));
 	// Also fail-fast when the sqlite3 CLI is missing (spawn ENOENT aborts boot).
 	ensureDb(ADMIN_JOBS_FILE);
 	sessions.load();

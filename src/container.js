@@ -10,12 +10,13 @@ const {
 	SANDBOX_CODEX_HOME,
 	STATE_DIR,
 	JOBS_FILENAME,
+	SCHEDULING_DOC_FILENAME,
 	CONTAINER_NAME,
 	DOCKER_IMAGE,
 	CONTAINER_CPUS,
 	DOCKER_CMD_TIMEOUT,
 } = require('./config');
-const { getDefaultAgentsMd } = require('./prompts');
+const { getDefaultAgentsMd, getSchedulingDoc } = require('./prompts');
 const { ensureDb } = require('./jobs-store');
 const { spawnCollect, probeVersion } = require('./spawn');
 const log = require('./logger');
@@ -141,6 +142,39 @@ function ensureStorage() {
 	if (!fs.existsSync(jobsFile)) {
 		ensureDb(jobsFile);
 		chownContainerUser(jobsFile);
+	}
+
+	// Regenerated, not seeded — a local edit is overwritten.
+	refreshContainerFile(path.join(home, STATE_DIR, SCHEDULING_DOC_FILENAME), getSchedulingDoc('sandbox'));
+}
+
+/**
+ * Rewrite a file the container user owns, in place, only when its content differs.
+ *
+ * Everything goes through ONE O_NOFOLLOW descriptor. The sandbox owns this
+ * directory and can replace the file with a symlink into the host: a path-based
+ * write would follow it as root, and a path-based chown would then hand the target
+ * to the container user. O_NOFOLLOW turns that into an ELOOP the open reports.
+ * The comparison also matters on its own — ensureStorage() runs before every
+ * sandbox operation, and an unconditional write would mean a chown each time.
+ */
+function refreshContainerFile(file, content) {
+	let fd;
+	try {
+		fd = fs.openSync(file, fs.constants.O_RDWR | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW, 0o644);
+	} catch (err) {
+		log.warn(`refresh ${file} failed: ${err.message}`);
+		return;
+	}
+	try {
+		if (fs.readFileSync(fd, 'utf8') === content) return;
+		fs.ftruncateSync(fd, 0);
+		fs.writeSync(fd, content, 0);
+		fs.fchownSync(fd, SANDBOX_UID, SANDBOX_GID);
+	} catch (err) {
+		log.warn(`refresh ${file} failed: ${err.message}`);
+	} finally {
+		fs.closeSync(fd);
 	}
 }
 

@@ -41,7 +41,7 @@ Dockerfile            # Sandbox image (node:22-bookworm-slim + user claude; agen
 src/
   index.js            # Entry point: Discord handler, queue wait UX
   config.js           # .env loading + paths + constants
-  prompts.js          # Shared system prompt builder (agent-agnostic — no per-agent sections)
+  prompts.js          # Shared system prompt builder (agent-agnostic — no per-agent sections) + the scheduling reference shipped as a file (getSchedulingDoc)
   logger.js           # stdout/stderr logging (journald-friendly)
   discord.js          # Client, sendToChannel, sendChunked (splitMessage now private), typing indicator, startProgressReporter
   queue.js            # Per-channel FIFOs + global maintenance gate + the run currently executing per key (/stop)
@@ -244,10 +244,12 @@ Both modes store runtime state under `<home>/.claudiscord/`:
 ADMIN_USER_HOME/.claudiscord/     # /root/.claudiscord on this host
   jobs.db                         # admin scheduled jobs (SQLite)
   sessions.json                   # per-channel state (shared across modes)
+  scheduling.md                   # generated scheduling reference (see "Scheduled jobs")
   files/                          # uploaded files (admin channels)
 
 SANDBOX_HOST_HOME/.claudiscord/   # bind-mounted as /home/claude/.claudiscord
   jobs.db                         # sandbox scheduled jobs (SQLite)
+  scheduling.md                   # generated scheduling reference
   files/                          # uploaded files (sandbox channels)
 ```
 
@@ -301,6 +303,36 @@ bash scripts/rebuild-sandbox.sh
 - `/upgrade` (sandbox only) calls `scripts/update-sandbox.sh`, which refreshes the container's apt packages only — both agents follow the host install
 
 ## Scheduled jobs
+
+### The agent-facing reference
+
+The system prompt carries only the trigger and the prohibitions (`use ONLY the Discord
+scheduling system` / `FORBIDDEN: crontab, at, systemd timers, setTimeout`) plus a pointer
+to `<home>/.claudiscord/scheduling.md`, which holds everything else — the database
+location, the schema, the `sqlite3` recipe and `NOTIFY_NONE`. The prohibitions must
+precede the decision to open the file, or an agent writes a crontab and never reads it;
+the mechanics can wait until it does.
+
+**The prompt must never name `jobs.db`.** An agent that already has the path writes to it
+straight away, on its own idea of the schema, and the doc is never opened — the path is
+the one piece that makes reading mandatory rather than optional.
+
+- Source: `prompts.js::getSchedulingDoc(mode)`, which bakes the mode's `jobs.db` path in
+  (`{{jobsPath}}` is a doc placeholder only, never a system-prompt one). The example's
+  `channel_id`/`channel_name` are placeholders — the real ones are per channel and live
+  in the system prompt's Context block.
+- **Regenerated, not seeded**: `index.js::start()` rewrites the admin copy at every boot,
+  `container.js::ensureStorage()` the sandbox one on every `ensureContainer()` (compared
+  first, so no write and no chown per `docker exec`). A local edit is lost.
+- The sandbox copy goes through `refreshContainerFile()`, which does the compare, the
+  write and the chown on ONE `O_NOFOLLOW` descriptor. It is the only place claudiscord
+  overwrites an existing file in the sandbox home: the container user owns that directory
+  and could point the name at a host file, which a path-based write would follow as root
+  and a path-based chown would then hand over. The seed-only writes next to it (`AGENTS.md`,
+  `jobs.db`) are guarded by `existsSync` instead and never clobber a target.
+- A skill was the other candidate, rejected: `/root/.claude/skills` and `/root/.codex/skills`
+  are the operator's own directories, shared with their interactive sessions, and nothing
+  scopes a skill root to claudiscord's runs the way `--settings` scopes settings.
 
 ### Format
 
