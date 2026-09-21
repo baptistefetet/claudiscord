@@ -313,9 +313,10 @@ location, the schema, the `sqlite3` recipe and `NOTIFY_NONE`. The prohibitions m
 precede the decision to open the file, or an agent writes a crontab and never reads it;
 the mechanics can wait until it does.
 
-**The prompt must never name `jobs.db`.** An agent that already has the path writes to it
-straight away, on its own idea of the schema, and the doc is never opened — the path is
-the one piece that makes reading mandatory rather than optional.
+**A run gets the doc in place of that pointer** (`{{#interactive}}` / `{{#scheduled}}`, the
+latter set by `scheduler.js` for isolated and non-isolated runs alike). None of the
+pointer's triggers fire for a run that only executes, yet its output obeys the
+Notifications rules, so it must hold them without opening anything.
 
 - Source: `prompts.js::getSchedulingDoc(mode)`, which bakes the mode's `jobs.db` path in
   (`{{jobsPath}}` is a doc placeholder only, never a system-prompt one). The example's
@@ -397,6 +398,7 @@ CREATE TABLE jobs (
 A job's output is sent to its `channel_id`, unless it ends with `NOTIFY_NONE` — the whole output is then dropped, never stripped and resent (`src/scheduler.js::suppressesNotification`).
 
 - Matching: last non-empty line, trimmed, must *be* the token. Symmetric markdown emphasis and one trailing period are tolerated; the line is rejected when an odd number of ` ``` ` fences precedes it (token quoted inside an unterminated block). Anything else notifies — a spurious message is recoverable, a dropped report is not.
+- The reference asks for the bare token and stays silent on that tolerance: it is a safety net, not a menu of accepted forms.
 - A job that must stay silent under some condition says so in its own `prompt`; there is no column for it. The convention is documented once, in the Scheduling section of `src/prompts.js`, and carries its own "never end with NOTIFY_NONE unless the job's prompt asks for it" guard — the token must never be described without it, or an agent could decide to go silent on its own.
 - Errors always notify: a crash produces no output, so it cannot opt out.
 - A dropped output is logged (`NOTIFY_NONE, output dropped (N chars)`) and stays readable in the run's transcript via `last_session_id`.

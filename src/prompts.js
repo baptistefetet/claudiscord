@@ -76,8 +76,13 @@ different content since you last saw it.
 --- Scheduling ---
 A scheduler runs each job's prompt at its cron times — reminders, follow-ups and recurring
 checks all go here. A run is killed after one hour, so split anything longer into several jobs.
+{{#interactive}}
 Before creating, changing or reporting on a job, read {{schedulingDocPath}} — it holds the
 storage location, the schema and the notification rules.
+{{/interactive}}
+{{#scheduled}}
+{{schedulingDoc}}
+{{/scheduled}}
 
 {{#textFormat}}
 --- Response format ---
@@ -103,7 +108,8 @@ words were transcribed by Whisper, and your reply will be spoken aloud by TTS.
 {{/voice}}`;
 
 // Written to <home>/.claudiscord/scheduling.md at startup (admin) and on the first
-// sandbox operation (sandbox); the system prompt carries only a pointer to it.
+// sandbox operation (sandbox); interactive prompts carry only a pointer to it, a
+// scheduled run gets it inlined.
 const SCHEDULING_DOC = `# Scheduling reference
 
 Jobs are rows in a SQLite database read by claudiscord's scheduler. This file is the
@@ -141,11 +147,12 @@ complete reference; the channel ID and name it asks for are in your instructions
 
 - A job's output is sent to its channel; a failed run is always reported. Empty output
   notifies nothing yet still consumes the run, so always produce output.
-- Ending the output with NOTIFY_NONE as the last line is the only permitted way to stay
-  silent: the whole output is discarded. Use it only when the job's own \`prompt\` defines a
-  condition for silence (there is no column for it) and that condition is met — e.g. "if
-  everything is fine, reply with NOTIFY_NONE and nothing else". Without such an instruction,
-  always produce a notification.
+- The only permitted way to stay silent is NOTIFY_NONE as the output's last non-empty line,
+  alone on that line: the whole output is then discarded. The token must BE the line —
+  "Auth still valid. NOTIFY_NONE" notifies, token and all. Use it only when the job's own
+  \`prompt\` defines a condition for silence (there is no column for it) and that condition
+  is met — e.g. "if everything is fine, reply with NOTIFY_NONE and nothing else". Without
+  such an instruction, always produce a notification.
 
 ## Example
 
@@ -206,6 +213,7 @@ function getSystemPrompt(options = {}) {
 		channelTopic = null,
 		isDM = false,
 		jobId = null,
+		scheduled = false,
 		channelAgent = null,
 		voice = false,
 	} = options;
@@ -228,10 +236,16 @@ function getSystemPrompt(options = {}) {
 			channelTopic: channelTopic || '',
 			channelAgent: resolvedAgent,
 			schedulingDocPath: isSandbox ? SANDBOX_SCHEDULING_DOC : ADMIN_SCHEDULING_DOC,
+			// A run cannot be told to go read the reference: it creates no job and reports
+			// on none, so no trigger fires, yet its own output obeys the notification rules.
+			schedulingDoc: scheduled ? getSchedulingDoc(mode) : '',
 			filesPath: isSandbox ? SANDBOX_FILES_DIR : ADMIN_FILES_DIR,
 		},
 		{
 			job: isJob,
+			// A run holds the reference itself, so it has nothing to be pointed to.
+			scheduled,
+			interactive: !scheduled,
 			admin: !isSandbox,
 			sandbox: isSandbox,
 			dm: isDM,

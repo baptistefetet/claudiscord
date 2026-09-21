@@ -204,6 +204,7 @@ async function executeJob(job) {
 			// The job block ends with "user replies cannot resume this job", which is
 			// exactly what a non-isolated run inverts.
 			jobId: job.isolated ? id : null,
+			scheduled: true,
 			channelAgent: jobAgent,
 		});
 		// The system prompt is re-sent on every invocation but never lands in the
