@@ -331,9 +331,6 @@ Notifications rules, so it must hold them without opening anything.
   and could point the name at a host file, which a path-based write would follow as root
   and a path-based chown would then hand over. The seed-only writes next to it (`AGENTS.md`,
   `jobs.db`) are guarded by `existsSync` instead and never clobber a target.
-- A skill was the other candidate, rejected: `/root/.claude/skills` and `/root/.codex/skills`
-  are the operator's own directories, shared with their interactive sessions, and nothing
-  scopes a skill root to claudiscord's runs the way `--settings` scopes settings.
 
 ### Format
 
