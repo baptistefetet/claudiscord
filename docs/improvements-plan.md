@@ -1,12 +1,11 @@
 # Claudiscord — feature backlog: session forks, webhook, voice, Discord UX
 
 Ideas discussed 2026-07-24, verified against the host Claude CLI 2.1.218,
-codex-cli 0.146.0 and the current `src/`. Absorbs the former
-`docs/voice-improvements-plan.md` (§4–7); its deferred items (agent cancel
-while THINKING, realtime voice front-end) were dropped, not carried over.
+codex-cli 0.146.0 and the current `src/`.
 
-§8–10 were added 2026-09-11 from a review of `six-ddc/disclaw`, re-verified
-against Claude CLI 2.1.268 and codex-cli 0.154.0.
+§5–7 were added 2026-09-11 from a review of `six-ddc/disclaw`, re-verified
+against Claude CLI 2.1.268 and codex-cli 0.154.0. §4 was added 2026-09-22 from
+a review of `KNQuoc/clod-voice` and OpenAI's Realtime docs.
 
 Backlog only: a shipped item is removed from this file, not marked done — its
 reasoning belongs in `AGENTS.md` or the code.
@@ -71,83 +70,58 @@ Minimal HTTP server in the same process (`node:http`, no framework):
   infra on this host). Optional channel allowlist in `.env`.
 - Use cases: iOS Shortcuts, CI, home automation.
 
-## 4. Voice hallucination filter
+## 4. Realtime voice front-end with async delegation
 
-Hermes' actual filter was fetched from the repo (`tools/voice_mode.py`):
-~26 exact-match phrases (mostly EN: "thank you", "bye", "you", "the end", plus
-RU/FR/IT/DE/JA subtitle credits), one repetition regex, one empty check.
-**"ciao" is not in it** — the current FR patterns in `voice.js` are already
-better targeted than Hermes' list, so simply porting their set is mostly moot.
-Ordered by cost:
+The chosen voice direction. It replaces the turn-based pipeline of the
+`/voice` assistant (Groq STT → agent → OpenAI TTS, half-duplex) instead of
+improving it: an OpenAI Realtime model holds the spoken conversation and
+delegates the real work to the channel's agent in the background, so the
+conversation stays live while tasks run.
 
-1. Extend the bare-pleasantry alternation in `HALLUCINATION_PATTERNS`
-   (`voice.js`): add `ciao`, `bye`, `bonne journée/soirée/nuit`,
-   `à plus (tard)`. Do NOT filter bare `oui`/`non`/`ok` — legitimate
-   confirmation answers (the voice prompt explicitly asks for confirmation
-   before acting).
-2. Port Hermes' repetition regex, FR-adapted (collapses "Merci. Merci.
-   Merci.") — their list's real added value.
-3. RMS energy gate on the captured PCM before the Groq call (`MIN_TURN_MS`
-   exists but there is no level check) — drops coughs/keyboard noise without
-   paying for an API call.
-4. Structural upgrade: request `response_format=verbose_json` instead of
-   `text` (`stt.js`). Groq returns per-segment metadata including
-   `no_speech_prob` (verified in Groq's speech-to-text docs); thresholding on
-   `no_speech_prob`/`avg_logprob` catches *arbitrary* hallucinations with no
-   list maintenance — the only approach that would have caught "ciao".
-   Apply to voice-channel turns; Discord voice messages (mic button) can keep
-   `text`.
+- **Reference**: `KNQuoc/clod-voice` (`src/realtime-client.ts`) — Discord
+  voice ↔ OpenAI Realtime over WebSocket (`gpt-4o-realtime-preview`), server
+  VAD (threshold 0.5, 300 ms prefix padding, 800 ms silence), tools declared on
+  the session, delegated results injected with `conversation.item.create` and
+  queued while a response is in progress. Early POC (3 commits) built on an
+  OpenClaw gateway + FFmpeg: a pattern, not code to reuse.
+- **Kept**: connection/autojoin, per-user receiver + opus decode, `pcm.js`
+  (plus a PCM16 24 kHz mono target, the format clod-voice streams), `mixer.js`
+  playback, `executePrompt`, `stopRun`. **Replaced**: `tts.js`, the half-duplex
+  state machine and the hallucination gate. `stt.js` stays for Discord voice
+  messages.
+- **Barge-in and streamed speech** come from the API (VAD `interrupt_response`,
+  audio streamed as generated); local playback still has to be cut
+  (`mixer.stopSpeech`).
+- **Tools**: `delegate(task)` starts `executePrompt` without awaiting it and
+  returns a task id at once; on completion the result is injected
+  (`conversation.item.create` + `response.create`) so the model announces it,
+  and posted to the chat. `task_status` / `cancel_task` sit on a task registry
+  + `stopRun`. The API's native async function calling keeps a session going
+  while a call is pending, but a task can run for minutes: returning the id
+  immediately keeps delegation independent of that.
 
-## 5. Voice: barge-in v1 (interrupt while SPEAKING only)
+Open decisions:
 
-Let the user cut the spoken reply and take the floor immediately. The voice
-layer stays a thin I/O adapter around the unchanged `executePrompt` core.
+- **Parallelism vs context**: the channel FIFO serializes. Either every task
+  runs on the channel session (context shared with the text chat, one at a
+  time) or each gets an isolated session (parallel, fresh context each —
+  e.g. one Discord thread per task). Start serialized.
+- **Two brains**: the Realtime model sees nothing of the host. It must delegate
+  anything about the system instead of answering from its own knowledge, and
+  pass the user's verbatim transcript to the agent along with its
+  reformulation.
+- **Safety**: a misheard order reaching admin mode → spoken confirmation
+  before any destructive task.
+- **Session cap**: 60 min per Realtime session → reconnect, re-seeding the
+  running tasks.
+- **Cost** (OpenAI pricing, 2026-09-22), per 1M audio tokens in/out:
+  `gpt-realtime-2.1` $32 / $64, `gpt-realtime-2.1-mini` $10 / $20. Start with
+  mini.
 
-Scope: **only the SPEAKING phase**, where the agent has already returned and
-the bot is merely reading finished (already chat-posted) text — no agent
-process is touched, so the interruption is lossless.
+Files: new `src/realtime.js` (WebSocket client, tool dispatch, task registry),
+`src/voice.js`, `src/pcm.js`. Effort: high. Value: high.
 
-- Keep the per-user receiver live during `speaking` (today `onSpeakingStart`
-  returns unless `state === 'listening'`, `voice.js`).
-- On confirmed speech during `speaking`: `session.mixer.stopSpeech()` — the
-  existing "barge-in rail" in `mixer.js` that drops the current clip and its
-  queue — then transition straight into a normal capture/turn.
-- Anti-cough guard: require ~200–300 ms of sustained speech before cutting
-  (OpenClaw's `minBargeInAudioEndMs` idea). New const `VOICE_BARGE_IN_MS`.
-
-Per-user Discord streams mean the bot never hears itself → no echo handling.
-Files: `src/voice.js` (state machine), `src/config.js`. Effort: medium.
-Value: high.
-
-## 6. Voice: streaming TTS (sentence by sentence)
-
-Cut time-to-first-word: today the bot waits for the *entire* agent reply
-before synthesizing. Hermes streams per sentence (accumulate ≥~20 chars,
-strip markdown / `<think>`, synth + play sequentially).
-
-- Needs a streaming path from the agent: consume Claude's `stream-json`
-  incrementally instead of only the final `result.result`. Requires an
-  executor API that yields text deltas (new — `executePrompt` resolves once
-  at the end). Codex `--json` is similar; can land Claude-first.
-- Segment on sentence boundaries, enqueue each clip via `mixer.playSpeech()`
-  (already plays back-to-back). Reduces reliance on the thinking bed.
-- Interaction with §5: SPEAKING and THINKING now overlap. Barge-in v1 still
-  just stops audio (`mixer.stopSpeech`) and lets the agent finish quietly —
-  no agent kill.
-
-Files: `src/claude.js` (delta emit), `src/executor.js` (streaming variant),
-`src/voice.js`. Effort: medium-high. Value: high.
-
-## 7. Voice: spoken ack before long tasks
-
-A brief spoken "je regarde ça" as soon as a turn enters THINKING, so the gap
-before the answer is filled by more than the ambient bed (Hermes / OpenClaw
-verbal acks). Reuse the cached-phrase mechanism (`PHRASES` +
-`speak(cache: true)`).
-
-Files: `src/voice.js`. Effort: low. Value: UX polish.
-
-## 8. Per-channel working directory
+## 5. Per-channel working directory
 
 Every run uses the home directory as cwd — `ADMIN_USER_HOME` on the host
 (`claude.js:131,441`, `codex.js:119,263,501`), `SANDBOX_USER_HOME` in the
@@ -198,7 +172,7 @@ plain string option taken straight from autocomplete when supplied
   adapter with an autocomplete branch, unlocks `/btw <question>` and
   `/cd <path>` at once. That is the real work; the picker is not.
 
-## 9. Code-fence-aware message splitting
+## 6. Code-fence-aware message splitting
 
 `discord.js::splitMessage` cuts on the last `\n`, then the last space, then
 hard at the limit, with no knowledge of ``` fences. A code block longer than a
@@ -213,7 +187,7 @@ renders as plain text.
 
 Effort: low, contained in one function. Value: medium.
 
-## 10. Reply context
+## 7. Reply context
 
 Replying to a message is the Discord-native way of pointing at something, and
 today nothing reads it: only a thread's starter message is injected
@@ -231,23 +205,23 @@ Effort: low. Value: medium.
 ## Priorities
 
 `/btw` and the webhook have the best value/effort ratio among the bigger
-items; thread-fork is small once `/btw` exists. §9 and §10 are contained
-one-function changes; §8 is worth doing before more channels accumulate a
+items; thread-fork is small once `/btw` exists. §6 and §7 are contained
+one-function changes; §5 is worth doing before more channels accumulate a
 `depotPath`, and its autocomplete UI shares the slash-command option support
-`/btw` needs — doing that once serves both. Voice: filter items 1–2 (§4) and
-the spoken ack (§7) are trivial; the `verbose_json` gate (§4.4) is a small,
-contained change to `stt.js` + `voice.js`; barge-in (§5) is the best UX win;
-streaming TTS (§6) is the heaviest item and can come last.
+`/btw` needs — doing that once serves both. Voice: §4 is deferred, and no
+further work goes into the turn-based `/voice` pipeline it replaces.
 
 ## References
 
-- OpenClaw — Discord channel (voice modes, barge-in, wake word):
-  <https://docs.openclaw.ai/fr/channels/discord/>
-- Hermes — Voice Mode (VAD, streaming TTS, hallucination filter):
-  <https://github.com/nousresearch/hermes-agent/blob/main/website/docs/user-guide/features/voice-mode.md>
+- clod-voice — Discord × OpenAI Realtime, delegation to Claude (source of
+  §4): <https://github.com/KNQuoc/clod-voice/blob/master/src/realtime-client.ts>
+- OpenAI — Realtime API notes (async function calling, 60 min sessions):
+  <https://developers.openai.com/blog/realtime-api>
+- OpenAI — Realtime VAD (`server_vad` / `semantic_vad`, `interrupt_response`):
+  <https://developers.openai.com/api/docs/guides/realtime-vad>
 - Hermes — `voice_mixer.py` (source of `src/mixer.js`, ambient bed / duck
   gains):
   <https://github.com/NousResearch/hermes-agent/blob/main/plugins/platforms/discord/voice_mixer.py>
-- disclaw — Discord × Claude Code (source of §8–10: working-directory chain,
+- disclaw — Discord × Claude Code (source of §5–7: working-directory chain,
   fence-aware splitting, reply quoting):
   <https://github.com/six-ddc/disclaw>
