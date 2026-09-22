@@ -22,6 +22,9 @@ const { AGENT_MODELS, JOB_TIMEOUT_MS } = require('./config');
  *
  * `tier` ('high' for interactive prompts, 'medium' for scheduled jobs) is turned
  * into a concrete model id here and nowhere else, so no caller names a model.
+ *
+ * `prompt` may be a function, called once when the run reaches the head of the
+ * queue, so a caller can keep appending to it while it waits.
  */
 function executePrompt(agent, mode, prompt, options = {}) {
 	const {
@@ -34,6 +37,8 @@ function executePrompt(agent, mode, prompt, options = {}) {
 		...rest
 	} = options;
 	return runQueued(queueKey, async () => {
+		// First, so a deferred prompt is closed even when a guard below throws.
+		if (typeof prompt === 'function') prompt = prompt();
 		if (
 			channelId
 			&& (sessions.getAgent(channelId) !== agent || sessions.getMode(channelId) !== mode)

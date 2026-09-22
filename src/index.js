@@ -26,8 +26,12 @@ process.on('uncaughtException', err => {
 
 const client = createClient();
 
-// One "⏳ waiting…" notice per channel, not one per queued message.
-const waitingNotice = new Set();
+// Per channel, the batch not started yet: messages sent while it waits join it.
+const batches = new Map();
+// Per channel, settles once the latest batch has posted its answer, so the next
+// batch's echo cannot land between the chunks of that answer.
+const lastDelivery = new Map();
+const WAIT_EMOJI = '⏳';
 
 // Threads whose starter-message fetch is in flight. Siblings await it so they
 // cannot overtake the claimant (executePrompt enqueues synchronously).
@@ -80,6 +84,8 @@ client.on(Events.MessageCreate, async message => {
 			return;
 		}
 	}
+	// What the user sees of this message, before any prefix meant for the agent.
+	const shown = prompt;
 
 	// Before handleCommand: an upload spawns no agent, so it is saved even when the
 	// text alongside it is a command. A voice message's lone attachment is the audio,
@@ -163,6 +169,41 @@ client.on(Events.MessageCreate, async message => {
 		}
 	}
 
+	// Messages sent while the channel is busy are merged into one turn, closed when
+	// it reaches the head of the queue. Discord cannot reorder them (nor can a bot
+	// delete them in a DM), so they are echoed right before the merged answer.
+	const item = { prompt, shown, reaction: null };
+	const open = batches.get(channelId);
+	if (open && open.agent === agent && open.mode === mode) {
+		item.reaction = message.react(WAIT_EMOJI).catch(() => null);
+		open.items.push(item);
+		return; // the batch owner answers
+	}
+	const batch = { agent, mode, waited: isBusy(channelId), items: [item], ready: null };
+	if (batch.waited) item.reaction = message.react(WAIT_EMOJI).catch(() => null);
+	batches.set(channelId, batch);
+	const previousDelivery = lastDelivery.get(channelId) || Promise.resolve();
+	let delivered;
+	const delivery = new Promise(resolve => { delivered = resolve; });
+	lastDelivery.set(channelId, delivery);
+	const takeBatch = () => {
+		if (batches.get(channelId) === batch) batches.delete(channelId);
+		for (const { reaction } of batch.items) {
+			reaction?.then(r => r?.users.remove(client.user.id)).catch(() => {});
+		}
+		batch.ready = previousDelivery;
+		if (batch.waited) {
+			const quoted = batch.items
+				.map(i => i.shown.split('\n').map(line => `> ${line}`).join('\n'))
+				.join('\n\n');
+			// No mentions: the user's text already pinged once.
+			batch.ready = previousDelivery
+				.then(() => sendChunked(channel, `📨\n${quoted}`, { allowedMentions: { parse: [] } }))
+				.catch(err => log.warn(`Batch echo failed: ${err.message}`));
+		}
+		return batch.items.map(i => i.prompt).join('\n\n');
+	};
+
 	// sessionId is resolved inside executePrompt, within the channel queue, so
 	// back-to-back messages cannot race the first generated UUID.
 	const promptOptions = {
@@ -181,17 +222,12 @@ client.on(Events.MessageCreate, async message => {
 		tier: 'high',
 	};
 
-	// Surface the wait once per channel if another prompt is already running.
-	if (isBusy(channelId) && !waitingNotice.has(channelId)) {
-		waitingNotice.add(channelId);
-		channel.send('\u23F3 Waiting for previous prompt...').catch(() => {});
-	}
-
 	let stopTyping = null;
 	const progress = startProgressReporter(channel);
 	try {
 		stopTyping = startTypingIndicator(channel);
-		const result = await executePrompt(agent, mode, prompt, { ...promptOptions, onProgress: progress.update });
+		const result = await executePrompt(agent, mode, takeBatch, { ...promptOptions, onProgress: progress.update });
+		await batch.ready;
 
 		stopTyping();
 		stopTyping = null;
@@ -221,17 +257,19 @@ client.on(Events.MessageCreate, async message => {
 			// `/stop` answers for itself, once the process is really gone.
 			errMsg = null;
 		} else if (err.code === 'CHANNEL_CONTEXT_CHANGED') {
-			errMsg = 'Channel mode or agent changed while this message was waiting. Send it again.';
+			errMsg = 'Channel mode or agent changed while your message(s) were waiting. Send again.';
 		} else if (err.message === 'Docker is not installed on this host') {
 			errMsg = 'Docker is not installed — switch this channel to admin mode with `/admin`.';
 		} else {
 			const agentLabel = agent === 'codex' ? 'Codex' : 'Claude Code';
 			errMsg = `${agentLabel} error: ${err.message?.slice(0, 300) || 'unknown'}`;
 		}
+		await batch.ready;
 		if (errMsg) await channel.send(errMsg).catch(e => log.error('Failed to send error message:', e));
 	} finally {
 		progress.clear();
-		if (!isBusy(channelId)) waitingNotice.delete(channelId);
+		delivered();
+		if (lastDelivery.get(channelId) === delivery) lastDelivery.delete(channelId);
 		scheduler.reloadJobs(); // the agent may have edited a jobs file, even on error
 	}
 });

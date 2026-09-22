@@ -64,10 +64,11 @@ function splitMessage(text, maxLength = DISCORD_MAX_MSG_LENGTH) {
  * Send `text` to a channel object, transparently splitting it to stay under
  * Discord's per-message limit (1900 leaves a margin below the 2000 hard cap).
  * Centralizes chunking so callers never deal with message-size limits themselves.
+ * `options` (e.g. allowedMentions) applies to every chunk.
  */
-async function sendChunked(channel, text) {
+async function sendChunked(channel, text, options) {
 	for (const chunk of splitMessage(text, 1900)) {
-		await channel.send(chunk);
+		await channel.send(options ? { ...options, content: chunk } : chunk);
 	}
 }
 
