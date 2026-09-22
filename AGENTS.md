@@ -164,7 +164,7 @@ The user can drop files/photos into a channel (with no text). An upload does NOT
   | agent | `high` | `medium` |
   |---|---|---|
   | claude | `opus` | `sonnet` |
-  | codex | `gpt-6-astra` | `gpt-5.6-terra` |
+  | codex | `sol` | `terra` |
 
 - Interactive prompts (text and voice) always run `high`; scheduled jobs always run `medium`. There is nothing to choose and nothing to persist.
 - The tier→model resolution lives **only** in `executor.js`; no other module names a model id. Callers pass `tier`, which defaults to `high`.
