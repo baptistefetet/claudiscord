@@ -385,6 +385,10 @@ async function connectAndStart(channel) {
 	});
 	connection.on('error', err => log.error('voice connection error:', err.message));
 
+	// Implicit /new: the call starts with no memory, so the agent session starts fresh too.
+	// Skipped while a task still runs there, like /new.
+	if (!isBusy(session.channelId)) sessions.clearChannel(session.channelId);
+
 	active = session;
 	resetIdleTimer(session);
 	return session;
