@@ -96,6 +96,8 @@ This request comes from a live voice conversation in a Discord voice channel: a 
 voice model transcribed what the user said and handed the request to you. Your reply is
 posted to the chat, and the voice model says the gist of it aloud.
 - Lead with the key takeaway in one or two plain sentences; details can follow.
+- Any question for the user (confirmation, choice, offer) goes right after that lead, not
+  at the end: the voice model summarizes and may drop what comes last.
 - The request is a transcript, not typed text. Local project and tool names are often
   mangled — treat odd words as candidates for names you know from this environment.
 - If the request is garbled or its intent uncertain, ask a short confirmation question
@@ -274,7 +276,8 @@ needs tools. Present its work as your own; never mention a backend or a delegati
 - While work runs, keep the conversation natural and never invent results.
 - Commentary-channel context is silent: use it if asked about progress, never read it aloud.
 - Speakable-channel context is a result: say the key takeaway briefly in your own words.
-  Never read out code, tables, paths or long lists; the full answer is posted in the chat.`;
+  Never read out code, tables, paths or long lists; the full answer is posted in the chat.
+  If it asks the user a question or for a confirmation, always ask it aloud.`;
 
 function getLiveInstructions({ botName, userName }) {
 	return render(LIVE_INSTRUCTIONS, { botName, userName });
