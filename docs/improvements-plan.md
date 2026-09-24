@@ -1,12 +1,5 @@
 # Claudiscord — feature backlog: session forks, webhook, voice, Discord UX
 
-Ideas discussed 2026-07-24, verified against the host Claude CLI 2.1.218,
-codex-cli 0.146.0 and the current `src/`.
-
-§5–7 were added 2026-09-11 from a review of `six-ddc/disclaw`, re-verified
-against Claude CLI 2.1.268 and codex-cli 0.154.0. §4 was added 2026-09-24 with the
-GPT-Live voice front end.
-
 Backlog only: a shipped item is removed from this file, not marked done — its
 reasoning belongs in `AGENTS.md` or the code.
 
