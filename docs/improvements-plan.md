@@ -4,8 +4,8 @@ Ideas discussed 2026-07-24, verified against the host Claude CLI 2.1.218,
 codex-cli 0.146.0 and the current `src/`.
 
 §5–7 were added 2026-09-11 from a review of `six-ddc/disclaw`, re-verified
-against Claude CLI 2.1.268 and codex-cli 0.154.0. §4 was added 2026-09-22 from
-a review of `KNQuoc/clod-voice` and OpenAI's Realtime docs.
+against Claude CLI 2.1.268 and codex-cli 0.154.0. §4 was added 2026-09-24 with the
+GPT-Live voice front end.
 
 Backlog only: a shipped item is removed from this file, not marked done — its
 reasoning belongs in `AGENTS.md` or the code.
@@ -70,56 +70,28 @@ Minimal HTTP server in the same process (`node:http`, no framework):
   infra on this host). Optional channel allowlist in `.env`.
 - Use cases: iOS Shortcuts, CI, home automation.
 
-## 4. Realtime voice front-end with async delegation
+## 4. Voice assistant follow-ups
 
-The chosen voice direction. It replaces the turn-based pipeline of the
-`/voice` assistant (Groq STT → agent → OpenAI TTS, half-duplex) instead of
-improving it: an OpenAI Realtime model holds the spoken conversation and
-delegates the real work to the channel's agent in the background, so the
-conversation stays live while tasks run.
+The GPT-Live front end (`src/live.js`, `src/voice.js`) serializes delegations
+on the channel FIFO. Next steps:
 
-- **Reference**: `KNQuoc/clod-voice` (`src/realtime-client.ts`) — Discord
-  voice ↔ OpenAI Realtime over WebSocket (`gpt-4o-realtime-preview`), server
-  VAD (threshold 0.5, 300 ms prefix padding, 800 ms silence), tools declared on
-  the session, delegated results injected with `conversation.item.create` and
-  queued while a response is in progress. Early POC (3 commits) built on an
-  OpenClaw gateway + FFmpeg: a pattern, not code to reuse.
-- **Kept**: connection/autojoin, per-user receiver + opus decode, `pcm.js`
-  (plus a PCM16 24 kHz mono target, the format clod-voice streams), `mixer.js`
-  playback, `executePrompt`, `stopRun`. **Replaced**: `tts.js`, the half-duplex
-  state machine and the hallucination gate. `stt.js` stays for Discord voice
-  messages.
-- **Barge-in and streamed speech** come from the API (VAD `interrupt_response`,
-  audio streamed as generated); local playback still has to be cut
-  (`mixer.stopSpeech`).
-- **Tools**: `delegate(task)` starts `executePrompt` without awaiting it and
-  returns a task id at once; on completion the result is injected
-  (`conversation.item.create` + `response.create`) so the model announces it,
-  and posted to the chat. `task_status` / `cancel_task` sit on a task registry
-  + `stopRun`. The API's native async function calling keeps a session going
-  while a call is pending, but a task can run for minutes: returning the id
-  immediately keeps delegation independent of that.
+- **Parallel delegations**: run each task on an isolated session (e.g. one
+  Discord thread per task) instead of the channel session, so a long task no
+  longer blocks the next one. Costs the shared context with the text chat.
+- **Spoken control**: status, cancellation and redirects by voice. Needs a
+  host-side classification of the delegation (OpenClaw classifies spoken
+  input as `status` / `steer` / `cancel` / `followup`) wired to `stopRun`,
+  instead of queueing it behind the work it targets.
+- **Agent startup latency**: a simple spoken question takes 20–28 s, of which
+  only 3–5 s is the model — measured on a sandbox Claude resume: ~14 s until
+  the CLI is up, 5–10 s more before the prompt reaches the session. Keeping one
+  agent process alive per channel (streamed input) instead of spawning one per
+  prompt would remove most of it, for text prompts too.
+- **Call renewal**: sessions expire ~2 h after start and the assistant leaves.
+  Reopen a call instead, seeding it with the recent transcript
+  (`initial_items`) and the tasks still running.
 
-Open decisions:
-
-- **Parallelism vs context**: the channel FIFO serializes. Either every task
-  runs on the channel session (context shared with the text chat, one at a
-  time) or each gets an isolated session (parallel, fresh context each —
-  e.g. one Discord thread per task). Start serialized.
-- **Two brains**: the Realtime model sees nothing of the host. It must delegate
-  anything about the system instead of answering from its own knowledge, and
-  pass the user's verbatim transcript to the agent along with its
-  reformulation.
-- **Safety**: a misheard order reaching admin mode → spoken confirmation
-  before any destructive task.
-- **Session cap**: 60 min per Realtime session → reconnect, re-seeding the
-  running tasks.
-- **Cost** (OpenAI pricing, 2026-09-22), per 1M audio tokens in/out:
-  `gpt-realtime-2.1` $32 / $64, `gpt-realtime-2.1-mini` $10 / $20. Start with
-  mini.
-
-Files: new `src/realtime.js` (WebSocket client, tool dispatch, task registry),
-`src/voice.js`, `src/pcm.js`. Effort: high. Value: high.
+Effort: medium each. Value: medium.
 
 ## 5. Per-channel working directory
 
@@ -208,20 +180,11 @@ Effort: low. Value: medium.
 items; thread-fork is small once `/btw` exists. §6 and §7 are contained
 one-function changes; §5 is worth doing before more channels accumulate a
 `depotPath`, and its autocomplete UI shares the slash-command option support
-`/btw` needs — doing that once serves both. Voice: §4 is deferred, and no
-further work goes into the turn-based `/voice` pipeline it replaces.
+`/btw` needs — doing that once serves both. Voice: §4 once the
+GPT-Live front end has been used for a while.
 
 ## References
 
-- clod-voice — Discord × OpenAI Realtime, delegation to Claude (source of
-  §4): <https://github.com/KNQuoc/clod-voice/blob/master/src/realtime-client.ts>
-- OpenAI — Realtime API notes (async function calling, 60 min sessions):
-  <https://developers.openai.com/blog/realtime-api>
-- OpenAI — Realtime VAD (`server_vad` / `semantic_vad`, `interrupt_response`):
-  <https://developers.openai.com/api/docs/guides/realtime-vad>
-- Hermes — `voice_mixer.py` (source of `src/mixer.js`, ambient bed / duck
-  gains):
-  <https://github.com/NousResearch/hermes-agent/blob/main/plugins/platforms/discord/voice_mixer.py>
 - disclaw — Discord × Claude Code (source of §5–7: working-directory chain,
   fence-aware splitting, reply quoting):
   <https://github.com/six-ddc/disclaw>

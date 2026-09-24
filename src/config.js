@@ -31,14 +31,6 @@ const GROQ_API_KEY = process.env.GROQ_API_KEY || null;
 const STT_MODEL = process.env.STT_MODEL || 'whisper-large-v3';
 const STT_LANGUAGE = process.env.STT_LANGUAGE || 'fr';
 
-// Optional: enables the voice assistant (/voice) — OpenAI TTS for spoken
-// replies. Voice mode also needs GROQ_API_KEY for transcription.
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY || null;
-const TTS_MODEL = process.env.TTS_MODEL || 'gpt-4o-mini-tts';
-const TTS_VOICE = process.env.TTS_VOICE || 'ash';
-// Speech rate multiplier, clamped to the endpoint's accepted range (0.25–4).
-const TTS_SPEED = Math.min(4, Math.max(0.25, parseFloat(process.env.TTS_SPEED) || 1));
-
 // Required by `/diff`, which publishes the patch as a secret gist and refuses
 // to run without it. Needs the `gist` scope.
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN || null;
@@ -66,6 +58,9 @@ const ADMIN_FILES_DIR = path.join(ADMIN_USER_HOME, STATE_DIR, 'files');
 const SANDBOX_HOST_FILES_DIR = SANDBOX_HOST_HOME ? path.join(SANDBOX_HOST_HOME, STATE_DIR, 'files') : null;
 const SANDBOX_FILES_DIR = path.posix.join(SANDBOX_USER_HOME, STATE_DIR, 'files'); // path seen inside the container (system prompt)
 const SANDBOX_CODEX_HOME = path.posix.join(SANDBOX_USER_HOME, '.codex'); // CODEX_HOME inside the container
+// Host Codex ChatGPT login, which the voice assistant's GPT-Live call rides on
+// (src/live.js) whatever the channel's mode and agent.
+const HOST_CODEX_AUTH_FILE = path.join(process.env.CODEX_HOME || path.join(ADMIN_USER_HOME, '.codex'), 'auth.json');
 
 const CONTAINER_NAME = 'claudiscord-sandbox';
 const DOCKER_IMAGE = 'claudiscord-sandbox';
@@ -102,9 +97,7 @@ const DIFF_MAX_BYTES = 5 * 1024 * 1024;
 // rather than leaving the command hanging on a dead network.
 const GIST_TIMEOUT_MS = 15_000;
 
-// Voice assistant tuning: silence that ends an utterance, and inactivity
-// before the bot leaves the voice channel on its own.
-const VOICE_SILENCE_MS = 900;
+// Inactivity before the voice assistant leaves the voice channel on its own.
 const VOICE_IDLE_TIMEOUT_MS = 900_000; // 15 min
 
 const VALID_AGENTS = ['claude', 'codex'];
@@ -154,12 +147,7 @@ module.exports = {
 	GROQ_API_KEY,
 	STT_MODEL,
 	STT_LANGUAGE,
-	OPENAI_API_KEY,
-	TTS_MODEL,
-	TTS_VOICE,
-	TTS_SPEED,
 	GITHUB_TOKEN,
-	VOICE_SILENCE_MS,
 	VOICE_IDLE_TIMEOUT_MS,
 	ADMIN_USER_HOME,
 	SANDBOX_USER_HOME,
@@ -175,6 +163,7 @@ module.exports = {
 	SANDBOX_HOST_FILES_DIR,
 	SANDBOX_FILES_DIR,
 	SANDBOX_CODEX_HOME,
+	HOST_CODEX_AUTH_FILE,
 	STATE_DIR,
 	JOBS_FILENAME,
 	SHELL_TIMEOUT_MS,

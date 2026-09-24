@@ -34,7 +34,7 @@ A single-user Discord bot that drives [Claude Code](https://docs.anthropic.com/e
 **Voice**
 
 - **Voice messages** — the mic button is transcribed via Groq Whisper and handed to the channel's agent
-- **Voice assistant** — talk to the bot in a voice channel: transcribed, answered by the channel's agent, spoken back via OpenAI TTS, with an ambient pad covering the latency
+- **Voice assistant** — talk to the bot in a voice channel: a realtime voice model (GPT-Live, on your ChatGPT subscription) holds the conversation and hands every task to the channel's agent in the background
 
 **Files**
 
@@ -205,12 +205,12 @@ Details:
 
 ## Voice assistant
 
-Type `/voice` in a **voice channel's text chat** to make the bot join that channel. Speak, pause ~1 s, and the bot transcribes the utterance, runs it through the channel's agent (same session as the channel's text chat) and answers out loud — half-duplex, walkie-talkie style. `/voice` again makes it leave; it also leaves by itself after 15 min of silence.
+Type `/voice` in a **voice channel's text chat** to make the bot join that channel, then just talk: the conversation is full duplex, you can interrupt it at any time, and it keeps talking while tasks run. Every task goes to the channel's agent (same session as the channel's text chat); the voice gives the gist of the result. `/voice` again makes it leave; it also leaves by itself after 15 min of silence.
 
-- Requires `OPENAI_API_KEY` (TTS) and `GROQ_API_KEY` (STT) in `.env`.
-- The transcript (`🎙️ …`) and the reply are also posted to the voice channel's chat.
-- The voice channel is a regular channel: switch mode with `/admin` / `/sandbox` in its chat. Voice turns run the channel's agent; switching the agent is locked while the assistant is active (`/voice` to stop it first).
-- Voice replies use a dedicated speakable system prompt (no markdown, confirmation questions when the transcript looks garbled).
+- Requires the host Codex ChatGPT login (`/codex` then `/login` in an admin channel), even when the channel runs Claude or sandbox mode. No API key; it uses an undocumented Codex endpoint that may change.
+- Each request (`🎙️ …`) and the full reply are also posted to the voice channel's chat.
+- Tasks run one after the other. To stop a running task, send `/stop` in the chat — it cannot be cancelled by voice.
+- The voice channel is a regular channel: switch mode with `/admin` / `/sandbox` in its chat (this restarts the voice call, like `/new`). Switching the agent is locked while the assistant is active (`/voice` to stop it first).
 
 ### Autojoin
 
@@ -242,10 +242,6 @@ If an environment is not authenticated, the corresponding agent reports an authe
 | `GROQ_API_KEY` | Groq API key for transcribing Discord voice messages via Whisper | Optional (voice messages ignored if unset) |
 | `STT_MODEL` | Groq Whisper model id | Optional (defaults to `whisper-large-v3`) |
 | `STT_LANGUAGE` | Transcription language, ISO-639-1 | Optional (defaults to `fr`) |
-| `OPENAI_API_KEY` | OpenAI API key for the voice assistant's TTS | Optional (`/voice` unavailable if unset) |
-| `TTS_MODEL` | OpenAI TTS model id | Optional (defaults to `gpt-4o-mini-tts`) |
-| `TTS_VOICE` | OpenAI TTS voice | Optional (defaults to `ash`) |
-| `TTS_SPEED` | Speech rate multiplier, 0.25–4.0 | Optional (defaults to `1`) |
 | `GITHUB_TOKEN` | GitHub PAT with the `gist` scope, to publish `/diff` patches as gists | Optional (`/diff` refuses to run if unset) |
 
 ## License

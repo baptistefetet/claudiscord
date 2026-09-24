@@ -28,6 +28,7 @@ const {
 	getActiveVoiceChannelId,
 	joinVoice,
 	leaveVoice,
+	restartVoiceCall,
 	maybeAutojoin,
 	clearAutojoinSuppression,
 } = require('./voice');
@@ -273,6 +274,7 @@ async function rejectIfChannelBusy(channel, channelId) {
 async function handleNew({ channel, channelId }) {
 	if (await rejectIfChannelBusy(channel, channelId)) return true;
 	sessions.clearChannel(channelId);
+	await restartVoiceCall(channelId);
 	await channel.send('Session reset for this channel.');
 	return true;
 }
@@ -285,6 +287,7 @@ async function handleAdmin({ channel, channelId, mode }) {
 	if (await rejectIfChannelBusy(channel, channelId)) return true;
 	sessions.setMode(channelId, 'admin');
 	sessions.clearChannel(channelId);
+	await restartVoiceCall(channelId);
 	await channel.send('Channel switched to **admin** mode. Session reset.');
 	return true;
 }
@@ -301,6 +304,7 @@ async function handleSandbox({ channel, channelId, mode }) {
 	if (await rejectIfChannelBusy(channel, channelId)) return true;
 	sessions.setMode(channelId, 'sandbox');
 	sessions.clearChannel(channelId);
+	await restartVoiceCall(channelId);
 	await channel.send('Channel switched to **sandbox** mode. Session reset.');
 	return true;
 }
@@ -330,13 +334,15 @@ async function handleStatus({ channel, channelId, mode, agent }) {
 	return true;
 }
 
+const VOICE_LOGIN_REQUIRED = 'Voice mode rides on the host Codex ChatGPT login — send `/codex` then `/login` in an admin channel first.';
+
 /**
  * /voice — toggle the voice assistant in a guild voice channel (typed in its
- * text-in-voice chat). Requires OPENAI_API_KEY (TTS) and GROQ_API_KEY (STT).
+ * text-in-voice chat). Requires the host Codex ChatGPT login (GPT-Live call).
  */
 async function handleVoice({ channel, channelId, agent }) {
 	if (!isVoiceModeAvailable()) {
-		await channel.send('Voice mode requires `OPENAI_API_KEY` and `GROQ_API_KEY` in `.env`.');
+		await channel.send(VOICE_LOGIN_REQUIRED);
 		return true;
 	}
 	if (!isSupportedVoiceChannel(channel)) {
@@ -359,7 +365,7 @@ async function handleVoice({ channel, channelId, agent }) {
 		// session must never outlive the token.
 		const realChannel = getClient().channels.cache.get(channelId) || channel;
 		await joinVoice(realChannel);
-		await channel.send(`🎙️ Voice assistant joined **${resolveChannelName(channel)}** (mode **${sessions.getMode(channelId)}**, agent **${agent}**). Speak, then pause — I answer out loud. Send \`/voice\` again to stop.`);
+		await channel.send(`🎙️ Voice assistant joined **${resolveChannelName(channel)}** (mode **${sessions.getMode(channelId)}**, agent **${agent}**). Just talk — interrupt me any time; tasks run through the channel's agent and their results land here too. Send \`/voice\` again to stop.`);
 	} catch (err) {
 		log.error('voice join error:', err.message);
 		await channel.send(`Voice join failed: ${err.message?.slice(0, 300) || 'unknown'}`);
@@ -374,7 +380,7 @@ async function handleVoice({ channel, channelId, agent }) {
  */
 async function handleAutojoin({ channel, channelId }) {
 	if (!isVoiceModeAvailable()) {
-		await channel.send('Voice mode requires `OPENAI_API_KEY` and `GROQ_API_KEY` in `.env`.');
+		await channel.send(VOICE_LOGIN_REQUIRED);
 		return true;
 	}
 	if (!isSupportedVoiceChannel(channel)) {

@@ -1,4 +1,5 @@
 const { ChannelType } = require('discord.js');
+const { PassThrough } = require('stream');
 const {
 	joinVoiceChannel,
 	entersState,
@@ -10,58 +11,40 @@ const {
 	EndBehaviorType,
 	StreamType,
 } = require('@discordjs/voice');
-const prism = require('prism-media');
 const config = require('./config');
 const log = require('./logger');
 const sessions = require('./sessions');
 const { executePrompt } = require('./executor');
 const { isBusy } = require('./queue');
-const { getSystemPrompt } = require('./prompts');
-const { transcribeAudio } = require('./stt');
-const { synthesizeSpeech } = require('./tts');
-const { ttsToMixer, captureToWav } = require('./pcm');
+const { getSystemPrompt, getLiveInstructions } = require('./prompts');
+const { openLiveCall, hasHostCodexLogin } = require('./live');
 const scheduler = require('./scheduler');
 const { getClient, sendChunked, resolveChannelName } = require('./discord');
-const { VoiceMixer, SAMPLE_RATE, CHANNELS } = require('./mixer');
 
 /**
- * Voice assistant: an I/O adapter around the unchanged core. One utterance = one
- * executePrompt through its channel FIFO, session keyed by the voice channel's own
- * id (shared with its text-in-voice chat).
- *
- * Half-duplex: input is ignored unless the state is `listening`.
- *   LISTENING → CAPTURING (until silence) → TRANSCRIBING → THINKING → SPEAKING
+ * Voice assistant: a GPT-Live call (src/live.js) holds the spoken conversation,
+ * full duplex, and delegates every real task here. A delegation is one
+ * executePrompt through the channel FIFO, session keyed by the voice channel's own
+ * id (shared with its text-in-voice chat). Its result goes to the chat and back to
+ * the call, which says the gist of it.
  */
 
-// PCM captured shorter than this is a click/cough, not an utterance.
-const MIN_TURN_MS = 300;
-const PCM_BYTES_PER_MS = (SAMPLE_RATE * CHANNELS * 2) / 1000;
-
-// Whisper hallucinates canned phrases on silence/noise (French model artifacts).
-const HALLUCINATION_PATTERNS = [
-	/sous-titr/i,
-	/amara\.org/i,
-	/merci d'avoir regardé/i,
-	/abonnez-vous/i,
-	// A bare pleasantry alone is a silence artifact, not a real turn.
-	/^(?:merci(?: beaucoup| à tous)?|au revoir|à bientôt)[\s.!?…]*$/i,
-	/^[\s.!?…-]*$/,
-];
-
-// French on purpose: single-user bot, matches the STT_LANGUAGE default.
-const PHRASES = {
-	busy: 'Un instant, je termine une autre tâche.',
-	error: 'Désolé, une erreur est survenue pendant le traitement.',
-};
+// Trailing silent output chunks (200 ms each) that end a spoken burst.
+const END_OF_SPEECH_CHUNKS = 2;
+// Discord player tolerance for late output chunks before it gives up (20 ms frames).
+const MAX_MISSED_FRAMES = 50;
+// Silent progress context is for "where are you at?" questions, not a live feed.
+const PROGRESS_MIN_INTERVAL_MS = 5000;
+// Past this, the call is told the rest is in the chat instead of receiving it.
+const MAX_SPOKEN_RESULT_CHARS = 2000;
 
 let active = null;
 // `active` cannot serialize joins on its own: it is assigned only at the end of
 // connectAndStart, after up to 15 s of entersState. Guards that window.
 let joining = null;
-const phraseCache = new Map();
 
 function isVoiceModeAvailable() {
-	return Boolean(config.OPENAI_API_KEY && config.GROQ_API_KEY);
+	return hasHostCodexLogin();
 }
 
 function isSupportedVoiceChannel(channel) {
@@ -70,48 +53,6 @@ function isSupportedVoiceChannel(channel) {
 
 function getActiveVoiceChannelId() {
 	return active ? active.channelId : null;
-}
-
-function isHallucination(text) {
-	return text.length < 2 || HALLUCINATION_PATTERNS.some(re => re.test(text));
-}
-
-/**
- * playSpeech resolves once the mixer has GENERATED the last frame, but the opus
- * encoder buffers seconds ahead — pausing then would freeze that tail (truncated
- * replies). resource.playbackDuration advances 20 ms per packet actually sent.
- */
-function waitForPlayout(session, generatedMs) {
-	if (!generatedMs) return Promise.resolve();
-	const deadline = Date.now() + 15_000;
-	return new Promise((resolve) => {
-		const check = () => {
-			if (active !== session || !session.resource
-				|| session.resource.playbackDuration >= generatedMs
-				|| Date.now() > deadline) return resolve();
-			setTimeout(check, 100);
-		};
-		check();
-	});
-}
-
-/** TTS + decode + play through the session mixer; resolves when played out. */
-async function speak(session, text, { cache = false } = {}) {
-	let pcm = cache ? phraseCache.get(text) : null;
-	if (!pcm) {
-		const raw = await synthesizeSpeech(text, {
-			apiKey: config.OPENAI_API_KEY,
-			model: config.TTS_MODEL,
-			voice: config.TTS_VOICE,
-			speed: config.TTS_SPEED,
-			format: 'pcm', // s16le 24 kHz mono, upsampled below — no decode step
-		});
-		pcm = ttsToMixer(raw);
-		if (cache) phraseCache.set(text, pcm);
-	}
-	session.player.unpause();
-	const generatedMs = await session.mixer.playSpeech(pcm);
-	await waitForPlayout(session, generatedMs);
 }
 
 async function postToChat(session, text) {
@@ -124,8 +65,10 @@ async function postToChat(session, text) {
 	}
 }
 
+/** Re-armed on each user turn; suspended while delegated work is pending. */
 function resetIdleTimer(session) {
 	clearTimeout(session.idleTimer);
+	if (session.pending > 0) return;
 	session.idleTimer = setTimeout(() => {
 		if (active !== session) return;
 		log.info('voice: leaving after inactivity');
@@ -147,99 +90,205 @@ function buildVoiceSystemPrompt(session) {
 	});
 }
 
-/** Capture one utterance: subscribe until silence, decode opus → PCM. */
-function captureTurn(session, userId) {
-	return new Promise((resolve) => {
-		const opusStream = session.connection.receiver.subscribe(userId, {
-			end: { behavior: EndBehaviorType.AfterSilence, duration: config.VOICE_SILENCE_MS },
-		});
-		const decoder = new prism.opus.Decoder({ rate: SAMPLE_RATE, channels: CHANNELS, frameSize: 960 });
-		const chunks = [];
-		decoder.on('data', c => chunks.push(c));
-		const finish = () => resolve(Buffer.concat(chunks));
-		decoder.on('end', finish);
-		decoder.on('error', (err) => { log.warn('voice decode error:', err.message); finish(); });
-		opusStream.on('error', (err) => { log.warn('voice receive error:', err.message); });
-		opusStream.pipe(decoder);
-	});
+/* ------------------------------------------------------------------ output */
+
+/**
+ * GPT-Live output (s16le 24 kHz mono) → Discord raw playback (s16le 48 kHz
+ * stereo): 2× linear interpolation + channel duplication. Exact integer ratio,
+ * so no resampler dependency.
+ */
+function liveToDiscord(pcm) {
+	const n = Math.floor(pcm.length / 2);
+	const out = Buffer.alloc(n * 8); // 2× samples × 2 channels × 2 bytes
+	for (let i = 0; i < n; i++) {
+		const s = pcm.readInt16LE(i * 2);
+		const mid = i + 1 < n ? (s + pcm.readInt16LE((i + 1) * 2)) >> 1 : s;
+		const o = i * 8;
+		out.writeInt16LE(s, o);
+		out.writeInt16LE(s, o + 2);
+		out.writeInt16LE(mid, o + 4);
+		out.writeInt16LE(mid, o + 6);
+	}
+	return out;
 }
 
-async function handleTurn(session, pcm) {
+/** True when the chunk holds sound: GPT-Live streams exact digital silence between turns. */
+function hasSignal(pcm) {
+	for (let i = 0; i + 1 < pcm.length; i += 2) {
+		if (Math.abs(pcm.readInt16LE(i)) > 64) return true;
+	}
+	return false;
+}
+
+/**
+ * One audio resource per spoken burst: the call streams silence between turns,
+ * which is dropped, so the player goes idle and the speaking ring turns off.
+ */
+function playOutput(session, pcm) {
+	const speech = hasSignal(pcm);
+	if (!session.output) {
+		if (!speech) return;
+		const stream = new PassThrough();
+		const resource = createAudioResource(stream, { inputType: StreamType.Raw });
+		session.output = { stream, resource, silentChunks: 0 };
+		session.player.play(resource);
+	}
+	const output = session.output;
+	output.stream.write(liveToDiscord(pcm));
+	output.silentChunks = speech ? 0 : output.silentChunks + 1;
+	if (output.silentChunks >= END_OF_SPEECH_CHUNKS) {
+		output.stream.end(); // plays out what is buffered, then the player goes idle
+		session.output = null;
+	}
+}
+
+/** Barge-in: drop the whole playback path, including a burst still playing out. */
+function stopOutput(session) {
+	session.output?.stream.destroy();
+	session.output = null;
+	session.player?.stop(true);
+}
+
+/* -------------------------------------------------------------- delegation */
+
+function handleDelegation(session, call, event) {
+	const id = event.item?.id;
+	const text = (event.item?.content || [])
+		.filter(part => part.type === 'input_text')
+		.map(part => part.text)
+		.join('')
+		.trim();
+	if (!id || !text) return;
 	const { channelId } = session;
-	if (pcm.length < MIN_TURN_MS * PCM_BYTES_PER_MS) return;
-
-	const wav = captureToWav(pcm);
-	const text = (await transcribeAudio(wav, {
-		apiKey: config.GROQ_API_KEY,
-		model: config.STT_MODEL,
-		language: config.STT_LANGUAGE,
-	})).trim();
-	if (isHallucination(text)) {
-		log.info(`voice: dropped transcript "${text.slice(0, 60)}"`);
-		return;
-	}
-	await postToChat(session, `🎙️ ${text}`);
-
-	// Voice equivalent of the text "⏳ waiting" hint.
+	postToChat(session, `🎙️ ${text}`);
 	if (isBusy(channelId)) {
-		session.state = 'speaking';
-		await speak(session, PHRASES.busy, { cache: true }).catch(err => log.warn('voice busy notice failed:', err.message));
+		call.appendContext(id, 'commentary', 'Queued behind another task running on this channel; starts when it ends.');
 	}
 
-	session.state = 'thinking';
-	session.player.unpause(); // make the thinking bed audible
-	session.mixer.setThinking(true);
-	let reply;
-	try {
-		const mode = sessions.getMode(channelId);
-		const agent = sessions.getAgent(channelId);
-		const result = await executePrompt(agent, mode, text, {
-			channelId,
-			systemPrompt: buildVoiceSystemPrompt(session),
-			tier: 'high',
-		});
-		reply = result.result || 'Réponse vide.';
-	} finally {
-		session.mixer.setThinking(false);
-		scheduler.reloadJobs(); // the agent may have edited a jobs file; mirrors index.js
-	}
+	let lastProgress = 0;
+	const onProgress = (progress) => {
+		if (!progress?.summary || Date.now() - lastProgress < PROGRESS_MIN_INTERVAL_MS) return;
+		lastProgress = Date.now();
+		call.appendContext(id, 'commentary', `In progress: ${progress.summary.slice(0, 300)}`);
+	};
+	// A closed call ignores the append; the chat still gets the result.
+	const speakResult = (result) => {
+		const spoken = result.length > MAX_SPOKEN_RESULT_CHARS
+			? `${result.slice(0, MAX_SPOKEN_RESULT_CHARS)}… (the rest is in the chat)`
+			: result;
+		call.appendContext(id, 'speakable', spoken);
+	};
 
-	await postToChat(session, reply);
-	session.state = 'speaking';
-	await speak(session, reply);
-}
-
-function onSpeakingStart(session, userId) {
-	if (userId !== config.AUTHORIZED_USER_ID) return;
-	if (session.state !== 'listening') return; // half-duplex: one turn at a time
-	session.state = 'capturing';
-	clearTimeout(session.idleTimer); // a long THINKING must not be cut; re-armed below
-
-	captureTurn(session, userId)
-		.then(async (pcm) => {
+	session.pending++;
+	clearTimeout(session.idleTimer);
+	executePrompt(sessions.getAgent(channelId), sessions.getMode(channelId), text, {
+		channelId,
+		systemPrompt: buildVoiceSystemPrompt(session),
+		tier: 'high',
+		onProgress,
+	})
+		.then(async (result) => {
+			const reply = result.result || 'Empty reply.';
+			await postToChat(session, reply);
+			speakResult(reply);
+		})
+		.catch(async (err) => {
+			// `/stop` answers in the chat for itself.
+			if (err.code === 'CANCELLED') {
+				speakResult('The task was stopped by the user.');
+				return;
+			}
+			log.error('voice delegation error:', err.message || err);
+			const message = err.message?.slice(0, 300) || 'unknown';
+			await postToChat(session, `Voice task failed: ${message}`);
+			speakResult(`The task failed: ${message}`);
+		})
+		.finally(() => {
+			session.pending--;
+			if (active === session) resetIdleTimer(session);
 			try {
-				await handleTurn(session, pcm);
+				scheduler.reloadJobs(); // the agent may have edited a jobs file; mirrors index.js
 			} catch (err) {
-				// `/stop` typed in the chat while the turn was running: an operator
-				// decision, so the assistant just goes back to listening.
-				if (err.code === 'CANCELLED') {
-					// `/stop` answers for itself; the assistant just resumes listening.
-					log.info('voice turn stopped by the user');
-				} else {
-					log.error('voice turn error:', err.message || err);
-					await postToChat(session, `Voice turn failed: ${err.message?.slice(0, 300) || 'unknown'}`);
-					await speak(session, PHRASES.error, { cache: true }).catch(() => {});
-				}
-			} finally {
-				if (active === session) {
-					session.state = 'listening';
-					// The lib's 5 silence frames on pause turn the speaking ring off;
-					// its own UDP keepalive keeps the session up.
-					session.player.pause();
-					resetIdleTimer(session);
-				}
+				log.error('voice: jobs reload failed:', err.message);
 			}
 		});
+}
+
+/* -------------------------------------------------------------------- call */
+
+function handleLiveEvent(session, call, event) {
+	if (active !== session || session.call !== call) return;
+	switch (event.type) {
+		case 'session.output_audio.delta':
+			playOutput(session, Buffer.from(event.delta, 'base64'));
+			break;
+		case 'turn.done':
+			log.info(`voice ${event.turn?.role}: ${event.turn?.transcript?.trim()}`);
+			break;
+		case 'turn.created':
+			if (event.turn?.role !== 'user') break;
+			stopOutput(session);
+			resetIdleTimer(session);
+			break;
+		case 'delegation.created':
+			handleDelegation(session, call, event);
+			break;
+		case 'error':
+			log.warn('GPT-Live error:', JSON.stringify(event.error || event).slice(0, 300));
+			break;
+	}
+}
+
+async function openCall(session) {
+	let call = null;
+	call = await openLiveCall({
+		instructions: getLiveInstructions({ botName: session.botName, userName: session.userName }),
+		onEvent: event => call && handleLiveEvent(session, call, event),
+		onClose: (reason) => {
+			if (active !== session || session.call !== call) return;
+			log.info(`voice: GPT-Live call ended (${reason}), leaving`);
+			postToChat(session, `🔇 Voice assistant left: the voice call ended (${reason}).`);
+			leaveVoice();
+		},
+	});
+	return call;
+}
+
+/**
+ * `/new` and mode switches reset the channel's agent session: the call's own
+ * conversation memory is reset with it. Delegations already queued keep running
+ * and report to the chat only.
+ */
+async function restartVoiceCall(channelId) {
+	const session = active;
+	if (!session || session.channelId !== channelId) return;
+	// Two resets in a row: only the latest one installs its call.
+	const generation = ++session.callGeneration;
+	const isCurrent = () => active === session && session.callGeneration === generation;
+	session.call.close();
+	stopOutput(session);
+	try {
+		const call = await openCall(session);
+		if (isCurrent()) session.call = call;
+		else call.close();
+	} catch (err) {
+		if (!isCurrent()) return;
+		log.error('voice call restart failed:', err.message);
+		await postToChat(session, `🔇 Voice assistant left: ${err.message.slice(0, 300)}`);
+		leaveVoice();
+	}
+}
+
+/* ------------------------------------------------------------------- input */
+
+/** Forward the authorized user's Opus packets to the call as they are. */
+function onSpeakingStart(session, userId) {
+	if (userId !== config.AUTHORIZED_USER_ID || session.input) return;
+	const stream = session.connection.receiver.subscribe(userId, { end: { behavior: EndBehaviorType.Manual } });
+	session.input = stream;
+	stream.on('data', packet => session.call.pushOpus(packet));
+	stream.on('error', err => log.warn('voice receive error:', err.message));
+	stream.on('close', () => { if (session.input === stream) session.input = null; });
 }
 
 /**
@@ -272,10 +321,12 @@ async function connectAndStart(channel) {
 		channelId: channel.id,
 		channelName: resolveChannelName(channel),
 		connection,
-		mixer: null,
+		call: null,
+		callGeneration: 0,
 		player: null,
-		resource: null,
-		state: 'listening',
+		output: null,
+		input: null,
+		pending: 0,
 		idleTimer: null,
 		botName: client.user.displayName || client.user.username,
 		userName: 'user',
@@ -293,23 +344,28 @@ async function connectAndStart(channel) {
 		session.userName = user.displayName || user.username;
 	} catch (_) {}
 
-	// Permanent mixer resource: one audio source for the whole session.
-	session.mixer = new VoiceMixer();
-	session.player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Play } });
+	try {
+		session.call = await openCall(session);
+	} catch (err) {
+		connection.destroy();
+		throw err;
+	}
+	// The Disconnected handler below is not installed yet during call setup.
+	if (connection.state.status !== VoiceConnectionStatus.Ready) {
+		session.call.close();
+		connection.destroy();
+		throw new Error('lost the voice channel connection while opening the voice call');
+	}
+
+	session.player = createAudioPlayer({
+		behaviors: { noSubscriber: NoSubscriberBehavior.Play, maxMissedFrames: MAX_MISSED_FRAMES },
+	});
 	session.player.on('error', err => log.error('voice player error:', err.message));
-	// The mixer never ends by itself — Idle here means the pipeline broke.
-	session.player.on(AudioPlayerStatus.Idle, () => {
-		if (active !== session) return;
-		log.warn('voice player went idle, rebuilding mixer resource');
-		const old = session.mixer;
-		session.mixer = new VoiceMixer();
-		old.destroy();
-		session.resource = createAudioResource(session.mixer, { inputType: StreamType.Raw });
-		session.player.play(session.resource);
+	// A burst that played out, or was dropped for missing too many frames.
+	session.player.on(AudioPlayerStatus.Idle, (oldState) => {
+		if (session.output?.resource === oldState.resource) session.output = null;
 	});
 	connection.subscribe(session.player);
-	session.resource = createAudioResource(session.mixer, { inputType: StreamType.Raw });
-	session.player.play(session.resource);
 
 	connection.receiver.speaking.on('start', userId => onSpeakingStart(session, userId));
 
@@ -331,18 +387,12 @@ async function connectAndStart(channel) {
 
 	active = session;
 	resetIdleTimer(session);
-
-	// Join silently, straight to Paused: the idle bed is silent but a live player
-	// keeps transmitting, showing the bot as permanently speaking. pause() no-ops
-	// unless already Playing, and play() starts in Buffering — hence entersState.
-	entersState(session.player, AudioPlayerStatus.Playing, 5_000)
-		.then(() => { if (active === session && session.state === 'listening') session.player.pause(); })
-		.catch(err => log.warn('voice: player never reached Playing:', err.message));
 	return session;
 }
 
 /**
- * Tear down the active session, if any. Safe to call twice.
+ * Tear down the active session, if any. Safe to call twice. Delegations still
+ * queued or running keep going and report to the chat.
  *
  * `suppressAutojoin` is passed only by the explicit `/voice` kick — the other
  * callers produce no voiceStateUpdate, so nothing could re-trigger autojoin.
@@ -353,10 +403,11 @@ function leaveVoice({ suppressAutojoin = false } = {}) {
 	if (suppressAutojoin && sessions.getAutojoin(session.channelId)) suppressed.add(session.channelId);
 	active = null;
 	clearTimeout(session.idleTimer);
-	session.mixer.stopSpeech();
+	session.call.close();
+	session.input?.destroy();
+	session.output?.stream.destroy();
 	try { session.player.stop(true); } catch (_) {}
 	try { session.connection.destroy(); } catch (_) {}
-	session.mixer.destroy();
 	log.info(`voice: left channel ${session.channelId}`);
 	return true;
 }
@@ -477,6 +528,7 @@ module.exports = {
 	getActiveVoiceChannelId,
 	joinVoice,
 	leaveVoice,
+	restartVoiceCall,
 	maybeAutojoin,
 	clearAutojoinSuppression,
 	handleVoiceStateUpdate,

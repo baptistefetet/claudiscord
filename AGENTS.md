@@ -59,16 +59,14 @@ src/
   gist.js             # Secret-gist upload for /diff: one gist per channel rewritten in place, URL carries the revision SHA so old links keep their content. GITHUB_TOKEN gates /diff entirely — there is no fallback
   shell.js            # !shell: executeShell (host/container, SIGTERM→SIGKILL) + gating, output truncation
   skills.js           # listSkills(agent, mode): skill names read from <home>/.claude|.codex/skills
-  stt.js              # Groq Whisper transcription (voice messages + voice-channel turns)
-  tts.js              # OpenAI TTS via REST fetch (voice assistant speech synthesis)
-  pcm.js              # Pure-JS PCM resampling (TTS 24k mono → 48k stereo; capture → 16k WAV)
-  mixer.js            # Continuous PCM mixer: ambient thinking bed + speech ducking
-  voice.js            # Voice assistant: connection, turn capture, STT→Claude→TTS state machine
+  live.js             # GPT-Live call (ChatGPT subscription): WebRTC input, sideband events, context appends
+  stt.js              # Groq Whisper transcription of Discord voice messages
+  voice.js            # Voice assistant: connection, audio relay, delegation → executePrompt, autojoin
   uploads.js          # Save Discord file/photo attachments to .claudiscord/files
 scripts/
   update-sandbox.sh   # Update the live sandbox's apt packages
   rebuild-sandbox.sh  # Rebuild Docker sandbox image; opens the Claude versions dir to the container user
-.env                  # AUTHORIZED_USER_ID, DISCORD_TOKEN, CLAUDE_BIN, CODEX_BIN, SANDBOX_HOME, GROQ_API_KEY, OPENAI_API_KEY
+.env                  # AUTHORIZED_USER_ID, DISCORD_TOKEN, CLAUDE_BIN, CODEX_BIN, SANDBOX_HOME, GROQ_API_KEY
 ```
 
 ## Slash commands
@@ -93,7 +91,7 @@ The text dispatcher (`handleCommand`, message content compared to `COMMANDS[].na
 
 Discord voice messages (the mic button — flag `MessageFlags.IsVoiceMessage`) are transcribed via Groq Whisper before being passed to the active agent. Plain audio attachments (`.mp3` etc.) are ignored on purpose — only the dedicated voice message UI triggers transcription.
 
-- Module: `src/stt.js`, no SDK. `transcribeAudio(buffer)` is the shared core (also used by the voice assistant); `transcribeVoiceMessage` downloads the attachment and delegates.
+- Module: `src/stt.js`, no SDK: `transcribeVoiceMessage` downloads the attachment and uploads it.
 - Endpoint: `POST https://api.groq.com/openai/v1/audio/transcriptions`.
 - Defaults: model `whisper-large-v3`, language `fr`. Override via `STT_MODEL` / `STT_LANGUAGE` in `.env`.
 - If `GROQ_API_KEY` is missing, voice messages are silently dropped (warn log).
@@ -103,14 +101,14 @@ Discord voice messages (the mic button — flag `MessageFlags.IsVoiceMessage`) a
 
 ## Voice assistant (voice channels)
 
-`/voice` typed in a guild voice channel's text-in-voice chat toggles the assistant for THAT voice channel (one active session per process). Requires `OPENAI_API_KEY` (TTS) + `GROQ_API_KEY` (STT) — friendly error otherwise, same pattern as `/sandbox` without Docker.
+`/voice` typed in a guild voice channel's text-in-voice chat toggles the assistant for THAT voice channel (one active session per process). Requires the **host** Codex ChatGPT login (`/codex` + `/login` in an admin channel), whatever the channel's mode and agent — friendly error otherwise, same pattern as `/sandbox` without Docker. No API key.
 
-- **Pipeline** (`src/voice.js`): `receiver.subscribe(AfterSilence 900ms)` → prism opus decode → JS downsample to 16 kHz mono WAV (`pcm.js`) → Groq Whisper (`stt.js::transcribeAudio`) → gate (min 300 ms, French Whisper hallucination patterns) → `executePrompt(agent, mode, text)` → OpenAI TTS `pcm` 24 kHz mono (`tts.js`) → JS upsample (`pcm.js`) → mixer playback. No ffmpeg dependency. The session is keyed by the voice channel's own `channelId` (text-in-voice shares it), so voice and chat share one conversation and `/admin`, `/sandbox`, `/status` typed in the chat apply.
-- **Half-duplex**: speaking-start events are ignored unless the state is `listening`. The bot never hears itself (per-user streams). The transcript (`🎙️ …`) and the reply are also posted to the chat.
-- **Mixer** (`src/mixer.js`): ONE permanent Readable (s16le 48 kHz stereo) for the whole session; a synthesized detuned-sine "thinking" bed, ducked under speech, gains smoothed per 20 ms frame (levels from Hermes, scaled by `BED_VOLUME`). The player is paused between turns so the speaking indicator turns off while idle. A player `Idle` means the pipeline broke → the mixer resource is rebuilt.
-- **Voice system prompt**: `prompts.js` flag `voice: true` swaps the Discord response-format section for speakable-text rules (no markdown, mangled-name caveat for local project names, confirm before acting on garbled transcripts).
-- **Gates mirrored from the text path**: `isBusy()` → spoken "un instant" notice; `scheduler.reloadJobs()` after each turn (like index.js) so voice-scheduled jobs fire on time. Canned spoken phrases are French (matches `STT_LANGUAGE` default) and their TTS output is cached. Speech rate: `TTS_SPEED`.
-- Voice turns run the channel's agent/mode at the `high` tier. Agent switches are locked while the assistant is active there — the shared sessionId (Claude UUID vs Codex thread id) must stay coherent with the executor's context guard. **The bot joins silently**: the mode goes to the chat, not the speakers. Auto-leave after 15 min without a turn (`VOICE_IDLE_TIMEOUT_MS`); the timer is suspended during a turn.
+- **Front end** (`src/live.js`): a `gpt-live-1-codex` call on the ChatGPT subscription, the route the Codex CLI uses. Undocumented wire, validated empirically — expect it to move: call creation `POST chatgpt.com/backend-api/codex/realtime/calls` (host `auth.json` token, read afresh per call) with a `werift` WebRTC offer; sideband WebSocket `wss://api.openai.com/v1/live/<call id>` for every event. Input MUST be RTP Opus (the sideband rejects audio appends): the authorized user's Discord Opus packets are forwarded as-is on a 20 ms clock, Discord's silence frame filling the gaps. Output arrives on the sideband only (`session.output_audio.delta`, PCM16 24 kHz mono, silence included); no RTP comes back.
+- **Full duplex**: the call handles turn-taking and barge-in. A user `turn.created` drops the local playback path (`stopOutput`). Output is played one resource per spoken burst; silent chunks are dropped so the player idles and the speaking ring turns off between turns.
+- **Delegation** (`src/voice.js`): the call has no tools and delegates every task (instructions: `prompts.js::getLiveInstructions`). `delegation.created` carries the full request text → `executePrompt(agent, mode, text)` through the channel FIFO at the `high` tier, without blocking the conversation. Progress goes back as silent `commentary` context (throttled), the result as `speakable` context, which the call paraphrases; request and full reply are posted to the chat. There is no "delegation done" event on this wire. The session is keyed by the voice channel's own `channelId` (text-in-voice shares it), so voice and chat share one conversation.
+- **FIFO, no parallelism**: delegations queue behind each other and behind chat prompts. Running work cannot be cancelled by voice (a spoken "stop" would queue behind it): the call tells the user to send `/stop`, which stops the running process only.
+- **Backend prompt**: `prompts.js` flag `voice: true` adds the voice-conversation section (key takeaway first, mangled-name caveat, confirm before acting on garbled requests). The reply keeps the normal Discord format since it is posted to the chat.
+- **Lifecycle**: the call dies with the session and vice versa (`session.closed`, sideband or WebRTC loss → leave with a chat notice; sessions expire ~2 h after start). `/new`, `/admin`, `/sandbox` restart the call so its memory resets with the agent session. Delegations still running when the call ends report to the chat only. Agent switches are locked while the assistant is active there — the shared sessionId (Claude UUID vs Codex thread id) must stay coherent with the executor's context guard. `scheduler.reloadJobs()` after each delegation (like index.js). Auto-leave after 15 min without a user turn (`VOICE_IDLE_TIMEOUT_MS`), suspended while delegations are pending.
 - **Discord requirements**: non-privileged `GuildVoiceStates` intent (enabled in `src/discord.js`), Connect + Speak permissions on the voice channel.
 
 ### Autojoin (per voice channel)
