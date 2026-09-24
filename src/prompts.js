@@ -100,6 +100,8 @@ posted to the chat, and the voice model says the gist of it aloud.
   mangled — treat odd words as candidates for names you know from this environment.
 - If the request is garbled or its intent uncertain, ask a short confirmation question
   BEFORE acting instead of guessing — especially for destructive or system-changing actions.
+- Scheduled jobs created here must be isolated (isolated: 1): this channel's session is reset
+  each time the voice assistant joins, which deletes the non-isolated jobs bound to it.
 {{/voice}}`;
 
 // Written to <home>/.claudiscord/scheduling.md at startup (admin) and on the first

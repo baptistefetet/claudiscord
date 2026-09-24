@@ -205,7 +205,7 @@ Details:
 
 ## Voice assistant
 
-Type `/voice` in a **voice channel's text chat** to make the bot join that channel, then just talk: the conversation is full duplex, you can interrupt it at any time, and it keeps talking while tasks run. Every task goes to the channel's agent (same session as the channel's text chat); the voice gives the gist of the result. Each join starts a fresh conversation, like `/new` (unless a task is still running there). `/voice` again makes it leave; it also leaves by itself after 15 min of silence.
+Type `/voice` in a **voice channel's text chat** to make the bot join that channel, then just talk: the conversation is full duplex, you can interrupt it at any time, and it keeps talking while tasks run. Every task goes to the channel's agent (same session as the channel's text chat); the voice gives the gist of the result. Each join starts a fresh conversation, like `/new` (unless a task is still running there). Jobs scheduled from a voice channel are therefore isolated, and their results are posted to the chat, never spoken. `/voice` again makes it leave; it also leaves by itself after 15 min of silence.
 
 - Requires the host Codex ChatGPT login (`/codex` then `/login` in an admin channel), even when the channel runs Claude or sandbox mode. No API key; it uses an undocumented Codex endpoint that may change.
 - Each request (`🎙️ …`) and the full reply are also posted to the voice channel's chat.
