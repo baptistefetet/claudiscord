@@ -182,6 +182,9 @@ async function openLiveCall({ instructions, onEvent, onClose }) {
 	// 20 ms input clock. Paced on elapsed time: setInterval alone drifts late and
 	// would slowly fill the queue.
 	const queue = [];
+	// Overflow drops the oldest frames, i.e. the start of a burst: logged to tell
+	// it apart from clipping upstream (Discord) or downstream (GPT-Live).
+	let dropped = 0;
 	const start = Date.now();
 	let ticks = 0;
 	let sequenceNumber = randomInt(0x10000);
@@ -196,6 +199,10 @@ async function openLiveCall({ instructions, onEvent, onClose }) {
 		while (ticks < due) {
 			ticks++;
 			const payload = queue.shift() || SILENCE_FRAME;
+			if (dropped && !queue.length) {
+				log.warn(`GPT-Live input: dropped ${dropped} frame(s) on queue overflow`);
+				dropped = 0;
+			}
 			const packet = new RtpPacket(new RtpHeader({ payloadType: 111, sequenceNumber, timestamp, marker: false }), payload);
 			sequenceNumber = (sequenceNumber + 1) & 0xffff;
 			timestamp = (timestamp + FRAME_SAMPLES) >>> 0;
@@ -207,7 +214,10 @@ async function openLiveCall({ instructions, onEvent, onClose }) {
 		/** One Discord Opus packet (48 kHz stereo, 20 ms). */
 		pushOpus(payload) {
 			queue.push(payload);
-			if (queue.length > MAX_QUEUED_FRAMES) queue.shift();
+			if (queue.length > MAX_QUEUED_FRAMES) {
+				queue.shift();
+				dropped++;
+			}
 		},
 		/** `channel`: 'commentary' (silent context) or 'speakable' (said aloud, paraphrased). */
 		appendContext(delegationId, channel, text) {

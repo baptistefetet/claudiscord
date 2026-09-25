@@ -39,7 +39,7 @@ const PROGRESS_MIN_INTERVAL_MS = 5000;
 const MAX_SPOKEN_RESULT_CHARS = 2000;
 // The call words a follow-up without the previous result; the backend has it.
 const OVERLAP_NOTE = '[Requested by voice before the result of the previous task was known: '
-	+ 'it may correct or refine it. Reconcile with that result.]';
+	+ 'it may correct or refine it. Take that result into account; do not repeat it.]';
 
 let active = null;
 // `active` cannot serialize joins on its own: it is assigned only at the end of
