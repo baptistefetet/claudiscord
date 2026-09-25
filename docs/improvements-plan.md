@@ -71,7 +71,8 @@ on the channel FIFO. Next steps:
 - **Parallel delegations**: run each task on an isolated session (e.g. one
   Discord thread per task) instead of the channel session, so a long task no
   longer blocks the next one. Costs the shared context with the text chat.
-- **Spoken control**: status, cancellation and redirects by voice. Needs a
+- **Spoken control**: cancellation and redirects by voice (status questions
+  are answered by the call from commentary context). Needs a
   host-side classification of the delegation (OpenClaw classifies spoken
   input as `status` / `steer` / `cancel` / `followup`) wired to `stopRun`,
   instead of queueing it behind the work it targets.
@@ -80,6 +81,10 @@ on the channel FIFO. Next steps:
   the CLI is up, 5–10 s more before the prompt reaches the session. Keeping one
   agent process alive per channel (streamed input) instead of spawning one per
   prompt would remove most of it, for text prompts too.
+- **Transcript in the delegation**: the backend only sees GPT-Live's rewording
+  of the request. OpenClaw appends the spoken exchange since the previous
+  delegation (`<transcript_delta>`, user and assistant turns); ours are already
+  logged from `turn.done`. Would help with corrections and misworded requests.
 - **Call renewal**: sessions expire ~2 h after start and the assistant leaves.
   Reopen a call instead, seeding it with the recent transcript
   (`initial_items`) and the tasks still running.
