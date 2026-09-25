@@ -37,6 +37,9 @@ const MAX_MISSED_FRAMES = 50;
 const PROGRESS_MIN_INTERVAL_MS = 5000;
 // Past this, the call is told the rest is in the chat instead of receiving it.
 const MAX_SPOKEN_RESULT_CHARS = 2000;
+// The call words a follow-up without the previous result; the backend has it.
+const OVERLAP_NOTE = '[Requested by voice before the result of the previous task was known: '
+	+ 'it may correct or refine it. Reconcile with that result.]';
 
 let active = null;
 // `active` cannot serialize joins on its own: it is assigned only at the end of
@@ -179,9 +182,10 @@ function handleDelegation(session, call, event) {
 		call.appendContext(id, 'speakable', spoken);
 	};
 
+	const prompt = session.pending > 0 ? `${OVERLAP_NOTE}\n\n${text}` : text;
 	session.pending++;
 	clearTimeout(session.idleTimer);
-	executePrompt(sessions.getAgent(channelId), sessions.getMode(channelId), text, {
+	executePrompt(sessions.getAgent(channelId), sessions.getMode(channelId), prompt, {
 		channelId,
 		systemPrompt: buildVoiceSystemPrompt(session),
 		tier: 'high',
