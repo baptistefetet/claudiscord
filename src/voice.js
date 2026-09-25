@@ -246,7 +246,11 @@ function handleLiveEvent(session, call, event) {
 async function openCall(session) {
 	let call = null;
 	call = await openLiveCall({
-		instructions: getLiveInstructions({ botName: session.botName, userName: session.userName }),
+		instructions: getLiveInstructions({
+			botName: session.botName,
+			userName: session.userName,
+			mode: sessions.getMode(session.channelId),
+		}),
 		onEvent: event => call && handleLiveEvent(session, call, event),
 		onClose: (reason) => {
 			if (active !== session || session.call !== call) return;

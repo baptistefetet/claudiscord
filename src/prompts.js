@@ -1,4 +1,8 @@
+const fs = require('fs');
+const path = require('path');
 const {
+	ADMIN_USER_HOME,
+	SANDBOX_HOST_HOME,
 	ADMIN_JOBS_FILE,
 	SANDBOX_JOBS_FILE,
 	ADMIN_SCHEDULING_DOC,
@@ -8,9 +12,15 @@ const {
 	VALID_AGENTS,
 	CHANNEL_DEFAULT_AGENT,
 } = require('./config');
+const log = require('./logger');
 
 const SYSTEM_PROMPT = `Your name is {{botName}}, and you are talking to {{userName}} on Discord.
 Your messages are relayed by a systemd service named "claudiscord".
+{{#soul}}
+
+--- Personality ---
+{{soul}}
+{{/soul}}
 
 --- Context ---
 {{#job}}
@@ -177,6 +187,19 @@ const DEFAULT_AGENTS_MD = `# Claudiscord sandbox instructions
 Customize this file to tailor the agent's behavior to your needs.
 `;
 
+// Optional persona shared by the agent and the voice call: <mode home>/SOUL.md, read on
+// every prompt so edits apply without a restart.
+function readSoul(mode) {
+	const home = mode === 'sandbox' ? SANDBOX_HOST_HOME : ADMIN_USER_HOME;
+	if (!home) return '';
+	try {
+		return fs.readFileSync(path.join(home, 'SOUL.md'), 'utf8').trim();
+	} catch (err) {
+		if (err.code !== 'ENOENT') log.warn(`SOUL.md unreadable (${mode}): ${err.message}`);
+		return '';
+	}
+}
+
 // Replace {{#flag}}...{{/flag}} blocks based on boolean flags.
 // The loop allows nested conditional blocks to collapse from the inside out.
 // After that, replace plain {{value}} placeholders with concrete strings.
@@ -219,6 +242,7 @@ function getSystemPrompt(options = {}) {
 	const isJob = Boolean(jobId);
 	const isSandbox = mode === 'sandbox';
 	const resolvedAgent = VALID_AGENTS.includes(channelAgent) ? channelAgent : CHANNEL_DEFAULT_AGENT;
+	const soul = readSoul(mode);
 
 	if (!botName) throw new Error('getSystemPrompt requires botName');
 	if (!userName) throw new Error('getSystemPrompt requires userName');
@@ -239,6 +263,7 @@ function getSystemPrompt(options = {}) {
 			// on none, so no trigger fires, yet its own output obeys the notification rules.
 			schedulingDoc: scheduled ? getSchedulingDoc(mode) : '',
 			filesPath: isSandbox ? SANDBOX_FILES_DIR : ADMIN_FILES_DIR,
+			soul,
 		},
 		{
 			job: isJob,
@@ -253,6 +278,7 @@ function getSystemPrompt(options = {}) {
 			channelId: Boolean(channelId),
 			channelTopic: Boolean(channelTopic),
 			voice: Boolean(voice),
+			soul: Boolean(soul),
 		},
 	);
 }
@@ -260,7 +286,12 @@ function getSystemPrompt(options = {}) {
 // Instructions of the GPT-Live call (src/live.js), which talks with the user and
 // delegates every task to the channel's agent (src/voice.js).
 const LIVE_INSTRUCTIONS = `You are {{botName}}, the voice of {{userName}}'s personal assistant, talking with them in a
-Discord voice channel. Speak the user's language (French unless they switch).
+Discord voice channel. Speak the user's language.
+{{#soul}}
+
+Personality:
+{{soul}}
+{{/soul}}
 
 You are the conversational surface of one system: a backend agent running on the user's
 server does all the real work — commands, files, checks, current information, anything that
@@ -282,8 +313,9 @@ needs tools. Present its work as your own; never mention a backend or a delegati
   Never read out code, tables, paths or long lists; the full answer is posted in the chat.
   If it asks the user a question or for a confirmation, always ask it aloud.`;
 
-function getLiveInstructions({ botName, userName }) {
-	return render(LIVE_INSTRUCTIONS, { botName, userName });
+function getLiveInstructions({ botName, userName, mode }) {
+	const soul = readSoul(mode);
+	return render(LIVE_INSTRUCTIONS, { botName, userName, soul }, { soul: Boolean(soul) });
 }
 
 function getSchedulingDoc(mode = 'admin') {
