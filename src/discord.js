@@ -110,9 +110,10 @@ function deleteMessage(message) {
  *
  * Edits are throttled and fire-and-forget — a dropped or rate-limited progress
  * line must never disturb the run it is describing. `update(null)` is a no-op,
- * so a caller can pass an event's outcome straight through.
+ * so a caller can pass an event's outcome straight through. `typing: false`
+ * skips re-arming the typing indicator (voice channels have none).
  */
-function startProgressReporter(channel) {
+function startProgressReporter(channel, { typing = true } = {}) {
 	let message = null;      // the Discord message, once created
 	let pending = null;      // latest line not yet shown
 	let sending = false;     // a send/edit is in flight
@@ -135,7 +136,7 @@ function startProgressReporter(channel) {
 				// Posting clears the channel's typing indicator, and the next
 				// heartbeat is up to TYPING_INTERVAL_MS away. Editing does not, so
 				// only this first send needs it back.
-				channel.sendTyping().catch(() => {});
+				if (typing) channel.sendTyping().catch(() => {});
 			});
 		op.catch(() => {}).finally(() => {
 			sending = false;

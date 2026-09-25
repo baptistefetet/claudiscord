@@ -19,7 +19,7 @@ const { isBusy } = require('./queue');
 const { getSystemPrompt, getLiveInstructions } = require('./prompts');
 const { openLiveCall, hasHostCodexLogin } = require('./live');
 const scheduler = require('./scheduler');
-const { getClient, sendChunked, resolveChannelName } = require('./discord');
+const { getClient, sendChunked, resolveChannelName, startProgressReporter } = require('./discord');
 
 /**
  * Voice assistant: a GPT-Live call (src/live.js) holds the spoken conversation,
@@ -168,8 +168,12 @@ function handleDelegation(session, call, event) {
 		call.appendContext(id, 'commentary', 'Queued behind another task running on this channel; starts when it ends.');
 	}
 
+	// Same live activity line as text channels, without the typing indicator.
+	const channel = getClient().channels.cache.get(channelId);
+	const chatProgress = channel ? startProgressReporter(channel, { typing: false }) : null;
 	let lastProgress = 0;
 	const onProgress = (progress) => {
+		chatProgress?.update(progress);
 		if (!progress?.summary || Date.now() - lastProgress < PROGRESS_MIN_INTERVAL_MS) return;
 		lastProgress = Date.now();
 		call.appendContext(id, 'commentary', `In progress: ${progress.summary.slice(0, 300)}`);
@@ -193,6 +197,7 @@ function handleDelegation(session, call, event) {
 	})
 		.then(async (result) => {
 			const reply = result.result || 'Empty reply.';
+			chatProgress?.clear();
 			await postToChat(session, reply);
 			speakResult(reply);
 		})
@@ -208,6 +213,7 @@ function handleDelegation(session, call, event) {
 			speakResult(`The task failed: ${message}`);
 		})
 		.finally(() => {
+			chatProgress?.clear();
 			session.pending--;
 			if (active === session) resetIdleTimer(session);
 			try {
