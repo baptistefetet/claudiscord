@@ -110,7 +110,7 @@ ExecStart=/usr/bin/node src/index.js
 Restart=on-failure
 RestartSec=10
 Environment=NODE_ENV=production
-ExecStopPost=/bin/bash -c 'pkill -f "[c]laude.*-p" || true; pkill -f "[c]odex exec" || true'
+ExecStopPost=-/usr/bin/docker exec claudiscord-sandbox bash -c 'for p in /proc/[0-9]*; do grep -qz CLAUDISCORD_RUN= "$${p}/environ" 2>/dev/null && kill -KILL "$${p#/proc/}" 2>/dev/null; done; true'
 
 [Install]
 WantedBy=multi-user.target

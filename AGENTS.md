@@ -84,7 +84,7 @@ The text dispatcher (`handleCommand`, message content compared to `COMMANDS[].na
 
 - **Service**: `claudiscord` (`systemctl status claudiscord`)
 - **Logs**: `journalctl -u claudiscord -f`
-- **ExecStopPost**: separate `pkill` safety nets for `claude -p` and `codex exec`
+- **ExecStopPost**: SIGKILLs the sandbox runs left in the container (found by their `CLAUDISCORD_RUN` marker, like `killContainerRun`): `docker exec` does not propagate the stop. Host runs die with the service cgroup (`KillMode=control-group`); nothing outside claudiscord is touched.
 - **User**: root
 
 ## Voice messages (speech-to-text)
