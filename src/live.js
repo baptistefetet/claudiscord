@@ -232,6 +232,8 @@ async function openLiveCall({ instructions, onEvent, onClose }) {
 			}
 		},
 		close,
+		/** False once the call has ended, on its own or through `close()`. */
+		isOpen: () => !closed,
 	};
 }
 

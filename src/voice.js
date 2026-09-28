@@ -296,7 +296,7 @@ async function restartVoiceCall(channelId) {
 /* ------------------------------------------------------------------- input */
 
 /** Forward the authorized user's Opus packets to the call as they are. */
-function onSpeakingStart(session, userId) {
+function subscribeInput(session, userId) {
 	if (userId !== config.AUTHORIZED_USER_ID || session.input) return;
 	const stream = session.connection.receiver.subscribe(userId, { end: { behavior: EndBehaviorType.Manual } });
 	session.input = stream;
@@ -346,29 +346,31 @@ async function connectAndStart(channel) {
 		userName: 'user',
 	};
 
-	try {
-		await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
-	} catch (err) {
-		connection.destroy();
+	// Independent setups of ~1 s each: run in parallel, the user can only speak once both are up.
+	const ready = entersState(connection, VoiceConnectionStatus.Ready, 15_000).catch((err) => {
 		throw new Error(`could not join the voice channel (permissions?): ${err.message}`);
-	}
-
+	});
+	const opening = (async () => {
+		try {
+			const user = await client.users.fetch(config.AUTHORIZED_USER_ID);
+			session.userName = user.displayName || user.username;
+		} catch (_) {}
+		return openCall(session);
+	})();
 	try {
-		const user = await client.users.fetch(config.AUTHORIZED_USER_ID);
-		session.userName = user.displayName || user.username;
-	} catch (_) {}
-
-	try {
-		session.call = await openCall(session);
+		[, session.call] = await Promise.all([ready, opening]);
 	} catch (err) {
+		// First failure wins; a call that opens afterwards is closed at once.
+		opening.then(call => call.close(), () => {});
 		connection.destroy();
 		throw err;
 	}
-	// The Disconnected handler below is not installed yet during call setup.
-	if (connection.state.status !== VoiceConnectionStatus.Ready) {
+	// Losses during setup reach no handler: the Disconnected one is installed below,
+	// the call's onClose is gated on `active`.
+	if (connection.state.status !== VoiceConnectionStatus.Ready || !session.call.isOpen()) {
 		session.call.close();
 		connection.destroy();
-		throw new Error('lost the voice channel connection while opening the voice call');
+		throw new Error('lost the voice channel or the voice call during setup');
 	}
 
 	session.player = createAudioPlayer({
@@ -381,7 +383,10 @@ async function connectAndStart(channel) {
 	});
 	connection.subscribe(session.player);
 
-	connection.receiver.speaking.on('start', userId => onSpeakingStart(session, userId));
+	// Subscribe now: 'start' only fires after a 100 ms pause, which would drop speech
+	// already under way. The listener re-subscribes if the stream ever closes.
+	connection.receiver.speaking.on('start', userId => subscribeInput(session, userId));
+	subscribeInput(session, config.AUTHORIZED_USER_ID);
 
 	// A Disconnected that neither resumes nor reconnects within 5 s is a real one.
 	connection.on(VoiceConnectionStatus.Disconnected, async () => {
