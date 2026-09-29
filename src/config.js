@@ -130,7 +130,7 @@ const CHANNEL_DEFAULT_AGENT = CLAUDE_AVAILABLE ? 'claude' : 'codex';
 // ever names a concrete model id.
 const AGENT_MODELS = {
 	claude: { high: 'opus', medium: 'sonnet' },
-	codex: { high: 'gpt-6-sol', medium: 'gpt-6-luna' },
+	codex: { high: 'gpt-6.1-sol', medium: 'gpt-6-luna' },
 };
 
 // Single reasoning effort for every agent and every model above. Claude takes it
