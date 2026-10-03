@@ -8,10 +8,10 @@ A single-user Discord bot that drives [Claude Code](https://docs.anthropic.com/e
 ## Features
 
 - **One conversation per channel**: each channel, DM or thread has its own session, mode and agent. The channel topic is injected as standing context. Prompts are queued per channel, and different channels run in parallel.
-- **Live progress** of the running prompt, and `/stop` to cancel it without losing the conversation.
+- **Live progress** of the running prompt, which can be stopped without losing the conversation.
 - **Fixed models**: prompts use the agent's high model (`opus` / `sol`), jobs the medium one (`sonnet` / `luna`), reasoning effort `xhigh`.
 - **Scheduled jobs, created by asking**: "check the disk every morning and tell me only if it's above 90%" is enough. Jobs report to their channel and can stay silent when there's nothing to say.
-- **`/diff`**: uncommitted changes of the channel's repository, published as a secret gist.
+- **Repository diff**: each channel can point at a git repository, whose uncommitted changes are published on demand as a secret gist.
 - **Voice**: voice messages are transcribed (Groq Whisper). In voice channels, a realtime voice assistant (GPT-Live, on your ChatGPT subscription) holds the conversation and hands tasks to the channel's agent.
 - **Uploads**: files dropped in a channel are saved to disk for the agent to use.
 - **Single user**: only `AUTHORIZED_USER_ID` gets answers. Docker is optional; without it only admin mode is available.
@@ -89,7 +89,8 @@ New channels start in admin mode with Claude (Codex if Claude is absent). Authen
 | `/skills` | Skills of both agents in both environments |
 | `/login` | Log in the current agent in the current mode |
 | `/jobs` | List scheduled jobs |
-| `/diff` | Uncommitted changes as a secret gist (needs `GITHUB_TOKEN`) |
+| `/git` | Set or change this channel's git repository |
+| `/diff` | Uncommitted changes of that repository as a secret gist (needs `GITHUB_TOKEN`) |
 | `/admin` / `/sandbox` | Switch mode (resets the session) |
 | `/claude` / `/codex` | Switch agent (resets the session) |
 | `/voice` | Voice channels: toggle the voice assistant |

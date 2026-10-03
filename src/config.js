@@ -86,7 +86,7 @@ const PROGRESS_EDIT_MS = 2000;
 // rarely informative past that.
 const PROGRESS_MAX = 160;
 
-// How long `/diff` waits for the repository path it asked for, before dropping
+// How long `/git` waits for the repository path it asked for, before dropping
 // the question rather than swallowing the channel's next ordinary message.
 const DIFF_PATH_TIMEOUT_MS = 300_000;
 // Hard ceiling on the collected patch. A safety net against a working tree

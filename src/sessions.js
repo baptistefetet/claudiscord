@@ -241,9 +241,10 @@ function getContext(channelId) {
 }
 
 /**
- * The git repository `/diff` reports on for this channel. Channel configuration,
- * not conversation state: `/new` and a mode or agent switch leave it alone. It is
- * only a repository root — the agent still runs from its environment's home.
+ * The git repository `/diff` reports on for this channel, set by `/git`. Channel
+ * configuration, not conversation state: `/new` and an agent switch leave it
+ * alone (a mode switch drops it, see setMode). It is only a repository root —
+ * the agent still runs from its environment's home.
  */
 function getDepotPath(channelId) {
 	return channels.get(channelId)?.depotPath || null;

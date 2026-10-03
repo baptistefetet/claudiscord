@@ -16,9 +16,10 @@ const log = require('./logger');
  * itself delivered whole as a secret gist, however large it is. GITHUB_TOKEN is
  * not optional here — without it the command has nowhere to publish.
  *
- * The repository is per channel (`depotPath` in the sessions file) and asked for
- * the first time the command runs, the way `/login` asks for its code — so no
- * path is hardcoded anywhere and each channel points at its own project.
+ * The repository is per channel (`depotPath` in the sessions file), set or
+ * replaced by `/git`, which asks for the path the way `/login` asks for its
+ * code — so no path is hardcoded anywhere and each channel points at its own
+ * project.
  *
  * Both environments are supported: the path is read where the channel runs, on
  * the host or inside the container. It is therefore dropped when the channel
@@ -55,7 +56,7 @@ async function resolveRepoRoot(mode, dir) {
 		// "not a repository", and the difference is exactly what the user needs
 		// to fix it — so its own words are passed on rather than paraphrased.
 		const reason = (err.stderr || err.message).trim().split('\n')[0].replace(/^fatal: /, '');
-		log.warn(`/diff: ${dir}: ${reason}`);
+		log.warn(`/git: ${dir}: ${reason}`);
 		return { error: reason };
 	}
 }
@@ -180,7 +181,7 @@ function clearPending(channelId) {
 	pendingPath.delete(channelId);
 }
 
-function askForPath(channel, reason = 'No repository is set for this channel.') {
+function askForPath(channel, reason) {
 	clearPending(channel.id);
 	pendingPath.set(channel.id, setTimeout(() => pendingPath.delete(channel.id), DIFF_PATH_TIMEOUT_MS));
 	return channel.send(`${reason} Send its absolute path (any directory inside it works), or \`/cancel\`.`);
@@ -224,7 +225,7 @@ async function finishPendingDepotPath(channel, content, isCommand) {
 	clearPending(channel.id);
 
 	if (trimmed === '/cancel') {
-		await channel.send('Cancelled — no repository set.');
+		await channel.send('Cancelled — repository unchanged.');
 		return true;
 	}
 	if (isCommand(trimmed)) return false;
@@ -232,21 +233,20 @@ async function finishPendingDepotPath(channel, content, isCommand) {
 	const mode = await modeFor(channel);
 	if (!mode) return true;
 	const { root, error } = await resolveRepoRoot(mode, trimmed);
+	// Validation took a round trip, and `/admin` or `/sandbox` may have landed
+	// during it: storing the path now would resurrect the one the mode switch
+	// just dropped, and reopening the question would swallow a later message.
+	if (sessions.getMode(channel.id) !== mode) {
+		await channel.send('Channel changed environment — `/git` cancelled.');
+		return true;
+	}
 	if (!root) {
 		// The question is reopened: a typo should cost one retry, not the command.
 		askForPath(channel, `\`${trimmed.slice(0, 200)}\`: ${error}.`);
 		return true;
 	}
-	// Validation took a round trip, and `/admin` or `/sandbox` may have landed
-	// during it: storing the path now would resurrect the one the mode switch
-	// just dropped, pointing at the filesystem the channel has left.
-	if (sessions.getMode(channel.id) !== mode) {
-		await channel.send('Channel changed environment — `/diff` cancelled.');
-		return true;
-	}
 	sessions.setDepotPath(channel.id, root);
 	await channel.send(`Repository set to \`${root}\`.`);
-	await reportSafely(channel, mode, root);
 	return true;
 }
 
@@ -287,16 +287,20 @@ async function reportSafely(channel, mode, root) {
 	}
 }
 
+async function handleGit({ channel, channelId }) {
+	const current = sessions.getDepotPath(channelId);
+	await askForPath(channel, current ? `Current repository: \`${current}\`.` : 'No repository is set for this channel.');
+	return true;
+}
+
 async function handleDiff({ channel, channelId }) {
-	// Refused before the repository question: without a gist there is nowhere to
-	// put the patch, and asking for a path first would waste the exchange.
 	if (!gist.isGistAvailable()) {
 		await channel.send('`/diff` requires `GITHUB_TOKEN` (scope `gist`) in `.env`.');
 		return true;
 	}
 	const root = sessions.getDepotPath(channelId);
 	if (!root) {
-		await askForPath(channel);
+		await channel.send('No repository is set for this channel — set one with `/git`.');
 		return true;
 	}
 	const mode = await modeFor(channel);
@@ -304,4 +308,4 @@ async function handleDiff({ channel, channelId }) {
 	return true;
 }
 
-module.exports = { handleDiff, finishPendingDepotPath, cancelPendingDepotPath };
+module.exports = { handleGit, handleDiff, finishPendingDepotPath, cancelPendingDepotPath };

@@ -33,7 +33,7 @@ const {
 	clearAutojoinSuppression,
 } = require('./voice');
 const { getClient, resolveChannelName, sendChunked } = require('./discord');
-const { handleDiff, finishPendingDepotPath, cancelPendingDepotPath } = require('./diff');
+const { handleGit, handleDiff, finishPendingDepotPath, cancelPendingDepotPath } = require('./diff');
 const { listSkills } = require('./skills');
 const { loadAllJobs } = require('./jobs-store');
 const log = require('./logger');
@@ -467,6 +467,7 @@ const COMMANDS = [
 	{ name: '/skills', help: 'List each agent\'s skills (admin + sandbox)', handler: handleSkills },
 	{ name: '/login', help: 'Refresh current agent login via a Discord-friendly link', handler: handleLogin },
 	{ name: '/jobs', help: 'List all scheduled jobs (admin + sandbox)', handler: handleJobs },
+	{ name: '/git', help: 'Set this channel\'s git repository (used by /diff)', handler: handleGit },
 	{ name: '/diff', help: 'Show the uncommitted changes of this channel\'s repository', handler: handleDiff },
 	{ name: '/admin', help: 'Switch this channel to admin mode (host)', handler: handleAdmin },
 	{ name: '/sandbox', help: 'Switch this channel to sandbox mode (container)', handler: handleSandbox },
@@ -534,9 +535,9 @@ async function runCommand({ channel, channelId, name, mode, agent, message }) {
  * included). Same mode gating as handleCommand, but keyed on the name.
  */
 async function dispatchSlashCommand({ channel, channelId, name }) {
-	// A native command never passes through handleCommand, so a `/diff` question
+	// A native command never passes through handleCommand, so a `/git` question
 	// left open would still be waiting and would swallow the next plain message.
-	if (name !== '/diff') cancelPendingDepotPath(channelId);
+	if (name !== '/git') cancelPendingDepotPath(channelId);
 	const mode = sessions.getMode(channelId);
 	const agent = sessions.getAgent(channelId);
 
