@@ -40,6 +40,11 @@ const MAX_SPOKEN_RESULT_CHARS = 2000;
 // The call words a follow-up without the previous result; the backend has it.
 const OVERLAP_NOTE = '[Requested by voice before the result of the previous task was known: '
 	+ 'it may correct or refine it. Take that result into account; do not repeat it.]';
+// A held batch waits this long for more fragments once the user is silent…
+const DELEGATION_GRACE_MS = 1500;
+// …and never longer than this after its first delegation.
+const DELEGATION_MAX_HOLD_MS = 10_000;
+const MERGED_NOTE = 'Merged into an earlier request that has not started yet; its result covers this one.';
 
 let active = null;
 // `active` cannot serialize joins on its own: it is assigned only at the end of
@@ -154,6 +159,13 @@ function stopOutput(session) {
 
 /* -------------------------------------------------------------- delegation */
 
+/**
+ * GPT-Live delegates while the user is still talking: fragments cut mid-word,
+ * the same request re-sent with more words. Delegations of one call therefore
+ * form a batch, held until the user's turn ends (see armDispatch), then queued,
+ * and still merged into until the batch reaches the head of the FIFO. Like a
+ * steered Codex handoff, the batch's first delegation carries its result.
+ */
 function handleDelegation(session, call, event) {
 	const id = event.item?.id;
 	const text = (event.item?.content || [])
@@ -162,8 +174,65 @@ function handleDelegation(session, call, event) {
 		.join('')
 		.trim();
 	if (!id || !text) return;
+	const batch = session.batch;
+	if (batch?.call !== call) {
+		openBatch(session, call, id, text);
+		return;
+	}
+	call.appendContext(id, 'commentary', MERGED_NOTE);
+	// An extension (or equal text) replaces the batch's, a prefix is a re-send.
+	// Compared without whitespace: the join below adds a space, even inside a
+	// split word, which a complete re-send then repairs.
+	const before = batch.text.replace(/\s+/g, '');
+	const added = text.replace(/\s+/g, '');
+	if (added.startsWith(before)) batch.text = text;
+	else if (before.startsWith(added)) return;
+	else batch.text = `${batch.text} ${text}`;
+	// A held batch is echoed whole when queued.
+	if (!batch.queued) armDispatch(session);
+	else if (added !== before) postToChat(session, `🎙️ ${text}`);
+}
+
+function openBatch(session, call, id, text) {
 	const { channelId } = session;
-	postToChat(session, `🎙️ ${text}`);
+	session.batch = {
+		call,
+		id,
+		text,
+		// Captured like a text batch: executePrompt refuses it if the channel changed meanwhile.
+		agent: sessions.getAgent(channelId),
+		mode: sessions.getMode(channelId),
+		overlap: session.pending > 0,
+		deadline: Date.now() + DELEGATION_MAX_HOLD_MS,
+		timer: null,
+		queued: false,
+	};
+	session.pending++;
+	clearTimeout(session.idleTimer);
+	armDispatch(session);
+}
+
+/**
+ * (Re)schedule the held batch: DELEGATION_GRACE_MS after the latest delegation
+ * or end of user turn, none while the user speaks, and never past its deadline
+ * (a user turn whose end never arrives).
+ */
+function armDispatch(session) {
+	const batch = session.batch;
+	if (!batch || batch.queued) return;
+	clearTimeout(batch.timer);
+	const left = batch.deadline - Date.now();
+	const wait = session.userTurnOpen ? left : Math.min(DELEGATION_GRACE_MS, left);
+	batch.timer = setTimeout(() => dispatchBatch(session, batch), wait);
+}
+
+function dispatchBatch(session, batch) {
+	if (batch.queued) return;
+	batch.queued = true;
+	clearTimeout(batch.timer);
+	const { channelId } = session;
+	const { call, id } = batch;
+	postToChat(session, `🎙️ ${batch.text}`);
 	if (isBusy(channelId)) {
 		call.appendContext(id, 'commentary', 'Queued behind another task running on this channel; starts when it ends.');
 	}
@@ -186,10 +255,12 @@ function handleDelegation(session, call, event) {
 		call.appendContext(id, 'speakable', spoken);
 	};
 
-	const prompt = session.pending > 0 ? `${OVERLAP_NOTE}\n\n${text}` : text;
-	session.pending++;
-	clearTimeout(session.idleTimer);
-	executePrompt(sessions.getAgent(channelId), sessions.getMode(channelId), prompt, {
+	// Called at the head of the queue: closes the batch.
+	const take = () => {
+		if (session.batch === batch) session.batch = null;
+		return batch.overlap ? `${OVERLAP_NOTE}\n\n${batch.text}` : batch.text;
+	};
+	executePrompt(batch.agent, batch.mode, take, {
 		channelId,
 		systemPrompt: buildVoiceSystemPrompt(session),
 		tier: 'high',
@@ -227,16 +298,23 @@ function handleDelegation(session, call, event) {
 /* -------------------------------------------------------------------- call */
 
 function handleLiveEvent(session, call, event) {
-	if (active !== session || session.call !== call) return;
+	// A closed call still delivers events until its sideband shuts: during a
+	// restart it is `session.call` until the new one opens.
+	if (active !== session || session.call !== call || !call.isOpen()) return;
 	switch (event.type) {
 		case 'session.output_audio.delta':
 			playOutput(session, Buffer.from(event.delta, 'base64'));
 			break;
 		case 'turn.done':
 			log.info(`voice ${event.turn?.role}: ${event.turn?.transcript?.trim()}`);
+			if (event.turn?.role !== 'user') break;
+			session.userTurnOpen = false;
+			armDispatch(session);
 			break;
 		case 'turn.created':
 			if (event.turn?.role !== 'user') break;
+			session.userTurnOpen = true;
+			armDispatch(session);
 			stopOutput(session);
 			resetIdleTimer(session);
 			break;
@@ -279,6 +357,8 @@ async function restartVoiceCall(channelId) {
 	// Two resets in a row: only the latest one installs its call.
 	const generation = ++session.callGeneration;
 	const isCurrent = () => active === session && session.callGeneration === generation;
+	if (session.batch) dispatchBatch(session, session.batch);
+	session.userTurnOpen = false;
 	session.call.close();
 	stopOutput(session);
 	try {
@@ -340,6 +420,9 @@ async function connectAndStart(channel) {
 		player: null,
 		output: null,
 		input: null,
+		// Delegations not started yet (see handleDelegation), counted in `pending`.
+		batch: null,
+		userTurnOpen: false,
 		pending: 0,
 		idleTimer: null,
 		botName: client.user.displayName || client.user.username,
@@ -426,6 +509,7 @@ function leaveVoice({ suppressAutojoin = false } = {}) {
 	if (suppressAutojoin && sessions.getAutojoin(session.channelId)) suppressed.add(session.channelId);
 	active = null;
 	clearTimeout(session.idleTimer);
+	if (session.batch) dispatchBatch(session, session.batch);
 	session.call.close();
 	session.input?.destroy();
 	session.output?.stream.destroy();

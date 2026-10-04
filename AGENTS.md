@@ -83,7 +83,7 @@ scripts/update-sandbox.sh   apt upgrade inside the container (/upgrade)
 
 - Voice messages (flag `IsVoiceMessage` only, not audio attachments) → Groq Whisper (`stt.js`), echoed as `🎙️ <text>`. Text wins over voice; no `GROQ_API_KEY` → dropped.
 - `/voice` in a voice channel's chat starts a GPT-Live call (`live.js`) on the **host** Codex ChatGPT login. Undocumented wire, expect breakage. Input must be RTP Opus over WebRTC; output arrives on the sideband only.
-- The call has no tools: every delegation goes through `executePrompt` (`high` tier, channel FIFO, `voice: true` prompt flag). The session is the voice channel's `channelId`, shared with its chat. Each join resets it (skipped while a task runs there), so voice-created jobs must be isolated; agent switches are locked while the call is active.
+- The call has no tools: every delegation goes through `executePrompt` (`high` tier, channel FIFO, `voice: true` prompt flag). GPT-Live delegates mid-sentence, so delegations are batched per call: held until the user's turn ends, merged into until the batch starts (`voice.js::handleDelegation`). The session is the voice channel's `channelId`, shared with its chat. Each join resets it (skipped while a task runs there), so voice-created jobs must be isolated; agent switches are locked while the call is active.
 - `/autojoin` is a per-channel allowlist persisted in `sessions.json`, on purpose: the bot must never join calls with other people by default.
 
 ## Uploads, progress, sessions
