@@ -49,6 +49,8 @@ const DELEGATION_GRACE_MS = 1000;
 // …and never longer than this after its first delegation.
 const DELEGATION_MAX_HOLD_MS = 10_000;
 const MERGED_NOTE = 'Merged into an earlier request that has not started yet; its result covers this one.';
+// Transcript sent with a delegation, oldest part dropped first (Codex caps it at 4 KB).
+const TRANSCRIPT_MAX_CHARS = 4000;
 
 let active = null;
 // `active` cannot serialize joins on its own: it is assigned only at the end of
@@ -178,6 +180,7 @@ function handleDelegation(session, call, event) {
 		.map(part => part.text)
 		.join('')
 		.trim();
+	log.info(`voice delegation [${id}]: ${text}`);
 	if (!id || !text) return;
 	const batch = session.batch;
 	if (batch?.call !== call) {
@@ -260,10 +263,14 @@ function dispatchBatch(session, batch) {
 		call.appendContext(id, 'speakable', spoken);
 	};
 
-	// Called at the head of the queue: closes the batch.
+	// Called at the head of the queue: closes the batch and takes the transcript.
+	// Held by reference: a call reset swaps in a new one, this batch keeps its own.
+	// A turn still being spoken at that point goes with the next delegation.
+	const { transcript } = session;
 	const take = () => {
 		if (session.batch === batch) session.batch = null;
-		return batch.overlap ? `${OVERLAP_NOTE}\n\n${batch.text}` : batch.text;
+		const prompt = renderDelegation(batch.text, transcript.splice(0).join('\n'));
+		return batch.overlap ? `${OVERLAP_NOTE}\n\n${prompt}` : prompt;
 	};
 	executePrompt(batch.agent, batch.mode, take, {
 		channelId,
@@ -300,6 +307,25 @@ function dispatchBatch(session, batch) {
 		});
 }
 
+/**
+ * The delegation is GPT-Live's rewording; the turns spoken since the previous
+ * one ride along so the agent sees the user's own words (OpenClaw's format).
+ */
+function recordTurn(session, role, text) {
+	if (!text || /^\[[^\]]*\]?$/.test(text)) return; // noise turn: "[sniff", "[breath"
+	session.transcript.push(`${role}: ${text}`);
+}
+
+function escapeXml(text) {
+	return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+}
+
+function renderDelegation(input, transcript) {
+	const bounded = transcript.length > TRANSCRIPT_MAX_CHARS ? `…${transcript.slice(-TRANSCRIPT_MAX_CHARS)}` : transcript;
+	const delta = bounded ? `\n  <transcript_delta>${escapeXml(bounded)}</transcript_delta>` : '';
+	return `<realtime_delegation>\n  <input>${escapeXml(input)}</input>${delta}\n</realtime_delegation>`;
+}
+
 /* -------------------------------------------------------------------- call */
 
 function handleLiveEvent(session, call, event) {
@@ -310,13 +336,17 @@ function handleLiveEvent(session, call, event) {
 		case 'session.output_audio.delta':
 			playOutput(session, Buffer.from(event.delta, 'base64'));
 			break;
-		case 'turn.done':
-			log.info(`voice ${event.turn?.role}: ${event.turn?.transcript?.trim()}`);
+		case 'turn.done': {
+			const text = event.turn?.transcript?.trim();
+			log.info(`voice ${event.turn?.role}: ${text}`);
+			recordTurn(session, event.turn?.role, text);
 			if (event.turn?.role !== 'user') break;
 			session.userTurnOpen = false;
 			armDispatch(session);
 			break;
+		}
 		case 'turn.created':
+			log.info(`voice ${event.turn?.role} turn started`);
 			if (event.turn?.role !== 'user') break;
 			session.userTurnOpen = true;
 			armDispatch(session);
@@ -364,6 +394,7 @@ async function restartVoiceCall(channelId) {
 	const isCurrent = () => active === session && session.callGeneration === generation;
 	if (session.batch) dispatchBatch(session, session.batch);
 	session.userTurnOpen = false;
+	session.transcript = []; // belongs to the conversation being reset
 	session.call.close();
 	stopOutput(session);
 	try {
@@ -428,6 +459,7 @@ async function connectAndStart(channel) {
 		// Delegations not started yet (see handleDelegation), counted in `pending`.
 		batch: null,
 		userTurnOpen: false,
+		transcript: [],
 		pending: 0,
 		idleTimer: null,
 		botName: client.user.displayName || client.user.username,

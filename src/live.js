@@ -222,6 +222,7 @@ async function openLiveCall({ instructions, onEvent, onClose }) {
 		/** `channel`: 'commentary' (silent context) or 'speakable' (said aloud, paraphrased). */
 		appendContext(delegationId, channel, text) {
 			if (closed || ws.readyState !== WebSocket.OPEN) return;
+			log.info(`voice append ${channel} [${delegationId}]: ${text.replace(/\s+/g, ' ').slice(0, 120)}`);
 			for (const chunk of chunkUtf8(text, CONTEXT_APPEND_MAX_BYTES)) {
 				ws.send(JSON.stringify({
 					type: 'delegation.context.append',

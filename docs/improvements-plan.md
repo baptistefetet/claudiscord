@@ -81,10 +81,6 @@ on the channel FIFO. Next steps:
   the CLI is up, 5–10 s more before the prompt reaches the session. Keeping one
   agent process alive per channel (streamed input) instead of spawning one per
   prompt would remove most of it, for text prompts too.
-- **Transcript in the delegation**: the backend only sees GPT-Live's rewording
-  of the request. OpenClaw appends the spoken exchange since the previous
-  delegation (`<transcript_delta>`, user and assistant turns); ours are already
-  logged from `turn.done`. Would help with corrections and misworded requests.
 - **Call renewal**: sessions expire ~2 h after start and the assistant leaves.
   Reopen a call instead, seeding it with the recent transcript
   (`initial_items`) and the tasks still running.
