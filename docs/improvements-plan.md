@@ -88,13 +88,10 @@ on the channel FIFO. Next steps:
 - **Call renewal**: sessions expire ~2 h after start and the assistant leaves.
   Reopen a call instead, seeding it with the recent transcript
   (`initial_items`) and the tasks still running.
-- **Output audio quality**: the voice sometimes sounds shaky. Unverified
-  hypothesis: `playOutput` starts playback on the first 200 ms chunk, with no
-  jitter buffer, so a late sideband chunk makes `@discordjs/voice` insert a
-  20 ms silence frame (missed frames are not logged). Check first: log chunk
-  arrival intervals and the player's `missedFrames`, and whether GPT-Live
-  streams faster than real time. Candidate fix: pre-buffer ~300–400 ms before
-  `play()`. Minor: `liveToDiscord` does not interpolate across chunk boundaries.
+- **Output audio quality**: `PREBUFFER_MS` (200 ms) absorbs most late output
+  chunks, not the worst seen (~0.5 s). Next: an adaptive buffer that grows
+  after an underrun. Minor: `liveToDiscord` does not interpolate across chunk
+  boundaries.
 
 Effort: medium each. Value: medium.
 

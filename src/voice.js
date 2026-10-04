@@ -33,6 +33,10 @@ const { getClient, sendChunked, resolveChannelName, startProgressReporter } = re
 const END_OF_SPEECH_CHUNKS = 2;
 // Discord player tolerance for late output chunks before it gives up (20 ms frames).
 const MAX_MISSED_FRAMES = 50;
+// Jitter buffer: output chunks arrive in real time but up to ~0.5 s late, and the
+// player fills any shortfall with silence frames. Each burst starts with this much
+// silence instead, which delays it as much.
+const PREBUFFER_MS = 200;
 // Silent progress context is for "where are you at?" questions, not a live feed.
 const PROGRESS_MIN_INTERVAL_MS = 5000;
 // Past this, the call is told the rest is in the chat instead of receiving it.
@@ -137,6 +141,7 @@ function playOutput(session, pcm) {
 	if (!session.output) {
 		if (!speech) return;
 		const stream = new PassThrough();
+		stream.write(Buffer.alloc(PREBUFFER_MS * 192)); // 48 kHz stereo s16le: 192 bytes/ms
 		const resource = createAudioResource(stream, { inputType: StreamType.Raw });
 		session.output = { stream, resource, silentChunks: 0 };
 		session.player.play(resource);
