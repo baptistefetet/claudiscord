@@ -41,7 +41,7 @@ const MAX_SPOKEN_RESULT_CHARS = 2000;
 const OVERLAP_NOTE = '[Requested by voice before the result of the previous task was known: '
 	+ 'it may correct or refine it. Take that result into account; do not repeat it.]';
 // A held batch waits this long for more fragments once the user is silent…
-const DELEGATION_GRACE_MS = 1500;
+const DELEGATION_GRACE_MS = 1000;
 // …and never longer than this after its first delegation.
 const DELEGATION_MAX_HOLD_MS = 10_000;
 const MERGED_NOTE = 'Merged into an earlier request that has not started yet; its result covers this one.';
