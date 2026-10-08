@@ -52,6 +52,8 @@ const MERGED_NOTE = 'Merged into an earlier request that has not started yet; it
 const RESENT_NOTE = 'Repeats a request already delegated since the user last spoke; not run again.';
 // A result spoken while a later request is pending sounds like it overrules that request.
 const OUTDATED_NOTE = 'A later request is still pending: wherever it changes this result, present that part as being changed, not as the final state.';
+// GPT-Live may acknowledge a request said while work runs without delegating it.
+const UNDELIVERED_NOTE = 'No other request is pending. The user said this while the task ran, and none of it was delegated: delegate now any request for work in it.';
 // Transcript sent with a delegation, oldest part dropped first (Codex caps it at 4 KB).
 const TRANSCRIPT_MAX_CHARS = 4000;
 
@@ -208,6 +210,7 @@ function handleDelegation(session, call, event) {
 	if (added.startsWith(before)) batch.text = text;
 	else if (before.startsWith(added)) return;
 	else batch.text = `${batch.text} ${text}`;
+	if (added !== before) batch.turn = session.userTurns;
 	// A held batch is echoed whole when queued.
 	if (!batch.queued) armDispatch(session);
 	else if (added !== before) postToChat(session, `🎙️ ${text}`);
@@ -227,6 +230,7 @@ function openBatch(session, call, id, text) {
 		timer: null,
 		queued: false,
 		seq: ++session.opened,
+		turn: session.userTurns, // user turn of its latest delegation
 	};
 	session.pending++;
 	clearTimeout(session.idleTimer);
@@ -270,6 +274,14 @@ function dispatchBatch(session, batch) {
 	};
 	// A closed call ignores the append; the chat still gets the result.
 	const speakResult = (result) => {
+		// Batches opened since are still pending (FIFO). Without one, nothing carries
+		// the user turns spoken since this batch started, except its own turn when
+		// still being spoken at take().
+		if (session.opened > batch.seq) call.appendContext(id, 'commentary', OUTDATED_NOTE);
+		else if (ownTurnOpenAtTake !== null) {
+			const said = transcript.filter(line => line.startsWith('user: ')).slice(ownTurnOpenAtTake ? 1 : 0).join('\n');
+			if (said) call.appendContext(id, 'commentary', `${UNDELIVERED_NOTE}\n${said.slice(-TRANSCRIPT_MAX_CHARS)}`);
+		}
 		const spoken = result.length > MAX_SPOKEN_RESULT_CHARS
 			? `${result.slice(0, MAX_SPOKEN_RESULT_CHARS)}… (the rest is in the chat)`
 			: result;
@@ -280,7 +292,9 @@ function dispatchBatch(session, batch) {
 	// Held by reference: a call reset swaps in a new one, this batch keeps its own.
 	// A turn still being spoken at that point goes with the next delegation.
 	const { transcript } = session;
+	let ownTurnOpenAtTake = null; // null: never taken (refused before the head of the queue)
 	const take = () => {
+		ownTurnOpenAtTake = session.userTurnOpen && session.userTurns === batch.turn;
 		if (session.batch === batch) session.batch = null;
 		const prompt = renderDelegation(batch.text, transcript.splice(0).join('\n'));
 		return batch.overlap ? `${OVERLAP_NOTE}\n\n${prompt}` : prompt;
@@ -295,8 +309,7 @@ function dispatchBatch(session, batch) {
 			const reply = result.result || 'Empty reply.';
 			chatProgress?.clear();
 			// Spoken first: the FIFO is already released, so the next run could finish
-			// during the chat post. Batches opened since are still pending (FIFO).
-			if (session.opened > batch.seq) call.appendContext(id, 'commentary', OUTDATED_NOTE);
+			// during the chat post.
 			speakResult(reply);
 			await postToChat(session, reply);
 		})
@@ -365,6 +378,7 @@ function handleLiveEvent(session, call, event) {
 			log.info(`voice ${event.turn?.role} turn started`);
 			if (event.turn?.role !== 'user') break;
 			session.userTurnOpen = true;
+			session.userTurns++;
 			session.delegated.clear(); // the user may now repeat a request on purpose
 			armDispatch(session);
 			stopOutput(session);
@@ -376,6 +390,10 @@ function handleLiveEvent(session, call, event) {
 		case 'error':
 			log.warn('GPT-Live error:', JSON.stringify(event.error || event).slice(0, 300));
 			break;
+		default: // undocumented wire: first sample of each other type, once per join
+			if (session.unhandled.has(event.type)) break;
+			session.unhandled.add(event.type);
+			log.info(`GPT-Live unhandled ${event.type}: ${JSON.stringify(event).slice(0, 300)}`);
 	}
 }
 
@@ -479,7 +497,9 @@ async function connectAndStart(channel) {
 		// Delegation texts since the last user turn (see handleDelegation).
 		delegated: new Set(),
 		opened: 0, // batches opened, numbering them (batch.seq)
+		unhandled: new Set(), // GPT-Live event types already logged (see handleLiveEvent)
 		userTurnOpen: false,
+		userTurns: 0, // user turns started, numbering them (batch.turn)
 		transcript: [],
 		pending: 0,
 		idleTimer: null,
