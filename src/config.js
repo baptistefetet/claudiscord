@@ -99,6 +99,8 @@ const GIST_TIMEOUT_MS = 15_000;
 
 // Inactivity before the voice assistant leaves the voice channel on its own.
 const VOICE_IDLE_TIMEOUT_MS = 900_000; // 15 min
+// How long a channel's agent process stays up after its last prompt (residents.js).
+const AGENT_IDLE_TIMEOUT_MS = 1_800_000; // 30 min
 
 const VALID_AGENTS = ['claude', 'codex'];
 
@@ -149,6 +151,7 @@ module.exports = {
 	STT_LANGUAGE,
 	GITHUB_TOKEN,
 	VOICE_IDLE_TIMEOUT_MS,
+	AGENT_IDLE_TIMEOUT_MS,
 	ADMIN_USER_HOME,
 	SANDBOX_USER_HOME,
 	CONTAINER_NAME,

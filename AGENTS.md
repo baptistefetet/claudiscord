@@ -26,7 +26,8 @@ src/config.js      .env, paths, constants, AGENT_MODELS, REASONING_EFFORT
 src/prompts.js     System prompt (agent-agnostic), scheduling doc, GPT-Live instructions, SOUL.md injection
 src/executor.js    executePrompt: tier→model, host/sandbox env, session persistence
 src/queue.js       Per-channel FIFOs, maintenance gate, running-run registry (/stop)
-src/spawn.js       spawnCollect: subprocess runner (cancellable, line streaming)
+src/spawn.js       spawnCollect / spawnResident: subprocess runners (cancellable, line streaming)
+src/residents.js   Per-channel resident agent processes (reuse checks, idle close)
 src/claude.js      Claude exec/login/usage/version + progress parsing
 src/codex.js       Codex exec/login/usage/version + progress parsing
 src/container.js   Docker image/container, host binary mounts, sandbox file writes
@@ -54,6 +55,14 @@ scripts/update-sandbox.sh   apt upgrade inside the container (/upgrade)
 - A stopped run rejects `CANCELLED` with its partial output, from which adapters recover the session id; a stopped job skips `recordJobRun`.
 - Host runs are `detached` so the whole process group is killed. Sandbox runs need a second, container-side kill: `docker exec` does not propagate signals, so `killContainerRun` matches the `CLAUDISCORD_RUN=<uuid>` env marker (never the command name: other channels share the container). The service's `ExecStopPost` does the same at stop.
 - Interactive runs have no timeout. Only the `medium` tier gets `JOB_TIMEOUT_MS` (1 h), rejecting `TIMEOUT` through the same kill path.
+
+## Resident agent processes
+
+- Interactive Claude prompts on a channel session (`high` tier with `channelId`: text and voice) run on one resident `claude -p --input-format stream-json` per channel (`residents.js`), one stdin line per prompt, the turn ending on its `result` event. Codex, jobs and isolated runs still spawn per prompt.
+- Reused only when its spawn signature (environment, model, system prompt, flags) and the session it holds both match the prompt's; otherwise retired and respawned. Alternating text and voice in one channel respawns (different system prompts).
+- A process never serves two prompts: only the channel FIFO's head acquires it. Any other run on a channel session (a non-isolated job) retires it first: two processes appending to one session would fork it.
+- `/stop` and a timeout kill the whole process, same paths as a one-shot run; the next prompt resumes the session in a new one.
+- Retired on a session drop (unless it holds no session yet, which is how the voice join prewarm survives the join's reset), on any maintenance, and after `AGENT_IDLE_TIMEOUT_MS` idle. Closing is stdin EOF, which also ends them if claudiscord dies.
 
 ## Sandbox
 

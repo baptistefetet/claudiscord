@@ -14,7 +14,7 @@ const {
 const config = require('./config');
 const log = require('./logger');
 const sessions = require('./sessions');
-const { executePrompt } = require('./executor');
+const { executePrompt, prewarmAgent } = require('./executor');
 const { isBusy } = require('./queue');
 const { getSystemPrompt, getLiveInstructions } = require('./prompts');
 const { openLiveCall, hasHostCodexLogin } = require('./live');
@@ -516,6 +516,12 @@ async function connectAndStart(channel) {
 			const user = await client.users.fetch(config.AUTHORIZED_USER_ID);
 			session.userName = user.displayName || user.username;
 		} catch (_) {}
+		// The agent's startup is the bulk of a first delegation's latency: start it
+		// alongside the call, fresh like the session reset below will make it.
+		prewarmAgent(sessions.getAgent(session.channelId), sessions.getMode(session.channelId), {
+			channelId: session.channelId,
+			systemPrompt: buildVoiceSystemPrompt(session),
+		});
 		return openCall(session);
 	})();
 	try {

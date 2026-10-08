@@ -18,7 +18,7 @@ const {
 } = require('./config');
 const { getDefaultAgentsMd, getSchedulingDoc } = require('./prompts');
 const { ensureDb } = require('./jobs-store');
-const { spawnCollect, probeVersion } = require('./spawn');
+const { spawnCollect, spawnResident, probeVersion } = require('./spawn');
 const log = require('./logger');
 
 const DOCKERFILE_DIR = path.resolve(__dirname, '..');
@@ -369,6 +369,15 @@ function sandboxClaudeEnv() {
 		spawn: (args, opts = {}) => {
 			const { runId, env } = sandboxRunMarker();
 			return spawnCollect(
+				'docker', ['exec', '-i', ...env, CONTAINER_NAME, 'claude', ...args],
+				{ label, ...opts, killInContainer: signal => killContainerRun(runId, signal) },
+			);
+		},
+		// One marker for the process's whole life: every turn's `/stop` kills it.
+		// stdin EOF crosses `docker exec -i`, so an idle close needs no kill.
+		spawnResident: (args, opts = {}) => {
+			const { runId, env } = sandboxRunMarker();
+			return spawnResident(
 				'docker', ['exec', '-i', ...env, CONTAINER_NAME, 'claude', ...args],
 				{ label, ...opts, killInContainer: signal => killContainerRun(runId, signal) },
 			);

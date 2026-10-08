@@ -76,11 +76,9 @@ on the channel FIFO. Next steps:
   host-side classification of the delegation (OpenClaw classifies spoken
   input as `status` / `steer` / `cancel` / `followup`) wired to `stopRun`,
   instead of queueing it behind the work it targets.
-- **Agent startup latency**: a simple spoken question takes 20–28 s, of which
-  only 3–5 s is the model — measured on a sandbox Claude resume: ~14 s until
-  the CLI is up, 5–10 s more before the prompt reaches the session. Keeping one
-  agent process alive per channel (streamed input) instead of spawning one per
-  prompt would remove most of it, for text prompts too.
+- **Codex startup latency**: Claude prompts now run on a resident process per
+  channel (`residents.js`); Codex still spawns one `codex exec` per prompt.
+  `codex app-server` would give it the same treatment.
 - **Call renewal**: sessions expire ~2 h after start and the assistant leaves.
   Reopen a call instead, seeding it with the recent transcript
   (`initial_items`) and the tasks still running.

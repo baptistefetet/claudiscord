@@ -1,11 +1,12 @@
-const { executeClaude, hostClaudeEnv } = require('./claude');
+const { executeClaude, prewarmClaude, hostClaudeEnv } = require('./claude');
 const { executeCodex, hostCodexEnv } = require('./codex');
 const {
 	sandboxClaudeEnv,
 	sandboxCodexEnv,
 } = require('./container');
-const { runQueued } = require('./queue');
+const { runQueued, isBusy } = require('./queue');
 const sessions = require('./sessions');
+const residents = require('./residents');
 const { AGENT_MODELS, JOB_TIMEOUT_MS } = require('./config');
 
 /**
@@ -25,6 +26,11 @@ const { AGENT_MODELS, JOB_TIMEOUT_MS } = require('./config');
  *
  * `prompt` may be a function, called once when the run reaches the head of the
  * queue, so a caller can keep appending to it while it waits.
+ *
+ * Interactive Claude prompts on a channel session run on the channel's resident
+ * process (residents.js), kept up between prompts. A scheduled run takes
+ * another model and system prompt, so it stays one-shot, and retires the
+ * resident first when it joins the channel session.
  */
 function executePrompt(agent, mode, prompt, options = {}) {
 	const {
@@ -81,7 +87,10 @@ function executePrompt(agent, mode, prompt, options = {}) {
 			...(stopInfo ? { stopInfo } : {}),
 			// Interactive prompts only: a job has nobody watching it stream.
 			...(onProgress ? { onProgress } : {}),
+			// Claude only; Codex ignores it.
+			...(channelId && tier === 'high' ? { residentKey: channelId } : {}),
 		};
+		if (channelId && tier !== 'high') residents.retire(channelId, 'one-shot run on its session');
 		const sessionContextIsCurrent = () => (
 			!channelId
 			|| (
@@ -99,11 +108,7 @@ function executePrompt(agent, mode, prompt, options = {}) {
 				if (!env) throw new Error(`Unknown execution mode: ${mode}`);
 				result = await executeCodex(prompt, opts, env);
 			} else if (agent === 'claude') {
-				const env = mode === 'sandbox' ? sandboxClaudeEnv()
-					: mode === 'admin' ? hostClaudeEnv
-					: null;
-				if (!env) throw new Error(`Unknown execution mode: ${mode}`);
-				result = await executeClaude(prompt, opts, env);
+				result = await executeClaude(prompt, opts, resolveClaudeEnv(mode));
 			} else {
 				throw new Error(`Unknown agent: ${agent}`);
 			}
@@ -125,4 +130,27 @@ function executePrompt(agent, mode, prompt, options = {}) {
 	});
 }
 
-module.exports = { executePrompt };
+function resolveClaudeEnv(mode) {
+	if (mode === 'sandbox') return sandboxClaudeEnv();
+	if (mode === 'admin') return hostClaudeEnv;
+	throw new Error(`Unknown execution mode: ${mode}`);
+}
+
+/**
+ * Start the channel's agent process before its first prompt, with what
+ * executePrompt will pass it. Claude only (Codex spawns per prompt); skipped
+ * while the channel is busy, as the process then belongs to its FIFO. A fresh
+ * `sessionId: null` prewarm survives the session reset that follows it.
+ */
+function prewarmAgent(agent, mode, { channelId, systemPrompt, tier = 'high', sessionId = null }) {
+	if (agent !== 'claude' || tier !== 'high' || !channelId || isBusy(channelId)) return;
+	let env;
+	try {
+		env = resolveClaudeEnv(mode);
+	} catch {
+		return; // reported by the prompt itself
+	}
+	prewarmClaude(channelId, { sessionId, systemPrompt, model: AGENT_MODELS.claude[tier] }, env);
+}
+
+module.exports = { executePrompt, prewarmAgent };

@@ -8,6 +8,7 @@ const log = require('./logger');
 const sessions = require('./sessions');
 const { ensureImage, DOCKER_AVAILABLE } = require('./container');
 const { executePrompt } = require('./executor');
+const residents = require('./residents');
 const { isBusy } = require('./queue');
 const { createClient, login, sendChunked, startTypingIndicator, startProgressReporter, resolveChannelName } = require('./discord');
 const { handleCommand, dispatchSlashCommand, getRegisteredCommands } = require('./commands');
@@ -445,7 +446,10 @@ async function start() {
 	ensureDb(ADMIN_JOBS_FILE);
 	sessions.load();
 	// After load(), which rebuilds entries in place and must not trigger cleanups.
-	sessions.onSessionCleared(scheduler.handleSessionCleared);
+	sessions.onSessionCleared((channelId, reason) => {
+		residents.sessionCleared(channelId);
+		scheduler.handleSessionCleared(channelId, reason);
+	});
 	if (DOCKER_AVAILABLE) {
 		try { ensureImage(); } catch (err) { log.warn('ensureImage failed:', err.message); }
 	} else {

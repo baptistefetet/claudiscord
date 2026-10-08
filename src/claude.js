@@ -11,7 +11,8 @@ const {
 	REASONING_EFFORT,
 } = require('./config');
 const { isClaudeAvailableInContainer } = require('./container');
-const { spawnCollect, probeVersion } = require('./spawn');
+const { spawnCollect, spawnResident, probeVersion } = require('./spawn');
+const residents = require('./residents');
 const log = require('./logger');
 
 if (!CLAUDE_AVAILABLE) log.warn('Claude Code not detected — Claude agent disabled');
@@ -145,6 +146,9 @@ function startClaudeLogin(mode) {
  * Session attach strategy:
  *   - sessionId  -> `--resume <uuid>`.
  *   - !sessionId -> no flag; Claude allocates an ID and emits it in JSON output.
+ *
+ * A null `prompt` builds a resident process instead: prompts then arrive as
+ * stream-json lines on stdin (claudeTurn), one turn each.
  */
 function buildClaudeArgs(prompt, options = {}) {
 	const {
@@ -169,9 +173,22 @@ function buildClaudeArgs(prompt, options = {}) {
 	args.push('--settings', CLAUDE_SETTINGS);
 	if (model) args.push('--model', model);
 	args.push('--effort', REASONING_EFFORT);
-	args.push('--', prompt);
+	if (prompt === null) args.push('--input-format', 'stream-json');
+	else args.push('--', prompt);
 
 	return args;
+}
+
+// One prompt, as a resident process reads it on stdin.
+function claudeTurn(prompt) {
+	return `${JSON.stringify({ type: 'user', message: { role: 'user', content: prompt } })}\n`;
+}
+
+// A turn ends on its `result` event. The substring test spares a JSON.parse on
+// every other line; tool output quoting it is ruled out by the parse.
+function isClaudeTurnEnd(line) {
+	if (!line.includes('"result"')) return false;
+	try { return JSON.parse(line)?.type === 'result'; } catch { return false; }
 }
 
 // Split a stream-json stdout into its per-line JSON events. This is the single
@@ -390,6 +407,7 @@ async function executeClaude(prompt, options = {}, env) {
 		timeoutMs = 0,
 		stopInfo,
 		onProgress = null,
+		residentKey = null,
 	} = options;
 
 	if (!systemPrompt) {
@@ -398,33 +416,87 @@ async function executeClaude(prompt, options = {}, env) {
 
 	if (env.precheck) env.precheck();
 
-	const args = buildClaudeArgs(prompt, {
-		sessionId, systemPrompt, model,
-		extraArgs: env.extraArgs,
-	});
-
+	const runOptions = {
+		cancelKey, timeoutMs, stopInfo,
+		onLine: onProgress ? line => onProgress(claudeProgress(line)) : null,
+	};
 	const attach = sessionId ? `resume ${sessionId}` : 'new session';
-	log.info(`${env.label}: ${attach}, prompt length: ${prompt.length}`);
 
+	// The resident entry, handed back in `finally` with the session it now holds.
+	let resident = null;
+	let heldSession = sessionId;
 	let result;
 	try {
-		result = await env.spawn(args, {
-			cancelKey, timeoutMs, stopInfo,
-			onLine: onProgress ? line => onProgress(claudeProgress(line)) : null,
-		});
+		if (residentKey) {
+			const { entry, warm } = acquireResident(residentKey, { sessionId, systemPrompt, model }, env);
+			resident = entry;
+			log.info(`${env.label}: ${attach} (${warm ? 'warm' : 'starting'} resident), prompt length: ${prompt.length}`);
+			const startedAt = Date.now();
+			result = await entry.proc.send(claudeTurn(prompt), runOptions);
+			log.info(`${env.label}: turn done in ${((Date.now() - startedAt) / 1000).toFixed(1)} s`);
+			// Still alive: the turn's verdict is its result event, as the exit
+			// code of a one-shot `claude -p` would have been.
+			if (result.code === null) {
+				result.code = lastResultEvent(parseStreamJsonEvents(result.stdout))?.is_error ? 1 : 0;
+			}
+		} else {
+			const args = buildClaudeArgs(prompt, { sessionId, systemPrompt, model, extraArgs: env.extraArgs });
+			log.info(`${env.label}: ${attach}, prompt length: ${prompt.length}`);
+			result = await env.spawn(args, runOptions);
+		}
+		if (result.code !== 0 && env.isUnavailable && env.isUnavailable(result)) {
+			throw Object.assign(new Error('CLAUDE_NOT_AVAILABLE'), { code: 'CLAUDE_NOT_AVAILABLE' });
+		}
+		const final = finalizeClaudeResult(result, env.label);
+		heldSession = final.sessionId || sessionId;
+		return final;
 	} catch (err) {
-		if (env.onSpawnError) env.onSpawnError(err);
-		const events = parseStreamJsonEvents(err.stdout);
-		err.sessionId = sessionIdFromEvents(events);
-		// Covers a cancelled or timed-out run: whatever it emitted before dying
-		// still counts.
-		err.context = contextFromEvents(events);
+		if (err.sessionId === undefined) {
+			if (env.onSpawnError) env.onSpawnError(err);
+			const events = parseStreamJsonEvents(err.stdout);
+			err.sessionId = sessionIdFromEvents(events);
+			// Covers a cancelled or timed-out run: whatever it emitted before dying
+			// still counts.
+			err.context = contextFromEvents(events);
+		}
+		heldSession = err.sessionId || sessionId;
 		throw err;
+	} finally {
+		if (resident) residents.release(residentKey, resident, heldSession);
 	}
-	if (result.code !== 0 && env.isUnavailable && env.isUnavailable(result)) {
-		throw Object.assign(new Error('CLAUDE_NOT_AVAILABLE'), { code: 'CLAUDE_NOT_AVAILABLE' });
+}
+
+/**
+ * The channel's resident Claude for this prompt (see residents.js). The
+ * signature is the command line minus the session, which is checked apart:
+ * a process started fresh holds the session its first turn created.
+ */
+function acquireResident(key, { sessionId, systemPrompt, model }, env) {
+	const signature = [env.label, ...buildClaudeArgs(null, { systemPrompt, model, extraArgs: env.extraArgs })].join('\0');
+	return residents.acquire(key, {
+		signature,
+		sessionId,
+		spawn: () => env.spawnResident(
+			buildClaudeArgs(null, { sessionId, systemPrompt, model, extraArgs: env.extraArgs }),
+			{ isTurnEnd: isClaudeTurnEnd },
+		),
+	});
+}
+
+/**
+ * Start `key`'s resident Claude ahead of its first prompt (voice join), with
+ * the options that prompt will pass. Best effort: a failure here resurfaces,
+ * properly reported, on the prompt itself.
+ */
+function prewarmClaude(key, { sessionId = null, systemPrompt, model }, env) {
+	try {
+		if (env.precheck) env.precheck();
+		const { entry, warm } = acquireResident(key, { sessionId, systemPrompt, model }, env);
+		if (!warm) log.info(`${env.label}: resident prewarmed for ${key}`);
+		residents.release(key, entry, sessionId);
+	} catch (err) {
+		log.warn(`${env.label}: prewarm failed: ${err.message}`);
 	}
-	return finalizeClaudeResult(result, env.label);
 }
 
 // Host environment: run the `claude` binary directly under the admin home.
@@ -437,6 +509,10 @@ const hostClaudeEnv = {
 		}
 	},
 	spawn: (args, opts = {}) => spawnCollect(
+		CLAUDE_BIN, args,
+		{ cwd: ADMIN_USER_HOME, env: ADMIN_ENV, label: 'Claude', detached: true, ...opts },
+	),
+	spawnResident: (args, opts = {}) => spawnResident(
 		CLAUDE_BIN, args,
 		{ cwd: ADMIN_USER_HOME, env: ADMIN_ENV, label: 'Claude', detached: true, ...opts },
 	),
@@ -518,6 +594,7 @@ async function getClaudeUsage(mode = 'admin') {
 
 module.exports = {
 	executeClaude,
+	prewarmClaude,
 	hostClaudeEnv,
 	getClaudeUsage,
 	getClaudeVersion,

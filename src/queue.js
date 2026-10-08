@@ -13,6 +13,16 @@ const running = new Map();
 let totalPending = 0;
 let maintenanceActive = false;
 let maintenanceDone = Promise.resolve();
+const maintenanceListeners = [];
+
+/**
+ * Called as maintenance starts, when nothing runs. For state that maintenance
+ * may invalidate (residents.js: processes started on the old credentials or
+ * binaries). Synchronous; a throw fails the maintenance.
+ */
+function onMaintenance(listener) {
+	maintenanceListeners.push(listener);
+}
 
 async function runMaintenance(fn) {
 	if (maintenanceActive || totalPending > 0) {
@@ -22,6 +32,7 @@ async function runMaintenance(fn) {
 	let release;
 	maintenanceDone = new Promise(resolve => { release = resolve; });
 	try {
+		for (const listener of maintenanceListeners) listener();
 		return await fn();
 	} finally {
 		maintenanceActive = false;
@@ -87,6 +98,7 @@ function stopRun(key) {
 module.exports = {
 	runQueued,
 	runMaintenance,
+	onMaintenance,
 	isBusy,
 	registerRun,
 	unregisterRun,
