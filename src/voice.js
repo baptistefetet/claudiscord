@@ -49,6 +49,9 @@ const DELEGATION_GRACE_MS = 1000;
 // …and never longer than this after its first delegation.
 const DELEGATION_MAX_HOLD_MS = 10_000;
 const MERGED_NOTE = 'Merged into an earlier request that has not started yet; its result covers this one.';
+const RESENT_NOTE = 'Repeats a request already delegated since the user last spoke; not run again.';
+// A result spoken while a later request is pending sounds like it overrules that request.
+const OUTDATED_NOTE = 'A later request is still pending: wherever it changes this result, present that part as being changed, not as the final state.';
 // Transcript sent with a delegation, oldest part dropped first (Codex caps it at 4 KB).
 const TRANSCRIPT_MAX_CHARS = 4000;
 
@@ -172,6 +175,9 @@ function stopOutput(session) {
  * form a batch, held until the user's turn ends (see armDispatch), then queued,
  * and still merged into until the batch reaches the head of the FIFO. Like a
  * steered Codex handoff, the batch's first delegation carries its result.
+ * GPT-Live also re-sends a request on its own once it started (typically when an
+ * earlier result seems to contradict it): until the next user turn, a delegation
+ * repeating an earlier one word for word is dropped.
  */
 function handleDelegation(session, call, event) {
 	const id = event.item?.id;
@@ -182,6 +188,12 @@ function handleDelegation(session, call, event) {
 		.trim();
 	log.info(`voice delegation [${id}]: ${text}`);
 	if (!id || !text) return;
+	const key = text.replace(/\s+/g, ' ');
+	if (session.delegated.has(key)) {
+		call.appendContext(id, 'commentary', RESENT_NOTE);
+		return;
+	}
+	session.delegated.add(key);
 	const batch = session.batch;
 	if (batch?.call !== call) {
 		openBatch(session, call, id, text);
@@ -214,6 +226,7 @@ function openBatch(session, call, id, text) {
 		deadline: Date.now() + DELEGATION_MAX_HOLD_MS,
 		timer: null,
 		queued: false,
+		seq: ++session.opened,
 	};
 	session.pending++;
 	clearTimeout(session.idleTimer);
@@ -281,8 +294,11 @@ function dispatchBatch(session, batch) {
 		.then(async (result) => {
 			const reply = result.result || 'Empty reply.';
 			chatProgress?.clear();
-			await postToChat(session, reply);
+			// Spoken first: the FIFO is already released, so the next run could finish
+			// during the chat post. Batches opened since are still pending (FIFO).
+			if (session.opened > batch.seq) call.appendContext(id, 'commentary', OUTDATED_NOTE);
 			speakResult(reply);
+			await postToChat(session, reply);
 		})
 		.catch(async (err) => {
 			// `/stop` answers in the chat for itself.
@@ -292,8 +308,8 @@ function dispatchBatch(session, batch) {
 			}
 			log.error('voice delegation error:', err.message || err);
 			const message = err.message?.slice(0, 300) || 'unknown';
+			speakResult(`The task failed: ${message}`); // first, as on success
 			await postToChat(session, `Voice task failed: ${message}`);
-			speakResult(`The task failed: ${message}`);
 		})
 		.finally(() => {
 			chatProgress?.clear();
@@ -349,6 +365,7 @@ function handleLiveEvent(session, call, event) {
 			log.info(`voice ${event.turn?.role} turn started`);
 			if (event.turn?.role !== 'user') break;
 			session.userTurnOpen = true;
+			session.delegated.clear(); // the user may now repeat a request on purpose
 			armDispatch(session);
 			stopOutput(session);
 			resetIdleTimer(session);
@@ -395,6 +412,7 @@ async function restartVoiceCall(channelId) {
 	if (session.batch) dispatchBatch(session, session.batch);
 	session.userTurnOpen = false;
 	session.transcript = []; // belongs to the conversation being reset
+	session.delegated.clear();
 	session.call.close();
 	stopOutput(session);
 	try {
@@ -458,6 +476,9 @@ async function connectAndStart(channel) {
 		input: null,
 		// Delegations not started yet (see handleDelegation), counted in `pending`.
 		batch: null,
+		// Delegation texts since the last user turn (see handleDelegation).
+		delegated: new Set(),
+		opened: 0, // batches opened, numbering them (batch.seq)
 		userTurnOpen: false,
 		transcript: [],
 		pending: 0,
