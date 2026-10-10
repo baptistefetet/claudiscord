@@ -87,15 +87,16 @@ async function sendToChannel(channelId, message) {
  * a surrogate pair whole, and the ellipsis counts toward the budget.
  */
 function formatProgress({ icon, summary, detail }) {
-	const clean = value => String(value || '').replace(/\s+/g, ' ').trim();
-	const tail = clean(detail);
-	// Truncated as a whole: a narration carries everything in `summary`, a tool
-	// call splits it across both, and either can be the long part.
-	const chars = [...`${clean(summary)}${tail ? ` — ${tail}` : ''}`];
-	const shown = chars.length > PROGRESS_MAX
-		? `${chars.slice(0, PROGRESS_MAX - 1).join('')}…`
-		: chars.join('');
-	return `${icon} ${shown}`;
+	const clean = value => [...String(value || '').replace(/\s+/g, ' ').trim()];
+	const cut = (chars, max) => chars.length <= max ? chars
+		: max > 1 ? [...chars.slice(0, max - 1), '…'] : [];
+	// A narration carries everything in `summary`; a tool call splits it, and the
+	// detail gets what the summary leaves, minus the separator and code ticks.
+	const head = cut(clean(summary), PROGRESS_MAX).join('');
+	const tail = cut(clean(detail), PROGRESS_MAX - [...head].length - 5).join('');
+	// Inline code sets the target apart. A backtick in it would close the span
+	// early; its look-alike keeps the line readable.
+	return tail ? `${icon} ${head} — \`${tail.replace(/`/g, 'ˋ')}\`` : `${icon} ${head}`;
 }
 
 // Nothing retries a failed deletion, so at least name the message left behind

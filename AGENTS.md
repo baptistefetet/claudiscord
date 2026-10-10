@@ -1,6 +1,6 @@
 # Claudiscord
 
-Single-user Discord relay to Claude Code CLI and/or Codex CLI + scheduled job runner. Single Node.js process. See `README.md` for installation and the commands reference.
+Single-user Discord relay to Claude Code CLI and/or Codex CLI + scheduled job runner. Single Node.js process. See `README.md` for installation and the commands reference, `ROADMAP.md` for the backlog.
 
 Mechanisms are documented at their call sites; this file keeps only the cross-module rules.
 

@@ -217,25 +217,45 @@ function errorTextFromResultEvent(resultEvent) {
 		: (resultEvent.subtype || null);
 }
 
-// What each tool is doing, in words, plus which of its inputs identifies the
-// target. A raw `Grep: startProgress` says nothing to someone who does not know
-// the tool names.
+// The last three segments name a file well enough; a full absolute path eats
+// most of the line.
+function shortPath(p) {
+	const parts = String(p || '').split('/').filter(Boolean);
+	return parts.length > 3 ? `…/${parts.slice(-3).join('/')}` : p;
+}
+
+function hostname(url) {
+	try { return new URL(url).hostname; } catch { return url; }
+}
+
+// Icon, what each tool is doing in words (a string or a function of the
+// input), and which of its inputs identifies the target. A raw
+// `Grep: startProgress` says nothing to someone who does not know the tool names.
 const TOOL_ACTIVITY = {
-	Bash: ['Running a command', i => i.command],
-	Read: ['Reading a file', i => i.file_path],
-	Write: ['Writing a file', i => i.file_path],
-	Edit: ['Editing a file', i => i.file_path],
-	Glob: ['Finding files', i => i.pattern],
-	Grep: ['Searching the code', i => i.pattern],
-	WebSearch: ['Searching the web', i => i.query],
-	WebFetch: ['Reading a web page', i => i.url],
-	Task: ['Running a subagent', i => i.description],
+	// The model states each command's purpose in `description`: more telling
+	// than the command itself, which stays as the detail.
+	Bash: ['💻', i => i.description || 'Running a command', i => i.command],
+	Read: ['📖', 'Reading a file', i => shortPath(i.file_path)],
+	Write: ['✏️', 'Writing a file', i => shortPath(i.file_path)],
+	Edit: ['✏️', 'Editing a file', i => shortPath(i.file_path)],
+	Glob: ['🔍', i => i.path ? `Finding files in ${shortPath(i.path)}` : 'Finding files', i => i.pattern],
+	Grep: ['🔍', i => i.path ? `Searching ${shortPath(i.path)}` : 'Searching files', i => i.pattern],
+	WebSearch: ['🌐', 'Searching the web', i => i.query],
+	WebFetch: ['🌐', 'Reading a web page', i => hostname(i.url)],
+	Skill: ['🧩', 'Using a skill', i => i.skill],
+	Agent: ['🤖', 'Running a subagent', i => i.description],
 };
 
-function toolActivity(block) {
-	const [summary, pick] = TOOL_ACTIVITY[block.name] || [];
-	if (!summary) return { icon: '🔧', summary: block.name };
-	return { icon: '🔧', summary, detail: pick(block.input || {}) };
+// Plumbing the reader gains nothing from (loading deferred tool schemas).
+const HIDDEN_TOOLS = new Set(['ToolSearch']);
+
+function toolActivity({ name, input }) {
+	input ||= {};
+	const [icon, summary, pick] = TOOL_ACTIVITY[name] || [];
+	if (icon) return { icon, summary: typeof summary === 'function' ? summary(input) : summary, detail: pick(input) };
+	// `mcp__<server>__<tool>`: the server says more than the prefix.
+	const [, server, tool] = /^mcp__(.+?)__(.+)$/.exec(name) || [];
+	return server ? { icon: '🔌', summary: `${server} · ${tool}` } : { icon: '🔧', summary: name };
 }
 
 /**
@@ -252,7 +272,7 @@ function claudeProgress(line) {
 	let tool = null;
 	for (const block of event.message.content) {
 		if (block?.type === 'text' && block.text?.trim()) return { icon: '💬', summary: block.text };
-		if (block?.type === 'tool_use' && !tool) tool = block;
+		if (block?.type === 'tool_use' && !tool && !HIDDEN_TOOLS.has(block.name)) tool = block;
 	}
 	return tool ? toolActivity(tool) : null;
 }

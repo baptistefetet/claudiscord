@@ -1,23 +1,17 @@
-# Claudiscord — feature backlog: session forks, webhook, voice, Discord UX
+# Claudiscord — roadmap
 
 Backlog only: a shipped item is removed from this file, not marked done — its
 reasoning belongs in `AGENTS.md` or the code.
-
-## Verified capabilities
-
-- `claude -p --resume <uuid> --fork-session` resumes a session while allocating
-  a NEW session id — the parent transcript is never touched.
-- The Codex CLI has no fork equivalent (`codex exec resume` only), so every
-  fork-based feature below is **Claude-only**.
 
 ## 1. `/btw <question>` — side question on a forked context
 
 Ask a quick side question without polluting the channel session; the answer
 appears as a Discord **reply** to the `/btw` message to mark it as an aside.
 
-- Read the channel's `sessionId`, run `claude -p --resume <id> --fork-session`,
-  and NEVER persist the returned session id → new `ephemeral: true` option in
-  `executePrompt` that skips `sessions.setSessionId` (`executor.js`).
+- Read the channel's `sessionId`, fork it (`claude -p --resume <id>
+  --fork-session`, `codex exec fork <id>`), and NEVER persist the returned
+  session id → new `ephemeral: true` option in `executePrompt` that skips
+  `sessions.setSessionId` (`executor.js`).
 - No active session → plain fresh one-shot, still unpersisted.
 - Queue: dedicated key (`${channelId}#btw`) so it does not wait behind a
   long-running prompt. Accepted trade-off: the fork sees the last *persisted*
@@ -35,16 +29,15 @@ appears as a Discord **reply** to the `/btw` message to mark it as an aside.
 Today `ensureFromParent` snapshots mode/agent but starts fresh
 (`sessionId: null`) + starter-message injection (`index.js`).
 
-- When the thread has an anchor message AND the parent holds an active Claude
+- When the thread has an anchor message AND the parent holds an active
   session: store `forkFrom: <parentSessionId>` in the thread's sessions entry;
-  the first execution builds `--resume <forkFrom> --fork-session`, then persists
-  the NEW uuid to the thread. Parent untouched.
+  the first execution forks it (same commands as `/btw`), then persists the NEW
+  id to the thread. Parent untouched.
 - Default-fork for anchored threads (Discord semantics: "develop this point");
   standalone threads stay fresh. `/new` reverts a thread to fresh.
 - Starter-message injection becomes redundant in the forked case (the anchor is
   already in the parent transcript); keep it for the fresh case.
-- Codex channels: unchanged (no fork). Same mechanics as `/btw` — small once
-  `/btw` has landed.
+- Same mechanics as `/btw` — small once `/btw` has landed.
 
 ## 3. Webhook — trigger prompts from outside Discord
 
@@ -54,8 +47,7 @@ Minimal HTTP server in the same process (`node:http`, no framework):
 
 - Require an EXISTING Discord `channelId` → this is a *trigger*, not a second
   transport: no session/jobs key namespacing, no scheduler notification
-  routing — the pending work listed in `AGENTS.md` ("Adding a transport")
-  stays untouched.
+  routing.
 - Flow: resolve mode/agent from sessions → build the system prompt →
   `executePrompt` through the channel FIFO → result posted to the Discord
   channel. HTTP answers `202` immediately (a prompt has no bounded duration).
@@ -93,10 +85,9 @@ Effort: medium each. Value: medium.
 
 ## 5. Per-channel working directory
 
-Every run uses the home directory as cwd — `ADMIN_USER_HOME` on the host
-(`claude.js:131,441`, `codex.js:119,263,501`), `SANDBOX_USER_HOME` in the
-container (`-w`, `container.js:378`). One channel per project needs a cwd per
-channel.
+Every run uses the home directory as cwd — `cwd: ADMIN_USER_HOME` on the host
+(every spawn in `claude.js` and `codex.js`), `-w SANDBOX_USER_HOME` in the
+container (`container.js`). One channel per project needs a cwd per channel.
 
 - Half of it exists: `sessions.depotPath` (the repository `/diff` reports on,
   asked for on first use, cleared on mode switch). Generalize it into the
@@ -134,10 +125,10 @@ plain string option taken straight from autocomplete when supplied
 - Suggestions are hints, not a whitelist: with autocomplete the user can submit
   any string, so the path is still validated at dispatch (unlike static
   choices, which Discord enforces).
-- **Shared prerequisite with §1**: `registerSlashCommands` (`index.js:356`)
+- **Shared prerequisite with §1**: `registerSlashCommands` (`index.js`)
   emits only `name`/`description`/`type`/`dmPermission` — no `options` — and
-  the `InteractionCreate` listener returns unless `isChatInputCommand()`
-  (`index.js:302`), so autocomplete interactions are dropped. Extending the
+  the `InteractionCreate` listener returns unless `isChatInputCommand()`, so
+  autocomplete interactions are dropped. Extending the
   neutral metadata in `commands.js` with an optional argument spec, and the
   adapter with an autocomplete branch, unlocks `/btw <question>` and
   `/cd <path>` at once. That is the real work; the picker is not.
@@ -161,7 +152,7 @@ Effort: low, contained in one function. Value: medium.
 
 Replying to a message is the Discord-native way of pointing at something, and
 today nothing reads it: only a thread's starter message is injected
-(`index.js:148`), `message.reference` is ignored.
+(`index.js`), `message.reference` is ignored.
 
 - `message.fetchReference()` on the incoming message, injected as quoted
   context in the same shape as the starter injection (author + content), which
@@ -172,6 +163,25 @@ today nothing reads it: only a thread's starter message is injected
 
 Effort: low. Value: medium.
 
+## 8. Progress display follow-ups
+
+The live line (`discord.js::startProgressReporter`) shows only the latest
+step, edited at most every `PROGRESS_EDIT_MS` (2 s).
+
+- **Short history**: the previous 3–4 steps as `-#` subtext above the current
+  one; today a step faster than the throttle is never seen.
+- **Parallel tool calls**: `claudeProgress` keeps the first `tool_use` of an
+  event; group the rest ("Reading 3 files").
+- **Subagent steps**: prefix them with `↳` using `parent_tool_use_id`. To check
+  first: whether `claude -p --output-format stream-json` emits a subagent's
+  inner events at all.
+- **Elapsed time and step count** as a subtext line (`-# 2 min 10 · 14 steps`).
+- **Codex**: `codexProgress` relays only `command_execution` and
+  `agent_message`; also map `file_change`, `web_search`, `mcp_tool_call` and
+  `todo_list` items.
+
+Effort: low-medium. Value: medium.
+
 ## Priorities
 
 `/btw` and the webhook have the best value/effort ratio among the bigger
@@ -179,7 +189,8 @@ items; thread-fork is small once `/btw` exists. §6 and §7 are contained
 one-function changes; §5 is worth doing before more channels accumulate a
 `depotPath`, and its autocomplete UI shares the slash-command option support
 `/btw` needs — doing that once serves both. Voice: §4 once the
-GPT-Live front end has been used for a while.
+GPT-Live front end has been used for a while. §8 stays within the progress
+relay (`claude.js`, `codex.js`, `discord.js`).
 
 ## References
 

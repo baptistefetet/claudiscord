@@ -206,7 +206,7 @@ function codexProgress(line) {
 		const command = String(item.command || '')
 			.replace(/^\/?(?:bin\/)?(?:ba)?sh\s+-l?c\s+/, '')
 			.replace(/^(['"])([\s\S]*)\1$/, '$2');
-		return { icon: '🔧', summary: 'Running a command', detail: command };
+		return { icon: '💻', summary: 'Running a command', detail: command };
 	}
 	if (item.type === 'agent_message' && event.type === 'item.completed' && item.text?.trim()) {
 		return { icon: '💬', summary: item.text };
