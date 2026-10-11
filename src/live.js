@@ -4,6 +4,7 @@ const { RTCPeerConnection, RtpPacket, RtpHeader, useOPUS } = require('werift');
 const WebSocket = require('ws');
 const config = require('./config');
 const log = require('./logger');
+const { refreshHostCodexLogin } = require('./codex');
 
 /**
  * GPT-Live call on the ChatGPT subscription (`gpt-live-1-codex`), the route the
@@ -29,14 +30,16 @@ const MAX_QUEUED_FRAMES = 10;
 const CONTEXT_APPEND_MAX_BYTES = 500;
 const CONNECT_TIMEOUT_MS = 15_000;
 
+// Refresh slightly early: a token checked valid must still be valid at call setup.
+const AUTH_EXPIRY_MARGIN_MS = 60_000;
+
 const LOGIN_HINT = 'send `/codex` then `/login` in an admin channel';
 
 function hasHostCodexLogin() {
 	return fs.existsSync(config.HOST_CODEX_AUTH_FILE);
 }
 
-/** Read afresh on every call: the Codex CLI refreshes the token on its own. */
-function readAuth() {
+function readAuthFile() {
 	let tokens;
 	try {
 		tokens = JSON.parse(fs.readFileSync(config.HOST_CODEX_AUTH_FILE, 'utf8')).tokens;
@@ -46,10 +49,22 @@ function readAuth() {
 	if (!tokens?.access_token || !tokens.account_id) {
 		throw new Error(`voice needs the host Codex ChatGPT login — ${LOGIN_HINT}`);
 	}
+	return tokens;
+}
+
+function isExpired(tokens) {
 	const payload = JSON.parse(Buffer.from(tokens.access_token.split('.')[1], 'base64url').toString());
-	if (payload.exp * 1000 < Date.now()) {
-		throw new Error(`the host Codex login has expired — ${LOGIN_HINT}`);
-	}
+	return payload.exp * 1000 < Date.now() + AUTH_EXPIRY_MARGIN_MS;
+}
+
+/** Read afresh on every call; an expired token is refreshed through the Codex CLI first. */
+async function readAuth() {
+	let tokens = readAuthFile();
+	if (!isExpired(tokens)) return tokens;
+	log.info('voice: host Codex token expired, refreshing');
+	await refreshHostCodexLogin();
+	tokens = readAuthFile();
+	if (isExpired(tokens)) throw new Error(`the host Codex login has expired — ${LOGIN_HINT}`);
 	return tokens;
 }
 
@@ -83,7 +98,7 @@ function withTimeout(promise, label) {
  * fires once when the call ends on its own (never after `close()`).
  */
 async function openLiveCall({ instructions, onEvent, onClose }) {
-	const tokens = readAuth();
+	const tokens = await readAuth();
 	const headers = {
 		Authorization: `Bearer ${tokens.access_token}`,
 		'chatgpt-account-id': tokens.account_id,

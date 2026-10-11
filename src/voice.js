@@ -646,6 +646,8 @@ async function maybeAutojoin(channel, seen = new Set()) {
 		await postToChat(session, `🎙️ Autojoin — voice assistant joined **${resolveChannelName(channel)}** (mode **${sessions.getMode(channel.id)}**, agent **${sessions.getAgent(channel.id)}**). Send \`/voice\` to stop it.`);
 	} catch (err) {
 		log.error('voice autojoin failed:', err.message || err);
+		// Not awaited: nothing guards joins until reconcile below runs.
+		postToChat({ channelId: channel.id }, `🔇 Autojoin failed: ${String(err.message || err).slice(0, 300)}`);
 	}
 
 	await reconcileAutojoin(channel.guild, seen);

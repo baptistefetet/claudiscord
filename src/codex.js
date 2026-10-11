@@ -12,7 +12,7 @@ const { ensureContainer, isCodexAvailableInContainer } = require('./container');
 const { spawnCollect, probeVersion } = require('./spawn');
 const log = require('./logger');
 
-const CODEX_USAGE_TIMEOUT_MS = 10000;
+const CODEX_APP_SERVER_TIMEOUT_MS = 10000;
 const CODEX_LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
 const CODEX_LOGIN_URL_TIMEOUT_MS = 15 * 1000;
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
@@ -230,7 +230,7 @@ function spawnCodexAppServer(mode) {
 			throw Object.assign(new Error('CODEX_NOT_AVAILABLE'), { code: 'CODEX_NOT_AVAILABLE' });
 		}
 		return {
-			label: 'getCodexUsage(sandbox)',
+			label: 'codex app-server(sandbox)',
 			child: spawn('docker', [
 				'exec',
 				'-i',
@@ -258,7 +258,7 @@ function spawnCodexAppServer(mode) {
 		throw Object.assign(new Error('CODEX_NOT_AVAILABLE'), { code: 'CODEX_NOT_AVAILABLE' });
 	}
 	return {
-		label: 'getCodexUsage(host)',
+		label: 'codex app-server(host)',
 		child: spawn(CODEX_BIN, ['app-server'], {
 			cwd: ADMIN_USER_HOME,
 			env: process.env,
@@ -269,25 +269,22 @@ function spawnCodexAppServer(mode) {
 }
 
 /**
- * Read ChatGPT account rate limits through Codex App Server. This uses the
- * credentials for the selected execution environment and does not run a model
- * turn or consume quota.
+ * One JSON-RPC request to a short-lived Codex App Server, under the credentials
+ * of the given environment. Runs no model turn and consumes no quota.
+ * Resolves `{ result }` or `{ reason }` ('no-cli' | 'expired' | 'error').
  */
-async function getCodexUsage(mode = 'admin') {
+function requestAppServer(mode, method, params) {
 	return new Promise((resolve) => {
 		let child;
 		let cleanup = null;
-		let label = `getCodexUsage(${mode})`;
+		let label = `codex app-server(${mode})`;
 		try {
-			const appServer = spawnCodexAppServer(mode);
-			child = appServer.child;
-			cleanup = appServer.cleanup;
-			label = appServer.label;
+			({ child, cleanup, label } = spawnCodexAppServer(mode));
 		} catch (err) {
 			if (err.code !== 'CODEX_NOT_AVAILABLE') {
 				log.warn(`${label} spawn error:`, err.message);
 			}
-			resolve({ available: false, reason: err.code === 'CODEX_NOT_AVAILABLE' ? 'no-cli' : 'error' });
+			resolve({ reason: err.code === 'CODEX_NOT_AVAILABLE' ? 'no-cli' : 'error' });
 			return;
 		}
 		let settled = false;
@@ -295,9 +292,9 @@ async function getCodexUsage(mode = 'admin') {
 		let stderr = '';
 
 		const timer = setTimeout(() => {
-			log.warn(`${label} timed out`);
-			finish({ available: false, reason: 'error' });
-		}, CODEX_USAGE_TIMEOUT_MS);
+			log.warn(`${label} ${method} timed out`);
+			finish({ reason: 'error' });
+		}, CODEX_APP_SERVER_TIMEOUT_MS);
 
 		function finish(result) {
 			if (settled) return;
@@ -334,55 +331,27 @@ async function getCodexUsage(mode = 'admin') {
 				if (message.id !== 1) continue;
 				if (message.error) {
 					const error = JSON.stringify(message.error);
-					const reason = isCodexAuthError(error, stderr) ? 'expired' : 'error';
-					log.warn(`${label} App Server error`);
-					finish({ available: false, reason });
-					return;
+					log.warn(`${label} ${method} error: ${error.slice(0, 300)}`);
+					finish({ reason: isCodexAuthError(error, stderr) ? 'expired' : 'error' });
+				} else {
+					finish({ result: message.result });
 				}
-
-				const limits = message.result?.rateLimitsByLimitId?.codex
-					|| message.result?.rateLimits;
-				const windows = [limits?.primary, limits?.secondary].filter(Boolean);
-				// Match windows by their duration, no positional fallback: the API may
-				// omit the 5h window entirely (OpenAI dropped it), leaving only weekly.
-				const fiveHour = windows.find(window => window.windowDurationMins === 300);
-				const weekly = windows.find(window => window.windowDurationMins === 10080);
-				const hasFiveHour = Number.isFinite(fiveHour?.usedPercent);
-				const hasWeekly = Number.isFinite(weekly?.usedPercent);
-				if (!hasFiveHour && !hasWeekly) {
-					finish({ available: false, reason: 'no-subscription' });
-					return;
-				}
-
-				const resetAt = (seconds) => Number.isFinite(seconds)
-					? new Date(seconds * 1000).toISOString()
-					: null;
-				finish({
-					available: true,
-					fiveHour: hasFiveHour ? fiveHour.usedPercent : null,
-					weekly: hasWeekly ? weekly.usedPercent : null,
-					fiveHourResetAt: hasFiveHour ? resetAt(fiveHour.resetsAt) : null,
-					weeklyResetAt: hasWeekly ? resetAt(weekly.resetsAt) : null,
-				});
 				return;
 			}
 		});
 		child.on('error', (err) => {
 			log.warn(`${label} spawn error:`, err.message);
-			finish({ available: false, reason: err.code === 'ENOENT' ? 'no-cli' : 'error' });
+			finish({ reason: err.code === 'ENOENT' ? 'no-cli' : 'error' });
 		});
 		child.on('close', (code) => {
 			if (settled) return;
-			log.warn(`${label} App Server exited with code ${code}: ${stderr.slice(-300)}`);
-			finish({
-				available: false,
-				reason: isCodexAuthError('', stderr) ? 'expired' : 'error',
-			});
+			log.warn(`${label} exited with code ${code}: ${stderr.slice(-300)}`);
+			finish({ reason: isCodexAuthError('', stderr) ? 'expired' : 'error' });
 		});
 		child.stdin.on('error', (err) => {
 			if (settled) return;
 			log.warn(`${label} stdin error:`, err.message);
-			finish({ available: false, reason: 'error' });
+			finish({ reason: 'error' });
 		});
 
 		child.stdin.write([
@@ -398,9 +367,45 @@ async function getCodexUsage(mode = 'admin') {
 				},
 			},
 			{ method: 'initialized', params: {} },
-			{ method: 'account/rateLimits/read', id: 1, params: null },
+			{ method, id: 1, params },
 		].map(message => JSON.stringify(message)).join('\n') + '\n');
 	});
+}
+
+/** ChatGPT account rate limits of the given environment. */
+async function getCodexUsage(mode = 'admin') {
+	const { result, reason } = await requestAppServer(mode, 'account/rateLimits/read', null);
+	if (reason) return { available: false, reason };
+
+	const limits = result?.rateLimitsByLimitId?.codex || result?.rateLimits;
+	const windows = [limits?.primary, limits?.secondary].filter(Boolean);
+	// Match windows by their duration, no positional fallback: the API may
+	// omit the 5h window entirely (OpenAI dropped it), leaving only weekly.
+	const fiveHour = windows.find(window => window.windowDurationMins === 300);
+	const weekly = windows.find(window => window.windowDurationMins === 10080);
+	const hasFiveHour = Number.isFinite(fiveHour?.usedPercent);
+	const hasWeekly = Number.isFinite(weekly?.usedPercent);
+	if (!hasFiveHour && !hasWeekly) return { available: false, reason: 'no-subscription' };
+
+	const resetAt = (seconds) => Number.isFinite(seconds)
+		? new Date(seconds * 1000).toISOString()
+		: null;
+	return {
+		available: true,
+		fiveHour: hasFiveHour ? fiveHour.usedPercent : null,
+		weekly: hasWeekly ? weekly.usedPercent : null,
+		fiveHourResetAt: hasFiveHour ? resetAt(fiveHour.resetsAt) : null,
+		weeklyResetAt: hasWeekly ? resetAt(weekly.resetsAt) : null,
+	};
+}
+
+/**
+ * Refresh the host ChatGPT tokens in auth.json. The CLI only refreshes them when
+ * it runs, so they expire if Codex sits unused for ~10 days.
+ */
+async function refreshHostCodexLogin() {
+	const { reason } = await requestAppServer('admin', 'account/read', { refreshToken: true });
+	if (reason) log.warn(`host Codex token refresh failed (${reason})`);
 }
 
 /**
@@ -511,6 +516,7 @@ const hostCodexEnv = {
 module.exports = {
 	getCodexUsage,
 	getCodexVersion,
+	refreshHostCodexLogin,
 	executeCodex,
 	hostCodexEnv,
 	startCodexLogin,

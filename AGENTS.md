@@ -28,7 +28,7 @@ src/executor.js    executePrompt: tier→model, host/sandbox env, session persis
 src/queue.js       Per-channel FIFOs, maintenance gate, running-run registry (/stop)
 src/spawn.js       spawnCollect: subprocess runner (cancellable, line streaming)
 src/claude.js      Claude exec/login/usage/version + progress parsing
-src/codex.js       Codex exec/login/usage/version + progress parsing
+src/codex.js       Codex exec/login/usage/version/token refresh + progress parsing
 src/container.js   Docker image/container, host binary mounts, sandbox file writes
 src/scheduler.js   Ticker, reloadJobs, executeJob, NOTIFY_NONE, non-isolated job cleanup
 src/jobs-store.js  SQLite jobs via the sqlite3 CLI
@@ -82,9 +82,9 @@ scripts/update-sandbox.sh   apt upgrade inside the container (/upgrade)
 ## Voice
 
 - Voice messages (flag `IsVoiceMessage` only, not audio attachments) → Groq Whisper (`stt.js`), echoed as `🎙️ <text>`. Text wins over voice; no `GROQ_API_KEY` → dropped.
-- `/voice` in a voice channel's chat starts a GPT-Live call (`live.js`) on the **host** Codex ChatGPT login. Undocumented wire, expect breakage. Input must be RTP Opus over WebRTC; output arrives on the sideband only.
+- `/voice` in a voice channel's chat starts a GPT-Live call (`live.js`) on the **host** Codex ChatGPT login. Undocumented wire, expect breakage. The CLI only refreshes that token when it runs, so an expired one is first refreshed through `codex app-server` (`account/read`, no quota). Input must be RTP Opus over WebRTC; output arrives on the sideband only.
 - The call has no tools: every delegation goes through `executePrompt` (`high` tier, channel FIFO, `voice: true` prompt flag). GPT-Live delegates mid-sentence, so delegations are batched per call: held until the user's turn ends, merged into until the batch starts (`voice.js::handleDelegation`). GPT-Live also re-sends started requests on its own: until the next user turn, a delegation repeating an earlier one word for word is dropped. A result arriving while a later batch is pending is flagged to the call as possibly outdated; otherwise it comes with the user turns spoken since its batch started, which GPT-Live may have acknowledged without delegating them. A batch also carries the turns spoken since the previous one, as GPT-Live only sends its own rewording. The session is the voice channel's `channelId`, shared with its chat. Each join resets it (skipped while a task runs there), so voice-created jobs must be isolated; agent switches are locked while the call is active.
-- `/autojoin` is a per-channel allowlist persisted in `sessions.json`, on purpose: the bot must never join calls with other people by default.
+- `/autojoin` is a per-channel allowlist persisted in `sessions.json`, on purpose: the bot must never join calls with other people by default. A failed autojoin is posted to the channel's chat.
 
 ## Uploads, progress, sessions
 
