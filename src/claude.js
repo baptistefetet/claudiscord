@@ -18,8 +18,7 @@ if (!CLAUDE_AVAILABLE) log.warn('Claude Code not detected — Claude agent disab
 
 // Claude-only; Codex governs its tools via --yolo. `claude -p` already drops the
 // interactive tools, so DISALLOWED_TOOLS only lists what would conflict with
-// claudiscord. Bundled skills are excluded via disableBundledSkills below (so new
-// ones are covered automatically); plugin and .claude/skills/ ones are unaffected.
+// claudiscord. Skills and plugins are trimmed through CLAUDE_SETTINGS below.
 const ALLOWED_TOOLS = 'Bash(*) Read Write Edit Glob Grep WebSearch WebFetch Task';
 
 // Native scheduling + remote session control — claudiscord owns the job and
@@ -35,9 +34,28 @@ const DISALLOWED_TOOLS = [
 ].join(' ');
 
 // Passed via --settings (not ~/.claude/settings.json, which is shared with the
-// admin's own interactive sessions): scopes bundled-skill exclusion to claudiscord's
-// own `claude -p` invocations only.
-const CLAUDE_SETTINGS = JSON.stringify({ disableBundledSkills: true });
+// admin's own interactive sessions): scoped to claudiscord's own `claude -p`
+// invocations, and in that scope the sync opt-out only hides synced items (nothing
+// is moved to the trash). Drops what needs a UI, a desktop app or claude.ai:
+//   - bundled skills (new ones covered automatically);
+//   - plugins synced from the claude.ai account (pdf-viewer: an interactive viewer);
+//   - claude.ai connectors (Claude Docs: documents only viewable on claude.ai),
+//     with the synced skills that drive them;
+//   - synced or built-in skills driving a browser, a desktop or Claude's own UI.
+// Installed plugins, user MCP servers and .claude/skills/ ones are unaffected.
+const CLAUDE_SETTINGS = JSON.stringify({
+	disableBundledSkills: true,
+	syncClaudeAiPlugins: false,
+	disableClaudeAiConnectors: true,
+	skillOverrides: Object.fromEntries([
+		'anthropic-skills:docs',
+		'anthropic-skills:google-workspace',
+		'anthropic-skills:built-in-browser',
+		'anthropic-skills:chrome-browser',
+		'anthropic-skills:computer-use',
+		'plugin-authoring',
+	].map(name => [name, 'off'])),
+});
 
 // OAuth account usage (5h window + weekly), same endpoint Claude Code's /usage hits.
 const OAUTH_USAGE_URL = 'https://api.anthropic.com/api/oauth/usage';
