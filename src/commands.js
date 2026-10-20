@@ -45,20 +45,20 @@ const UPDATE_SANDBOX_SCRIPT = path.resolve(__dirname, '..', 'scripts', 'update-s
  * Header line with id, then one piece of information per line.
  */
 function formatJobBlock(job) {
-	// Derived, not stored: a job runs on whatever agent its channel is set to now.
-	const agent = sessions.getAgent(job.channelId);
-	const runs = (typeof job.remaining === 'number' && job.remaining > 0) ? `${job.remaining} left` : 'infinite';
 	const channel = job.channelName || job.channelId;
-	const last = job.lastRun ? `${String(job.lastRun).replace('T', ' ').slice(0, 16)} UTC` : 'never';
+	// last_run is stored as UTC ISO; shift by the host offset to print local time.
+	const lastDate = job.lastRun && new Date(job.lastRun);
+	const last = lastDate
+		? new Date(lastDate.getTime() - lastDate.getTimezoneOffset() * 60000).toISOString().replace('T', ' ').slice(0, 16)
+		: 'never';
 	const lines = [
 		`**\`${job.id}\`**`,
 		`⏰ Schedule: \`${job.cron}\``,
-		`🤖 Agent: ${agent} (channel's current)`,
 		`💬 Channel: ${channel}`,
-		`🔁 Runs: ${runs}`,
 		`🕘 Last run: ${last}`,
 	];
-	// Shown only for the exception, so the common case stays compact.
+	// Shown only for the exceptions, so the common case stays compact.
+	if (job.remaining > 0) lines.splice(3, 0, `🔁 Runs: ${job.remaining} left`);
 	if (!job.isolated) lines.push('🧵 Session: channel conversation');
 	if (job.description) {
 		let d = String(job.description).replace(/\s+/g, ' ').trim();
