@@ -97,10 +97,31 @@ function ensureImage() {
 
 function chownContainerUser(target) {
 	try {
-		execFileSync('chown', [`${SANDBOX_UID}:${SANDBOX_GID}`, target], { timeout: 5000 });
+		execFileSync('chown', ['-h', `${SANDBOX_UID}:${SANDBOX_GID}`, target], { timeout: 5000 });
 	} catch (err) {
 		log.warn(`chown ${target} failed: ${err.message}`);
 	}
+}
+
+// The sandbox owns its home and can plant symlinks there: lstat (a dangling symlink
+// counts as present), refuse non-directories, and create files with O_EXCL so root
+// never writes through a link. Created entries are handed to the container user.
+const lexists = (p) => fs.lstatSync(p, { throwIfNoEntry: false }) !== undefined;
+
+function ensureSandboxDir(dir) {
+	if (!lexists(dir)) {
+		fs.mkdirSync(dir);
+		chownContainerUser(dir);
+	} else if (!fs.lstatSync(dir).isDirectory()) {
+		throw new Error(`${dir} is not a directory`);
+	}
+}
+
+function seedSandboxFile(file, content, mode = 0o644) {
+	if (lexists(file)) return false;
+	fs.writeFileSync(file, content, { flag: 'wx', mode });
+	chownContainerUser(file);
+	return true;
 }
 
 function ensureStorage() {
@@ -110,36 +131,16 @@ function ensureStorage() {
 	if (isNew) chownContainerUser(home);
 
 	// Seed a default AGENTS.md (customizable)
-	const agentsMd = path.join(home, 'AGENTS.md');
-	if (!fs.existsSync(agentsMd)) {
-		fs.writeFileSync(agentsMd, getDefaultAgentsMd());
-		chownContainerUser(agentsMd);
-		log.info(`Created AGENTS.md in ${home}`);
-	}
+	if (seedSandboxFile(path.join(home, 'AGENTS.md'), getDefaultAgentsMd())) log.info(`Created AGENTS.md in ${home}`);
 
-	// .claude: created root-owned when home is pre-populated externally,
-	// so chown it whenever we create it.
-	const claudeDir = path.join(home, '.claude');
-	const claudeDirIsNew = !fs.existsSync(claudeDir);
-	fs.mkdirSync(claudeDir, { recursive: true });
-	if (claudeDirIsNew) chownContainerUser(claudeDir);
-
+	ensureSandboxDir(path.join(home, '.claude'));
 	const codexDir = path.join(home, '.codex');
-	const codexDirIsNew = !fs.existsSync(codexDir);
-	fs.mkdirSync(codexDir, { recursive: true });
-	if (codexDirIsNew) chownContainerUser(codexDir);
-	const codexConfig = path.join(codexDir, 'config.toml');
-	if (!fs.existsSync(codexConfig)) {
-		fs.writeFileSync(codexConfig, SANDBOX_CODEX_CONFIG, { encoding: 'utf8', mode: 0o600 });
-		chownContainerUser(codexConfig);
-	}
+	ensureSandboxDir(codexDir);
+	seedSandboxFile(path.join(codexDir, 'config.toml'), SANDBOX_CODEX_CONFIG, 0o600);
 
-	const claudiscordDir = path.join(home, STATE_DIR);
-	const claudiscordDirIsNew = !fs.existsSync(claudiscordDir);
-	fs.mkdirSync(claudiscordDir, { recursive: true });
-	if (claudiscordDirIsNew) chownContainerUser(claudiscordDir);
+	ensureSandboxDir(path.join(home, STATE_DIR));
 	const jobsFile = path.join(home, STATE_DIR, JOBS_FILENAME);
-	if (!fs.existsSync(jobsFile)) {
+	if (!lexists(jobsFile)) {
 		ensureDb(jobsFile);
 		chownContainerUser(jobsFile);
 	}
@@ -449,11 +450,11 @@ async function getSandboxVersions() {
  */
 function writeSandboxUpload(filename, buffer) {
 	const dir = path.join(SANDBOX_HOST_HOME, STATE_DIR, 'files');
-	const isNew = !fs.existsSync(dir);
-	fs.mkdirSync(dir, { recursive: true });
-	if (isNew) chownContainerUser(dir);
+	ensureSandboxDir(path.dirname(dir));
+	ensureSandboxDir(dir);
 	const dest = path.join(dir, filename);
-	fs.writeFileSync(dest, buffer);
+	const { O_WRONLY, O_CREAT, O_TRUNC, O_NOFOLLOW } = fs.constants;
+	fs.writeFileSync(dest, buffer, { flag: O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW });
 	chownContainerUser(dest);
 }
 
