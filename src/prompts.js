@@ -189,16 +189,30 @@ const DEFAULT_AGENTS_MD = `# Claudiscord sandbox instructions
 Customize this file to tailor the agent's behavior to your needs.
 `;
 
+const SOUL_MAX_BYTES = 8192;
+
 // Optional persona shared by the agent and the voice call: <mode home>/SOUL.md, read on
 // every prompt so edits apply without a restart.
+// The sandbox owns its home and could swap the file for a symlink, FIFO or device that
+// this root process would then read into the prompt: O_NOFOLLOW (ELOOP on a symlink),
+// O_NONBLOCK (no hang on a FIFO open), a regular-file check and a bounded read.
 function readSoul(mode) {
 	const home = mode === 'sandbox' ? SANDBOX_HOST_HOME : ADMIN_USER_HOME;
 	if (!home) return '';
+	let fd;
 	try {
-		return fs.readFileSync(path.join(home, 'SOUL.md'), 'utf8').trim();
+		fd = fs.openSync(path.join(home, 'SOUL.md'),
+			fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+		const stat = fs.fstatSync(fd);
+		if (!stat.isFile()) throw new Error('not a regular file');
+		if (stat.size > SOUL_MAX_BYTES) throw new Error(`larger than ${SOUL_MAX_BYTES} bytes`);
+		const buf = Buffer.alloc(SOUL_MAX_BYTES);
+		return buf.toString('utf8', 0, fs.readSync(fd, buf, 0, SOUL_MAX_BYTES, 0)).trim();
 	} catch (err) {
 		if (err.code !== 'ENOENT') log.warn(`SOUL.md unreadable (${mode}): ${err.message}`);
 		return '';
+	} finally {
+		if (fd !== undefined) fs.closeSync(fd);
 	}
 }
 
