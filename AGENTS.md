@@ -58,6 +58,7 @@ scripts/update-sandbox.sh   apt upgrade inside the container (/upgrade)
 ## Sandbox
 
 - Single container `claudiscord-sandbox` (1 CPU, bridge, user `claude`, `sleep infinity` + `docker exec`), `SANDBOX_HOME` → `/home/claude`. Docker is optional (`DOCKER_AVAILABLE`).
+- Isolation is filesystem and process only: the default bridge network has no egress filtering, so the sandbox reaches the host's services and the LAN. Anything listening there must enforce its own authentication.
 - Agent binaries come from the host, bind-mounted read-only at container creation: Claude's `versions/` dir and Codex's `releases/` dir (directories, so updates are visible; the image wrappers run the highest version). Never mount `CODEX_HOME`: it holds the admin `auth.json`. Sources are layout-checked before mounting, so a package-manager Codex is host-only.
 - Mounts are fixed at creation: a stale one shows up as a `/version` mismatch, fixed by recreating the container.
 - Claudiscord never changes host permissions at runtime; `rebuild-sandbox.sh` opens the Claude versions dir once. The container `claude` UID/GID follow `SANDBOX_HOME` ownership (build arg + `readSandboxIds` for every chown).
