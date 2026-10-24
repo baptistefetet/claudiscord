@@ -14,7 +14,7 @@ Discord message (DM, guild channel, thread, text-in-voice)
 Scheduler (minute ticker) -> executePrompt(channel's agent, job.mode, …, { tier: 'medium' }) -> notify job.channel_id
 ```
 
-- Each channel (DM and public thread included) has its own `mode` (`admin`/`sandbox`), `agent` (`claude`/`codex`) and session, persisted in `ADMIN_USER_HOME/.claudiscord/sessions.json`. A thread snapshots its parent's mode/agent on first contact but starts a fresh session.
+- Each channel (DM and public thread included) has its own `mode` (`admin`/`sandbox`), `agent` (`claude`/`codex`) and session, persisted in `ADMIN_USER_HOME/.claudiscord/sessions.json`. A thread snapshots its parent's mode/agent on first contact but starts a fresh session; a `/fork` thread snapshots its source's mode/agent/`depotPath` and forks its session on the first run (`forkFrom`), so the source is never touched.
 - `sessionId` belongs to the agent (Claude UUID vs Codex thread id): `/new`, a mode switch or an agent switch reset it, and are refused while the channel is busy.
 - Both agents are optional, at least one required (`CLAUDE_AVAILABLE`/`CODEX_AVAILABLE`, probed once at boot). Sandbox availability is a live container probe.
 
@@ -78,7 +78,7 @@ scripts/update-sandbox.sh   apt upgrade inside the container (/upgrade)
 
 ## Slash commands
 
-`COMMANDS` in `commands.js` is the single source for text and native slash commands; `runCommand()` holds the shared gating. All Discord interaction plumbing stays in `index.js` (`registerSlashCommands` on ready, global scope). Requires the `applications.commands` OAuth scope.
+`COMMANDS` in `commands.js` is the single source for text and native slash commands; `runCommand()` holds the shared gating. Options (required strings) exist on the native side only: the text path matches the whole content and passes none. All Discord interaction plumbing stays in `index.js` (`registerSlashCommands` on ready, global scope). Requires the `applications.commands` OAuth scope.
 
 ## Voice
 
@@ -91,4 +91,4 @@ scripts/update-sandbox.sh   apt upgrade inside the container (/upgrade)
 
 - Uploads go to `<home>/.claudiscord/files/` per mode (chowned in the sandbox). Upload-only messages don't spawn the agent; with text, the saved paths prefix the prompt.
 - Progress relay: each agent maps stream lines to `{ icon, summary, detail }`, `discord.js` renders one edited message. Updates are fire-and-forget and must never disturb the run. Jobs pass no `onProgress`; voice relays it to the chat (no typing indicator) and as silent context to the call.
-- `sessions.json` entries: `mode, agent, sessionId, context, lastName, depotPath, diffGistId, autojoin`. `context` = last assistant event's input tokens (Codex: none). `depotPath` is cleared by a mode switch. Agent-less legacy entries load as Claude. Startup purge only removes channels on Discord error 10003.
+- `sessions.json` entries: `mode, agent, sessionId, forkFrom, context, lastName, depotPath, diffGistId, autojoin`. `context` = last assistant event's input tokens (Codex: none). `depotPath` is cleared by a mode switch. Agent-less legacy entries load as Claude. Startup purge only removes channels on Discord error 10003.

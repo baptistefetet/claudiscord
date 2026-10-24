@@ -8,10 +8,10 @@ reasoning belongs in `AGENTS.md` or the code.
 Ask a quick side question without polluting the channel session; the answer
 appears as a Discord **reply** to the `/btw` message to mark it as an aside.
 
-- Read the channel's `sessionId`, fork it (`claude -p --resume <id>
-  --fork-session`, `codex exec fork <id>`), and NEVER persist the returned
-  session id → new `ephemeral: true` option in `executePrompt` that skips
-  `sessions.setSessionId` (`executor.js`).
+- Fork the channel's `sessionId` with the CLI `fork` flag `/fork` uses
+  (`executor.js` sets it only from `forkFrom` today), and NEVER persist the
+  returned session id → new `ephemeral: true` option in `executePrompt` that
+  skips `sessions.setSessionId`.
 - No active session → plain fresh one-shot, still unpersisted.
 - Queue: dedicated key (`${channelId}#btw`) so it does not wait behind a
   long-running prompt. Accepted trade-off: the fork sees the last *persisted*
@@ -19,27 +19,10 @@ appears as a Discord **reply** to the `/btw` message to mark it as an aside.
 - Reply UX: `message.reply()` (the text path has the Message object); needs a
   `sendChunked` variant that replies on the first chunk.
 - Command infra: the registry matches the full content exactly
-  (`commands.js::runCommand`), so `/btw` needs prefix matching like `!`. The
-  native slash version needs option support — `registerSlashCommands` registers
-  no options and the interaction adapter only passes the command name. Can land
-  text-only first.
+  (`commands.js::runCommand`), so the text form needs prefix matching like `!`;
+  the native one just declares a `question` option.
 
-## 2. Threads forking the parent session
-
-Today `ensureFromParent` snapshots mode/agent but starts fresh
-(`sessionId: null`) + starter-message injection (`index.js`).
-
-- When the thread has an anchor message AND the parent holds an active
-  session: store `forkFrom: <parentSessionId>` in the thread's sessions entry;
-  the first execution forks it (same commands as `/btw`), then persists the NEW
-  id to the thread. Parent untouched.
-- Default-fork for anchored threads (Discord semantics: "develop this point");
-  standalone threads stay fresh. `/new` reverts a thread to fresh.
-- Starter-message injection becomes redundant in the forked case (the anchor is
-  already in the parent transcript); keep it for the fresh case.
-- Same mechanics as `/btw` — small once `/btw` has landed.
-
-## 3. Webhook — trigger prompts from outside Discord
+## 2. Webhook — trigger prompts from outside Discord
 
 Minimal HTTP server in the same process (`node:http`, no framework):
 `POST /prompt` with `{ channelId, prompt }`, Bearer token from `.env`
@@ -55,7 +38,7 @@ Minimal HTTP server in the same process (`node:http`, no framework):
   infra on this host). Optional channel allowlist in `.env`.
 - Use cases: iOS Shortcuts, CI, home automation.
 
-## 4. Voice assistant follow-ups
+## 3. Voice assistant follow-ups
 
 The GPT-Live front end (`src/live.js`, `src/voice.js`) serializes delegations
 on the channel FIFO. Next steps:
@@ -90,7 +73,7 @@ on the channel FIFO. Next steps:
 
 Effort: medium each. Value: medium.
 
-## 5. Per-channel working directory
+## 4. Per-channel working directory
 
 Every run uses the home directory as cwd — `cwd: ADMIN_USER_HOME` on the host
 (every spawn in `claude.js` and `codex.js`), `-w SANDBOX_USER_HOME` in the
@@ -132,15 +115,13 @@ plain string option taken straight from autocomplete when supplied
 - Suggestions are hints, not a whitelist: with autocomplete the user can submit
   any string, so the path is still validated at dispatch (unlike static
   choices, which Discord enforces).
-- **Shared prerequisite with §1**: `registerSlashCommands` (`index.js`)
-  emits only `name`/`description`/`type`/`dmPermission` — no `options` — and
-  the `InteractionCreate` listener returns unless `isChatInputCommand()`, so
-  autocomplete interactions are dropped. Extending the
-  neutral metadata in `commands.js` with an optional argument spec, and the
-  adapter with an autocomplete branch, unlocks `/btw <question>` and
-  `/cd <path>` at once. That is the real work; the picker is not.
+- **Prerequisite**: commands already declare required string options, but the
+  `InteractionCreate` listener returns unless `isChatInputCommand()`, so
+  autocomplete interactions are dropped. The option spec needs an
+  `autocomplete` flag and the adapter an autocomplete branch. That is the real
+  work; the picker is not.
 
-## 6. Code-fence-aware message splitting
+## 5. Code-fence-aware message splitting
 
 `discord.js::splitMessage` cuts on the last `\n`, then the last space, then
 hard at the limit, with no knowledge of ``` fences. A code block longer than a
@@ -155,7 +136,7 @@ renders as plain text.
 
 Effort: low, contained in one function. Value: medium.
 
-## 7. Reply context
+## 6. Reply context
 
 Replying to a message is the Discord-native way of pointing at something, and
 today nothing reads it: only a thread's starter message is injected
@@ -170,7 +151,7 @@ today nothing reads it: only a thread's starter message is injected
 
 Effort: low. Value: medium.
 
-## 8. Progress display follow-ups
+## 7. Progress display follow-ups
 
 The live line (`discord.js::startProgressReporter`) shows only the latest
 step, edited at most every `PROGRESS_EDIT_MS` (2 s).
@@ -192,15 +173,14 @@ Effort: low-medium. Value: medium.
 ## Priorities
 
 `/btw` and the webhook have the best value/effort ratio among the bigger
-items; thread-fork is small once `/btw` exists. §6 and §7 are contained
-one-function changes; §5 is worth doing before more channels accumulate a
-`depotPath`, and its autocomplete UI shares the slash-command option support
-`/btw` needs — doing that once serves both. Voice: §4 once the
-GPT-Live front end has been used for a while. §8 stays within the progress
+items; `/btw` is small now that `/fork` has the fork mechanics. §5 and §6 are
+contained one-function changes; §4 is worth doing before more channels
+accumulate a `depotPath`. Voice: §3 once the
+GPT-Live front end has been used for a while. §7 stays within the progress
 relay (`claude.js`, `codex.js`, `discord.js`).
 
 ## References
 
-- disclaw — Discord × Claude Code (source of §5–7: working-directory chain,
+- disclaw — Discord × Claude Code (source of §4–6: working-directory chain,
   fence-aware splitting, reply quoting):
   <https://github.com/six-ddc/disclaw>

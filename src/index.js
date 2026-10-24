@@ -10,12 +10,12 @@ const { ensureImage, DOCKER_AVAILABLE } = require('./container');
 const { executePrompt } = require('./executor');
 const { isBusy } = require('./queue');
 const { createClient, login, sendChunked, startTypingIndicator, startProgressReporter, resolveChannelName } = require('./discord');
-const { handleCommand, dispatchSlashCommand, getRegisteredCommands } = require('./commands');
+const { handleCommand, dispatchSlashCommand, getRegisteredCommands, setPromptRunner } = require('./commands');
 const { transcribeVoiceMessage } = require('./stt');
 const { leaveVoice, handleVoiceStateUpdate, scanAutojoinOnBoot } = require('./voice');
 const { saveUploads } = require('./uploads');
 const scheduler = require('./scheduler');
-const { Events, ChannelType, MessageFlags, ApplicationCommandType } = require('discord.js');
+const { Events, ChannelType, MessageFlags, ApplicationCommandType, ApplicationCommandOptionType } = require('discord.js');
 
 process.on('unhandledRejection', err => {
 	log.error('Unhandled rejection:', err);
@@ -114,6 +114,21 @@ client.on(Events.MessageCreate, async message => {
 	// Commands first (they manage their own responses).
 	if (await handleCommand(message)) return;
 
+	await runPrompt(channel, {
+		prompt,
+		shown,
+		userName: message.author.displayName || message.author.username,
+		react: () => message.react(WAIT_EMOJI),
+	});
+});
+
+/**
+ * Run a prompt in a channel and post the answer. The message path, and /fork for
+ * a new thread's first turn, which has no message to react to.
+ */
+async function runPrompt(channel, { prompt, shown, userName, react = null }) {
+	const isDM = channel.type === ChannelType.DM;
+	const isPublicThread = channel.type === ChannelType.PublicThread;
 	const channelId = channel.id;
 	// Threads have no topic of their own, so both name and topic fall back to the
 	// parent. Normally cached (Guilds intent); fetch as a fallback.
@@ -134,7 +149,6 @@ client.on(Events.MessageCreate, async message => {
 	const mode = sessions.getMode(channelId);
 	const agent = sessions.getAgent(channelId);
 	const botName = client.user.displayName || client.user.username;
-	const userName = message.author.displayName || message.author.username;
 	const channelTopic = isPublicThread
 		? (parentChannel?.topic || null)
 		: (!isDM ? (channel.topic || null) : null);
@@ -142,8 +156,9 @@ client.on(Events.MessageCreate, async message => {
 	// On a thread's first turn, prepend the message it was forked from — it lives
 	// in the parent and reaches the thread only as a dropped system message.
 	// claimStarter + starterGate make this race-safe against concurrent first
-	// turns, which all see a null sessionId.
-	if (isPublicThread) {
+	// turns, which all see a null sessionId. A /fork thread skips it: its anchor
+	// only repeats the first prompt, and the forked session has the context.
+	if (isPublicThread && !sessions.getForkFrom(channelId)) {
 		const pendingStarter = starterGate.get(channelId);
 		if (pendingStarter) {
 			await pendingStarter;
@@ -175,12 +190,12 @@ client.on(Events.MessageCreate, async message => {
 	const item = { prompt, shown, reaction: null };
 	const open = batches.get(channelId);
 	if (open && open.agent === agent && open.mode === mode) {
-		item.reaction = message.react(WAIT_EMOJI).catch(() => null);
+		item.reaction = react?.().catch(() => null) || null;
 		open.items.push(item);
 		return; // the batch owner answers
 	}
 	const batch = { agent, mode, waited: isBusy(channelId), items: [item], ready: null };
-	if (batch.waited) item.reaction = message.react(WAIT_EMOJI).catch(() => null);
+	if (batch.waited) item.reaction = react?.().catch(() => null) || null;
 	batches.set(channelId, batch);
 	const previousDelivery = lastDelivery.get(channelId) || Promise.resolve();
 	let delivered;
@@ -272,7 +287,7 @@ client.on(Events.MessageCreate, async message => {
 		if (lastDelivery.get(channelId) === delivery) lastDelivery.delete(channelId);
 		scheduler.reloadJobs(); // the agent may have edited a jobs file, even on error
 	}
-});
+}
 
 // Routes a handler's channel.send() calls onto one non-ephemeral interaction
 // response: first send → reply, later ones → follow-ups. A 2 s timer defers so
@@ -295,27 +310,27 @@ function makeInteractionResponder(interaction) {
 	// Falls back to a plain channel message once the interaction is unusable: the
 	// 15-min token can expire while a command waits in an execution queue. The
 	// fallback only loses the "used /command" grouping — output is never dropped.
+	// Resolves to the posted Message, like channel.send (null if all failed).
 	const send = async (text) => {
-		if (broken) { await realChannel.send(text); return; }
+		if (broken) return realChannel.send(text);
 		try {
 			if (!acked) {
 				acked = true;
 				clearTimeout(deferTimer);
-				await interaction.reply({ content: text });
+				const response = await interaction.reply({ content: text, withResponse: true });
 				firstFilled = true;
-				return;
+				return response.resource?.message || null;
 			}
 			if (deferPromise) await deferPromise;   // let an in-flight defer settle first
-			if (broken) { await realChannel.send(text); return; }
+			if (broken) return realChannel.send(text);
 			if (deferred && !firstFilled) {
 				firstFilled = true;
-				await interaction.editReply({ content: text });
-				return;
+				return await interaction.editReply({ content: text });
 			}
-			await interaction.followUp({ content: text });
+			return await interaction.followUp({ content: text });
 		} catch (err) {
 			broken = true;
-			await realChannel.send(text).catch(() => {});
+			return realChannel.send(text).catch(() => null);
 		}
 	};
 
@@ -363,7 +378,8 @@ client.on(Events.InteractionCreate, async interaction => {
 	});
 
 	try {
-		await dispatchSlashCommand({ channel, channelId: interaction.channelId, name: `/${interaction.commandName}` });
+		const options = Object.fromEntries(interaction.options.data.map(o => [o.name, o.value]));
+		await dispatchSlashCommand({ channel, channelId: interaction.channelId, name: `/${interaction.commandName}`, options });
 	} catch (err) {
 		log.error('InteractionCreate error:', err.message || err);
 		await responder.send(`Command error: ${err.message?.slice(0, 200) || 'unknown'}`).catch(() => {});
@@ -397,6 +413,7 @@ async function registerSlashCommands() {
 		description: c.help.length > 100 ? `${c.help.slice(0, 99)}…` : c.help,
 		type: ApplicationCommandType.ChatInput,
 		dmPermission: true,
+		options: (c.options || []).map(o => ({ ...o, type: ApplicationCommandOptionType.String, required: true })),
 	}));
 	await client.application.commands.set(data);
 	log.info(`Registered ${data.length} global slash command(s)`);
@@ -446,6 +463,13 @@ async function start() {
 	sessions.load();
 	// After load(), which rebuilds entries in place and must not trigger cleanups.
 	sessions.onSessionCleared(scheduler.handleSessionCleared);
+	// Only the authorized user can trigger a /fork, so the prompt is theirs.
+	setPromptRunner(async (channel, prompt) => {
+		// Cache first (the interaction just cached them), so the run queues at once.
+		const user = client.users.cache.get(config.AUTHORIZED_USER_ID)
+			|| await client.users.fetch(config.AUTHORIZED_USER_ID);
+		await runPrompt(channel, { prompt, shown: prompt, userName: user.displayName || user.username });
+	});
 	if (DOCKER_AVAILABLE) {
 		try { ensureImage(); } catch (err) { log.warn('ensureImage failed:', err.message); }
 	} else {

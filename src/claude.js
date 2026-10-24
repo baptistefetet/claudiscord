@@ -161,12 +161,13 @@ function startClaudeLogin(mode) {
  * Extra args (e.g. --dangerously-skip-permissions) can be prepended via extraArgs.
  *
  * Session attach strategy:
- *   - sessionId  -> `--resume <uuid>`.
+ *   - sessionId  -> `--resume <uuid>`, plus `--fork-session` to resume a copy.
  *   - !sessionId -> no flag; Claude allocates an ID and emits it in JSON output.
  */
 function buildClaudeArgs(prompt, options = {}) {
 	const {
 		sessionId = null,
+		fork = false,
 		systemPrompt = null,
 		model = null,
 		extraArgs = [],
@@ -176,6 +177,7 @@ function buildClaudeArgs(prompt, options = {}) {
 
 	if (sessionId) {
 		args.push('--resume', sessionId);
+		if (fork) args.push('--fork-session');
 	}
 	if (systemPrompt) {
 		args.push('--system-prompt', systemPrompt);
@@ -422,6 +424,7 @@ function finalizeClaudeResult(result, label) {
 async function executeClaude(prompt, options = {}, env) {
 	const {
 		sessionId = null,
+		fork = false,
 		systemPrompt = null,
 		model = null,
 		cancelKey = null,
@@ -437,11 +440,11 @@ async function executeClaude(prompt, options = {}, env) {
 	if (env.precheck) env.precheck();
 
 	const args = buildClaudeArgs(prompt, {
-		sessionId, systemPrompt, model,
+		sessionId, fork, systemPrompt, model,
 		extraArgs: env.extraArgs,
 	});
 
-	const attach = sessionId ? `resume ${sessionId}` : 'new session';
+	const attach = sessionId ? `${fork ? 'fork' : 'resume'} ${sessionId}` : 'new session';
 	log.info(`${env.label}: ${attach}, prompt length: ${prompt.length}`);
 
 	let result;

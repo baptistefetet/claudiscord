@@ -82,6 +82,7 @@ New channels start in admin mode with Claude (Codex if Claude is absent). Authen
 | Command | Description |
 |---------|-------------|
 | `/new` | New conversation in this channel |
+| `/fork <name> <message>` | New thread continuing a copy of this channel's conversation |
 | `/stop` | Stop the running prompt (queued ones start next) |
 | `/status` | Mode, agent, conversation size, runtime status |
 | `/usage` | Claude and Codex account usage |

@@ -1,4 +1,5 @@
 const { execFile } = require('child_process');
+const { ChannelType } = require('discord.js');
 const path = require('path');
 const { promisify } = require('util');
 const execFileAsync = promisify(execFile);
@@ -8,6 +9,7 @@ const {
 	SANDBOX_HOST_HOME,
 	CLAUDE_AVAILABLE,
 	CODEX_AVAILABLE,
+	AUTHORIZED_USER_ID,
 } = require('./config');
 const sessions = require('./sessions');
 const {
@@ -434,6 +436,60 @@ async function handleAgent({ channel, channelId, content, mode, agent }) {
 	return true;
 }
 
+// Set by index.js: running a prompt goes through its message pipeline (batching,
+// progress, delivery), which this module cannot depend on.
+let promptRunner = null;
+
+function setPromptRunner(runner) {
+	promptRunner = runner;
+}
+
+/**
+ * /fork <name> <message>: a new thread whose session is a copy of this channel's
+ * (sessions.js::forkChannel); the source session is left untouched. From a
+ * thread, the fork is a sibling in the same parent: Discord does not nest them.
+ */
+async function handleFork({ channel, channelId, options }) {
+	if (!options?.name || !options?.message) {
+		await channel.send('`/fork` needs a thread name and a first message: use the native slash command.');
+		return true;
+	}
+	const isThread = channel.type === ChannelType.PublicThread;
+	const parent = isThread ? channel.parent : channel;
+	if (parent?.type !== ChannelType.GuildText) {
+		await channel.send('`/fork` works in a server text channel or one of its threads.');
+		return true;
+	}
+	if (!sessions.getSession(channelId).sessionId) {
+		await channel.send('No session to fork here — use `/thread` for a fresh one.');
+		return true;
+	}
+	// The fork copies the transcript as it is on disk: never mid-turn. Accepted
+	// gap: the source FIFO is not held, so a job starting there before the
+	// thread's run spawns (a few awaits below) can still overlap the copy.
+	if (await rejectIfChannelBusy(channel, channelId)) return true;
+
+	const quoted = options.message.split('\n').map(line => `> ${line}`).join('\n');
+	const text = `🍴 Fork of ${isThread ? channel : 'this channel'}:\n${quoted.length > 1800 ? `${quoted.slice(0, 1800)}…` : quoted}`;
+	// From a channel the command's own reply anchors the thread.
+	const anchor = await (isThread ? parent.send(text) : channel.send(text));
+	if (!anchor) return true;
+	const thread = await anchor.startThread({ name: options.name });
+	// A thread the user has not joined stays out of their channel list, unlike
+	// one they created themselves.
+	await thread.members.add(AUTHORIZED_USER_ID).catch(err => log.warn(`Fork thread join failed: ${err.message}`));
+	if (!sessions.forkChannel(thread.id, channelId)) {
+		await thread.send('The source session was reset meanwhile — nothing to fork. Send a message here to start fresh.');
+		return true;
+	}
+	// Not awaited: the answer lands in the thread, and a slash command must not
+	// hold its interaction for the length of a run. Started before any further
+	// await so it queues ahead of a message typed in the thread meanwhile.
+	promptRunner(thread, options.message).catch(err => log.error('Fork prompt failed:', err.message || err));
+	if (isThread) await channel.send(`🍴 Forked into ${thread}`);
+	return true;
+}
+
 async function handleRestart({ channel }) {
 	await channel.send('Restarting claudiscord service...');
 	const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
@@ -455,11 +511,22 @@ async function handleRestart({ channel }) {
  *                    mode replies `modeError` instead of falling through.
  *   - helpOnly:      excluded from slash registration and registry dispatch
  *                    (e.g. the `!` shell, matched by prefix before the registry).
- *   - handler:       ({ message, channel, channelId, content, mode, agent })
+ *   - options:       slash-command options, all required strings
+ *                    ({ name, description, maxLength? }); the text path passes none.
+ *   - handler:       ({ message, channel, channelId, content, mode, agent, options })
  *                    => Promise<boolean>.
  */
 const COMMANDS = [
 	{ name: '/new', help: 'Reset session for this channel (new conversation)', handler: handleNew },
+	{
+		name: '/fork',
+		help: 'Fork this channel\'s session into a new thread',
+		options: [
+			{ name: 'name', description: 'Thread name', maxLength: 100 },
+			{ name: 'message', description: 'First message, sent in the forked session' },
+		],
+		handler: handleFork,
+	},
 	{ name: '/stop', help: 'Stop the prompt currently running in this channel', handler: handleStop },
 	{ name: '/status', help: 'Show mode, agent, conversation size and cost, runtime status', handler: handleStatus },
 	{ name: '/usage', help: 'Show Claude and Codex usage for the current mode', handler: handleUsage },
@@ -519,14 +586,14 @@ function isCommand(name) {
  * `channel.send`, so any transport can drive it. False when `name` is not a
  * registered command (text path: fall through to a normal prompt).
  */
-async function runCommand({ channel, channelId, name, mode, agent, message }) {
+async function runCommand({ channel, channelId, name, mode, agent, message, options }) {
 	const cmd = COMMANDS.find(c => !c.helpOnly && c.name === name);
 	if (!cmd) return false;
 	if (cmd.modes && !cmd.modes.includes(mode)) {
 		await channel.send(cmd.modeError);
 		return true;
 	}
-	return cmd.handler({ message, channel, channelId, content: name, mode, agent });
+	return cmd.handler({ message, channel, channelId, content: name, mode, agent, options });
 }
 
 /**
@@ -534,14 +601,14 @@ async function runCommand({ channel, channelId, name, mode, agent, message }) {
  * and calls this with the resolved channel and command name (leading slash
  * included). Same mode gating as handleCommand, but keyed on the name.
  */
-async function dispatchSlashCommand({ channel, channelId, name }) {
+async function dispatchSlashCommand({ channel, channelId, name, options }) {
 	// A native command never passes through handleCommand, so a `/git` question
 	// left open would still be waiting and would swallow the next plain message.
 	if (name !== '/git') cancelPendingDepotPath(channelId);
 	const mode = sessions.getMode(channelId);
 	const agent = sessions.getAgent(channelId);
 
-	const handled = await runCommand({ channel, channelId, name, mode, agent, message: null });
+	const handled = await runCommand({ channel, channelId, name, mode, agent, message: null, options });
 	if (!handled) await channel.send('Unknown command.');
 }
 
@@ -553,7 +620,7 @@ async function dispatchSlashCommand({ channel, channelId, name }) {
 function getRegisteredCommands() {
 	return COMMANDS
 		.filter(c => !c.helpOnly && c.name.startsWith('/'))
-		.map(c => ({ name: c.name, help: c.help }));
+		.map(c => ({ name: c.name, help: c.help, options: c.options }));
 }
 
-module.exports = { handleCommand, dispatchSlashCommand, getRegisteredCommands };
+module.exports = { handleCommand, dispatchSlashCommand, getRegisteredCommands, setPromptRunner };

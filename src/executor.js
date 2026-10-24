@@ -51,6 +51,9 @@ function executePrompt(agent, mode, prompt, options = {}) {
 		const sessionId = channelId
 			? sessions.getSession(channelId).sessionId
 			: (rest.sessionId || null);
+		// A /fork thread's first run resumes the source session as a copy; the
+		// copy's id is persisted below like any new one, which clears forkFrom.
+		const forkFrom = channelId && !sessionId ? sessions.getForkFrom(channelId) : null;
 
 		// Checked here rather than by the caller: the FIFO wait can last as long as
 		// the prompt ahead, and every context transition (/new, mode or agent
@@ -70,7 +73,8 @@ function executePrompt(agent, mode, prompt, options = {}) {
 		// it is exactly what is blocking that channel.
 		const opts = {
 			...rest,
-			sessionId,
+			sessionId: sessionId || forkFrom,
+			fork: Boolean(forkFrom),
 			model,
 			cancelKey: queueKey || null,
 			// Only scheduled runs get a deadline; an interactive one has an

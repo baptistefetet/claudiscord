@@ -16,6 +16,7 @@ const log = require('./logger');
  *       "sessionId": "<uuid>",
  *       "autojoin": true|false,
  *       "depotPath": null | "<git repository root>",
+ *       "forkFrom": null | "<source session id>",
  *       "lastName": "..."
  *     }
  *   }
@@ -25,6 +26,9 @@ const log = require('./logger');
  *
  * sessionId is allocated by the agent and emitted in its JSON output; the
  * executor persists it after the first spawn, including on error.
+ *
+ * forkFrom: set by /fork on a thread with no session yet; its first run forks
+ * that session instead of opening a fresh one, then the thread keeps its own id.
  *
  * autojoin: per-voice-channel policy, see src/voice.js.
  */
@@ -68,6 +72,7 @@ function dropSession(entry, channelId, reason) {
 	const had = Boolean(entry.sessionId);
 	entry.sessionId = null;
 	entry.context = null;
+	entry.forkFrom = null;
 	starterClaimed.delete(channelId);
 	persist();
 	if (had) fireSessionCleared(channelId, reason);
@@ -99,6 +104,7 @@ function load() {
 					context: entry.context || null,
 					depotPath: typeof entry.depotPath === 'string' ? entry.depotPath : null,
 					diffGistId: typeof entry.diffGistId === 'string' ? entry.diffGistId : null,
+					forkFrom: typeof entry.forkFrom === 'string' ? entry.forkFrom : null,
 				});
 			}
 		}
@@ -142,6 +148,33 @@ function ensureFromParent(channelId, parentId) {
 	});
 	persist();
 	log.info(`Thread ${channelId} inherited config from parent ${parentId || '<none>'}`);
+}
+
+/**
+ * Set up a /fork thread from its source channel: same mode, agent and repository,
+ * and the source session to fork on the first run. Returns false when the source
+ * has no session to fork.
+ */
+function forkChannel(channelId, sourceId) {
+	const source = channels.get(sourceId);
+	if (!source?.sessionId) return false;
+	channels.set(channelId, {
+		mode: source.mode === 'sandbox' ? 'sandbox' : 'admin',
+		agent: VALID_AGENTS.includes(source.agent) ? source.agent : CHANNEL_DEFAULT_AGENT,
+		sessionId: null,
+		forkFrom: source.sessionId,
+		autojoin: false,
+		lastName: null,
+		context: source.context || null,
+		depotPath: source.depotPath || null,
+	});
+	persist();
+	log.info(`Thread ${channelId} forks session ${source.sessionId} of ${sourceId}`);
+	return true;
+}
+
+function getForkFrom(channelId) {
+	return channels.get(channelId)?.forkFrom || null;
 }
 
 /**
@@ -220,6 +253,7 @@ function setSessionId(channelId, sessionId) {
 	const entry = ensureChannel(channelId);
 	if (entry.sessionId === sessionId) return;
 	entry.sessionId = sessionId;
+	entry.forkFrom = null;
 	starterClaimed.delete(channelId);
 	persist();
 	log.info(`Channel ${channelId} session set to: ${sessionId}`);
@@ -307,6 +341,8 @@ module.exports = {
 	load,
 	onSessionCleared,
 	ensureFromParent,
+	forkChannel,
+	getForkFrom,
 	claimStarter,
 	getMode,
 	setMode,

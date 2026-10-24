@@ -129,12 +129,13 @@ function startCodexLogin(mode) {
 function buildCodexArgs(options = {}) {
 	const {
 		sessionId = null,
+		fork = false,
 		systemPrompt = null,
 		model = null,
 	} = options;
 
 	// -m and -c both belong to the OPTIONS block, which precedes <SESSION_ID> in
-	// the `exec resume` form. The -c override wins over any config.toml value, so
+	// the `exec resume`/`exec fork` forms. The -c override wins over any config.toml value, so
 	// host and sandbox run the same model and effort.
 	const executionArgs = [
 		'--yolo',
@@ -152,7 +153,7 @@ function buildCodexArgs(options = {}) {
 	}
 
 	if (sessionId) {
-		return ['exec', 'resume', ...executionArgs, sessionId, '-'];
+		return ['exec', fork ? 'fork' : 'resume', ...executionArgs, sessionId, '-'];
 	}
 	return ['exec', ...executionArgs, '-'];
 }
@@ -424,6 +425,7 @@ async function refreshHostCodexLogin() {
 async function executeCodex(prompt, options = {}, env) {
 	const {
 		sessionId = null,
+		fork = false,
 		systemPrompt = null,
 		model = null,
 		cancelKey = null,
@@ -437,13 +439,13 @@ async function executeCodex(prompt, options = {}, env) {
 		throw new Error('executeCodex requires systemPrompt');
 	}
 
-	const attach = sessionId ? `resume ${sessionId}` : 'new session';
+	const attach = sessionId ? `${fork ? 'fork' : 'resume'} ${sessionId}` : 'new session';
 	log.info(`${env.label}: ${attach}, prompt length: ${prompt.length}`);
 
 	let execution;
 	try {
 		execution = await env.spawn(
-			buildCodexArgs({ sessionId, systemPrompt, model }),
+			buildCodexArgs({ sessionId, fork, systemPrompt, model }),
 			{
 				input: prompt, cancelKey, timeoutMs, stopInfo,
 				onLine: onProgress ? line => onProgress(codexProgress(line)) : null,
