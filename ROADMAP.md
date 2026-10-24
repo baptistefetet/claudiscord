@@ -3,26 +3,7 @@
 Backlog only: a shipped item is removed from this file, not marked done — its
 reasoning belongs in `AGENTS.md` or the code.
 
-## 1. `/btw <question>` — side question on a forked context
-
-Ask a quick side question without polluting the channel session; the answer
-appears as a Discord **reply** to the `/btw` message to mark it as an aside.
-
-- Fork the channel's `sessionId` with the CLI `fork` flag `/fork` uses
-  (`executor.js` sets it only from `forkFrom` today), and NEVER persist the
-  returned session id → new `ephemeral: true` option in `executePrompt` that
-  skips `sessions.setSessionId`.
-- No active session → plain fresh one-shot, still unpersisted.
-- Queue: dedicated key (`${channelId}#btw`) so it does not wait behind a
-  long-running prompt. Accepted trade-off: the fork sees the last *persisted*
-  turn, not one still in flight (not yet in the parent JSONL).
-- Reply UX: `message.reply()` (the text path has the Message object); needs a
-  `sendChunked` variant that replies on the first chunk.
-- Command infra: the registry matches the full content exactly
-  (`commands.js::runCommand`), so the text form needs prefix matching like `!`;
-  the native one just declares a `question` option.
-
-## 2. Webhook — trigger prompts from outside Discord
+## 1. Webhook — trigger prompts from outside Discord
 
 Minimal HTTP server in the same process (`node:http`, no framework):
 `POST /prompt` with `{ channelId, prompt }`, Bearer token from `.env`
@@ -38,7 +19,7 @@ Minimal HTTP server in the same process (`node:http`, no framework):
   infra on this host). Optional channel allowlist in `.env`.
 - Use cases: iOS Shortcuts, CI, home automation.
 
-## 3. Voice assistant follow-ups
+## 2. Voice assistant follow-ups
 
 The GPT-Live front end (`src/live.js`, `src/voice.js`) serializes delegations
 on the channel FIFO. Next steps:
@@ -73,7 +54,7 @@ on the channel FIFO. Next steps:
 
 Effort: medium each. Value: medium.
 
-## 4. Per-channel working directory
+## 3. Per-channel working directory
 
 Every run uses the home directory as cwd — `cwd: ADMIN_USER_HOME` on the host
 (every spawn in `claude.js` and `codex.js`), `-w SANDBOX_USER_HOME` in the
@@ -121,7 +102,7 @@ plain string option taken straight from autocomplete when supplied
   `autocomplete` flag and the adapter an autocomplete branch. That is the real
   work; the picker is not.
 
-## 5. Code-fence-aware message splitting
+## 4. Code-fence-aware message splitting
 
 `discord.js::splitMessage` cuts on the last `\n`, then the last space, then
 hard at the limit, with no knowledge of ``` fences. A code block longer than a
@@ -136,7 +117,7 @@ renders as plain text.
 
 Effort: low, contained in one function. Value: medium.
 
-## 6. Reply context
+## 5. Reply context
 
 Replying to a message is the Discord-native way of pointing at something, and
 today nothing reads it: only a thread's starter message is injected
@@ -151,7 +132,7 @@ today nothing reads it: only a thread's starter message is injected
 
 Effort: low. Value: medium.
 
-## 7. Progress display follow-ups
+## 6. Progress display follow-ups
 
 The live line (`discord.js::startProgressReporter`) shows only the latest
 step, edited at most every `PROGRESS_EDIT_MS` (2 s).
@@ -172,15 +153,14 @@ Effort: low-medium. Value: medium.
 
 ## Priorities
 
-`/btw` and the webhook have the best value/effort ratio among the bigger
-items; `/btw` is small now that `/fork` has the fork mechanics. §5 and §6 are
-contained one-function changes; §4 is worth doing before more channels
-accumulate a `depotPath`. Voice: §3 once the
-GPT-Live front end has been used for a while. §7 stays within the progress
+The webhook has the best value/effort ratio among the bigger items. §4 and §5
+are contained one-function changes; §3 is worth doing before more channels
+accumulate a `depotPath`. Voice: §2 once the
+GPT-Live front end has been used for a while. §6 stays within the progress
 relay (`claude.js`, `codex.js`, `discord.js`).
 
 ## References
 
-- disclaw — Discord × Claude Code (source of §4–6: working-directory chain,
+- disclaw — Discord × Claude Code (source of §3–5: working-directory chain,
   fence-aware splitting, reply quoting):
   <https://github.com/six-ddc/disclaw>

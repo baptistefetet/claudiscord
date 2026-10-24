@@ -163,11 +163,13 @@ function startClaudeLogin(mode) {
  * Session attach strategy:
  *   - sessionId  -> `--resume <uuid>`, plus `--fork-session` to resume a copy.
  *   - !sessionId -> no flag; Claude allocates an ID and emits it in JSON output.
+ * `ephemeral` writes no transcript at all (a /btw aside is never resumed).
  */
 function buildClaudeArgs(prompt, options = {}) {
 	const {
 		sessionId = null,
 		fork = false,
+		ephemeral = false,
 		systemPrompt = null,
 		model = null,
 		extraArgs = [],
@@ -179,6 +181,7 @@ function buildClaudeArgs(prompt, options = {}) {
 		args.push('--resume', sessionId);
 		if (fork) args.push('--fork-session');
 	}
+	if (ephemeral) args.push('--no-session-persistence');
 	if (systemPrompt) {
 		args.push('--system-prompt', systemPrompt);
 	}
@@ -425,6 +428,7 @@ async function executeClaude(prompt, options = {}, env) {
 	const {
 		sessionId = null,
 		fork = false,
+		ephemeral = false,
 		systemPrompt = null,
 		model = null,
 		cancelKey = null,
@@ -440,7 +444,7 @@ async function executeClaude(prompt, options = {}, env) {
 	if (env.precheck) env.precheck();
 
 	const args = buildClaudeArgs(prompt, {
-		sessionId, fork, systemPrompt, model,
+		sessionId, fork, ephemeral, systemPrompt, model,
 		extraArgs: env.extraArgs,
 	});
 

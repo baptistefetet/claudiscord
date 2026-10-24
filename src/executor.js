@@ -25,6 +25,9 @@ const { AGENT_MODELS, JOB_TIMEOUT_MS } = require('./config');
  *
  * `prompt` may be a function, called once when the run reaches the head of the
  * queue, so a caller can keep appending to it while it waits.
+ *
+ * `ephemeral` (/btw) runs on a copy of the channel's session, or a fresh one,
+ * that neither the CLI nor the channel keeps: nothing is persisted, even on error.
  */
 function executePrompt(agent, mode, prompt, options = {}) {
 	const {
@@ -32,6 +35,7 @@ function executePrompt(agent, mode, prompt, options = {}) {
 		queueKey = channelId,
 		tier = 'high',
 		requireSession = false,
+		ephemeral = false,
 		stopInfo,
 		onProgress,
 		...rest
@@ -74,7 +78,8 @@ function executePrompt(agent, mode, prompt, options = {}) {
 		const opts = {
 			...rest,
 			sessionId: sessionId || forkFrom,
-			fork: Boolean(forkFrom),
+			fork: Boolean(forkFrom || (ephemeral && sessionId)),
+			ephemeral,
 			model,
 			cancelKey: queueKey || null,
 			// Only scheduled runs get a deadline; an interactive one has an
@@ -112,13 +117,13 @@ function executePrompt(agent, mode, prompt, options = {}) {
 				throw new Error(`Unknown agent: ${agent}`);
 			}
 
-			if (channelId && sessionContextIsCurrent()) {
+			if (channelId && !ephemeral && sessionContextIsCurrent()) {
 				if (result.sessionId) sessions.setSessionId(channelId, result.sessionId);
 				sessions.setContext(channelId, result.context);
 			}
 			return result;
 		} catch (err) {
-			if (channelId && sessionContextIsCurrent()) {
+			if (channelId && !ephemeral && sessionContextIsCurrent()) {
 				if (err.sessionId) sessions.setSessionId(channelId, err.sessionId);
 				// A failed, cancelled or timed-out turn still grew the
 				// conversation; dropping it would undercount it.

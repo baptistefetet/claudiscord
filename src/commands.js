@@ -440,6 +440,14 @@ async function handleAgent({ channel, channelId, content, mode, agent }) {
 // progress, delivery), which this module cannot depend on.
 let promptRunner = null;
 
+// `/btw <question>`: the one text command with an argument, so matched by prefix.
+const BTW_TEXT = /^\/btw(?:\s+([\s\S]*))?$/;
+
+function quoteBlock(text) {
+	const quoted = text.split('\n').map(line => `> ${line}`).join('\n');
+	return quoted.length > 1800 ? `${quoted.slice(0, 1800)}…` : quoted;
+}
+
 function setPromptRunner(runner) {
 	promptRunner = runner;
 }
@@ -469,8 +477,7 @@ async function handleFork({ channel, channelId, options }) {
 	// thread's run spawns (a few awaits below) can still overlap the copy.
 	if (await rejectIfChannelBusy(channel, channelId)) return true;
 
-	const quoted = options.message.split('\n').map(line => `> ${line}`).join('\n');
-	const text = `🍴 Fork of ${isThread ? channel : 'this channel'}:\n${quoted.length > 1800 ? `${quoted.slice(0, 1800)}…` : quoted}`;
+	const text = `🍴 Fork of ${isThread ? channel : 'this channel'}:\n${quoteBlock(options.message)}`;
 	// From a channel the command's own reply anchors the thread.
 	const anchor = await (isThread ? parent.send(text) : channel.send(text));
 	if (!anchor) return true;
@@ -487,6 +494,31 @@ async function handleFork({ channel, channelId, options }) {
 	// await so it queues ahead of a message typed in the thread meanwhile.
 	promptRunner(thread, options.message).catch(err => log.error('Fork prompt failed:', err.message || err));
 	if (isThread) await channel.send(`🍴 Forked into ${thread}`);
+	return true;
+}
+
+/**
+ * /btw <question>: an aside answered in reply, from an ephemeral copy of this
+ * channel's session (executor.js), so the session itself never sees it. Queued
+ * like any message, so it never copies a turn still being written.
+ */
+async function handleBtw({ message, channel, channelId, options }) {
+	const question = options?.question?.trim();
+	if (!question) {
+		await channel.send('Usage: `/btw <question>`');
+		return true;
+	}
+	// Text path: the user's message. Slash path: the command's own reply, so the
+	// answer does not depend on the interaction token outliving the queue wait.
+	// Handed over unawaited, so the run queues before any message typed meanwhile.
+	const anchor = message || channel.send(question.length > 1900 ? `${question.slice(0, 1900)}…` : question).catch(() => null);
+	// In the user turn, not the system prompt, so the prompt cache still matches.
+	const prompt = `[/btw side question — this exchange is discarded after your answer: answer it, take no action]\n\n${question}`;
+	// Never the slash proxy, whose sends go to the interaction: the same cache
+	// lookup as interaction.channel. Not awaited, like /fork.
+	const target = message ? message.channel : getClient().channels.cache.get(channelId);
+	promptRunner(target, prompt, anchor).catch(err => log.error('Btw prompt failed:', err.message || err));
+	await anchor;
 	return true;
 }
 
@@ -526,6 +558,12 @@ const COMMANDS = [
 			{ name: 'message', description: 'First message, sent in the forked session' },
 		],
 		handler: handleFork,
+	},
+	{
+		name: '/btw',
+		help: 'Side question on a copy of this channel\'s session, which never sees it',
+		options: [{ name: 'question', description: 'The side question' }],
+		handler: handleBtw,
 	},
 	{ name: '/stop', help: 'Stop the prompt currently running in this channel', handler: handleStop },
 	{ name: '/status', help: 'Show mode, agent, conversation size and cost, runtime status', handler: handleStatus },
@@ -569,6 +607,8 @@ async function handleCommand(message) {
 		if (!command) return false;
 		return handleShell(channel, mode, command);
 	}
+	const btw = content.match(BTW_TEXT);
+	if (btw) return runCommand({ channel, channelId, name: '/btw', mode, agent, message, options: { question: btw[1] } });
 
 	// Registry dispatch (single source of truth, shared with the slash path via
 	// runCommand). An unknown command → runCommand returns false → the message is
@@ -578,7 +618,7 @@ async function handleCommand(message) {
 
 /** Whether `name` is a dispatchable command, `!shell` included. */
 function isCommand(name) {
-	return name.startsWith('!') || COMMANDS.some(c => !c.helpOnly && c.name === name);
+	return name.startsWith('!') || BTW_TEXT.test(name) || COMMANDS.some(c => !c.helpOnly && c.name === name);
 }
 
 /**

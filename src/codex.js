@@ -130,6 +130,7 @@ function buildCodexArgs(options = {}) {
 	const {
 		sessionId = null,
 		fork = false,
+		ephemeral = false,
 		systemPrompt = null,
 		model = null,
 	} = options;
@@ -145,6 +146,8 @@ function buildCodexArgs(options = {}) {
 		`model_reasoning_effort="${REASONING_EFFORT}"`,
 	];
 	if (model) executionArgs.push('-m', model);
+	// No rollout file: a /btw aside is never resumed.
+	if (ephemeral) executionArgs.push('--ephemeral');
 	if (systemPrompt) {
 		executionArgs.push(
 			'-c',
@@ -426,6 +429,7 @@ async function executeCodex(prompt, options = {}, env) {
 	const {
 		sessionId = null,
 		fork = false,
+		ephemeral = false,
 		systemPrompt = null,
 		model = null,
 		cancelKey = null,
@@ -445,7 +449,7 @@ async function executeCodex(prompt, options = {}, env) {
 	let execution;
 	try {
 		execution = await env.spawn(
-			buildCodexArgs({ sessionId, fork, systemPrompt, model }),
+			buildCodexArgs({ sessionId, fork, ephemeral, systemPrompt, model }),
 			{
 				input: prompt, cancelKey, timeoutMs, stopInfo,
 				onLine: onProgress ? line => onProgress(codexProgress(line)) : null,

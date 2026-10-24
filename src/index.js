@@ -123,10 +123,15 @@ client.on(Events.MessageCreate, async message => {
 });
 
 /**
- * Run a prompt in a channel and post the answer. The message path, and /fork for
- * a new thread's first turn, which has no message to react to.
+ * Run a prompt in a channel and post the answer. The message path, /fork for a
+ * new thread's first turn, which has no message to react to, and /btw.
+ *
+ * `aside` (/btw) is the message the answer replies to, or a promise of it: the
+ * run takes its queue slot before the anchor is posted. It is ephemeral
+ * (executor.js) and a turn of its own: never batched, and it never claims the
+ * thread starter, which belongs to the session's first real turn.
  */
-async function runPrompt(channel, { prompt, shown, userName, react = null }) {
+async function runPrompt(channel, { prompt, shown, userName, react = null, aside = null }) {
 	const isDM = channel.type === ChannelType.DM;
 	const isPublicThread = channel.type === ChannelType.PublicThread;
 	const channelId = channel.id;
@@ -162,7 +167,7 @@ async function runPrompt(channel, { prompt, shown, userName, react = null }) {
 		const pendingStarter = starterGate.get(channelId);
 		if (pendingStarter) {
 			await pendingStarter;
-		} else if (!sessions.getSession(channelId).sessionId && sessions.claimStarter(channelId)) {
+		} else if (!aside && !sessions.getSession(channelId).sessionId && sessions.claimStarter(channelId)) {
 			let releaseStarter;
 			starterGate.set(channelId, new Promise(r => { releaseStarter = r; }));
 			try {
@@ -189,14 +194,19 @@ async function runPrompt(channel, { prompt, shown, userName, react = null }) {
 	// delete them in a DM), so they are echoed right before the merged answer.
 	const item = { prompt, shown, reaction: null };
 	const open = batches.get(channelId);
-	if (open && open.agent === agent && open.mode === mode) {
+	if (aside) {
+		// Closed, so a message typed after the aside queues behind it.
+		if (open) batches.delete(channelId);
+	} else if (open && open.agent === agent && open.mode === mode) {
 		item.reaction = react?.().catch(() => null) || null;
 		open.items.push(item);
 		return; // the batch owner answers
 	}
 	const batch = { agent, mode, waited: isBusy(channelId), items: [item], ready: null };
+	const anchor = aside && Promise.resolve(aside);
+	if (anchor) react = () => anchor.then(m => m?.react(WAIT_EMOJI));
 	if (batch.waited) item.reaction = react?.().catch(() => null) || null;
-	batches.set(channelId, batch);
+	if (!aside) batches.set(channelId, batch);
 	const previousDelivery = lastDelivery.get(channelId) || Promise.resolve();
 	let delivered;
 	const delivery = new Promise(resolve => { delivered = resolve; });
@@ -207,7 +217,8 @@ async function runPrompt(channel, { prompt, shown, userName, react = null }) {
 			reaction?.then(r => r?.users.remove(client.user.id)).catch(() => {});
 		}
 		batch.ready = previousDelivery;
-		if (batch.waited) {
+		// An aside's question is already shown by the message it replies to.
+		if (batch.waited && !aside) {
 			const quoted = batch.items
 				.map(i => i.shown.split('\n').map(line => `> ${line}`).join('\n'))
 				.join('\n\n');
@@ -237,11 +248,19 @@ async function runPrompt(channel, { prompt, shown, userName, react = null }) {
 		tier: 'high',
 	};
 
+	// Unthreaded when the anchor failed or was deleted meanwhile. No ping, like
+	// any other answer.
+	const replyTo = async () => {
+		const message = await anchor;
+		return message
+			? { reply: { messageReference: message, failIfNotExists: false }, allowedMentions: { repliedUser: false } }
+			: undefined;
+	};
 	let stopTyping = null;
 	const progress = startProgressReporter(channel);
 	try {
 		stopTyping = startTypingIndicator(channel);
-		const result = await executePrompt(agent, mode, takeBatch, { ...promptOptions, onProgress: progress.update });
+		const result = await executePrompt(agent, mode, takeBatch, { ...promptOptions, ephemeral: Boolean(aside), onProgress: progress.update });
 		await batch.ready;
 
 		stopTyping();
@@ -253,7 +272,7 @@ async function runPrompt(channel, { prompt, shown, userName, react = null }) {
 
 		const agentLabel = agent === 'codex' ? 'Codex' : 'Claude Code';
 		const responseText = result.result || `Empty response from ${agentLabel}.`;
-		await sendChunked(channel, responseText);
+		await sendChunked(channel, responseText, await replyTo());
 	} catch (err) {
 		if (stopTyping) stopTyping();
 
@@ -280,7 +299,7 @@ async function runPrompt(channel, { prompt, shown, userName, react = null }) {
 			errMsg = `${agentLabel} error: ${err.message?.slice(0, 300) || 'unknown'}`;
 		}
 		await batch.ready;
-		if (errMsg) await channel.send(errMsg).catch(e => log.error('Failed to send error message:', e));
+		if (errMsg) await channel.send({ ...await replyTo(), content: errMsg }).catch(e => log.error('Failed to send error message:', e));
 	} finally {
 		progress.clear();
 		delivered();
@@ -463,12 +482,12 @@ async function start() {
 	sessions.load();
 	// After load(), which rebuilds entries in place and must not trigger cleanups.
 	sessions.onSessionCleared(scheduler.handleSessionCleared);
-	// Only the authorized user can trigger a /fork, so the prompt is theirs.
-	setPromptRunner(async (channel, prompt) => {
+	// Only the authorized user can trigger a /fork or /btw, so the prompt is theirs.
+	setPromptRunner(async (channel, prompt, aside = null) => {
 		// Cache first (the interaction just cached them), so the run queues at once.
 		const user = client.users.cache.get(config.AUTHORIZED_USER_ID)
 			|| await client.users.fetch(config.AUTHORIZED_USER_ID);
-		await runPrompt(channel, { prompt, shown: prompt, userName: user.displayName || user.username });
+		await runPrompt(channel, { prompt, shown: prompt, userName: user.displayName || user.username, aside });
 	});
 	if (DOCKER_AVAILABLE) {
 		try { ensureImage(); } catch (err) { log.warn('ensureImage failed:', err.message); }

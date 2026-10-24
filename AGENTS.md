@@ -14,7 +14,8 @@ Discord message (DM, guild channel, thread, text-in-voice)
 Scheduler (minute ticker) -> executePrompt(channel's agent, job.mode, …, { tier: 'medium' }) -> notify job.channel_id
 ```
 
-- Each channel (DM and public thread included) has its own `mode` (`admin`/`sandbox`), `agent` (`claude`/`codex`) and session, persisted in `ADMIN_USER_HOME/.claudiscord/sessions.json`. A thread snapshots its parent's mode/agent on first contact but starts a fresh session; a `/fork` thread snapshots its source's mode/agent/`depotPath` and forks its session on the first run (`forkFrom`), so the source is never touched.
+- Each channel (DM and public thread included) has its own `mode` (`admin`/`sandbox`), `agent` (`claude`/`codex`) and session, persisted in `ADMIN_USER_HOME/.claudiscord/sessions.json`. A thread snapshots its parent's mode/agent on first contact but starts a fresh session; a `/fork` thread snapshots its source's mode/agent/`depotPath` and forks its session on the first run (`forkFrom`), so the source is never touched. That first run misses the prompt cache: the system prompt carries the thread name.
+- `/btw` answers from a copy of the channel's session that nothing keeps (`ephemeral`: `--no-session-persistence` / `--ephemeral`, no session write even on error). It queues in the channel FIFO like a message, so it never copies a turn in flight, and keeps the system prompt unchanged so the cache still matches; its marker goes in the user turn.
 - `sessionId` belongs to the agent (Claude UUID vs Codex thread id): `/new`, a mode switch or an agent switch reset it, and are refused while the channel is busy.
 - Both agents are optional, at least one required (`CLAUDE_AVAILABLE`/`CODEX_AVAILABLE`, probed once at boot). Sandbox availability is a live container probe.
 
@@ -49,7 +50,7 @@ scripts/update-sandbox.sh   apt upgrade inside the container (/upgrade)
 ## Queues and stopping
 
 - `queue.js::runQueued(key)`: strict FIFO per channel (jobs included), channels run concurrently. `/login`, `!shell`, `/upgrade` use `runMaintenance`: refused while anything runs, then block new work.
-- Messages sent while a channel is busy merge into one batch (⏳ reaction), closed when it reaches the head of the queue and echoed as a quote before its answer.
+- Messages sent while a channel is busy merge into one batch (⏳ reaction), closed when it reaches the head of the queue and echoed as a quote before its answer. A `/btw` is a turn of its own: it closes the open batch and joins none.
 - `/stop` kills the running process, not the queue. Registry keyed by the queue key (not `channelId`) so an isolated job is stoppable from the channel it blocks.
 - A stopped run rejects `CANCELLED` with its partial output, from which adapters recover the session id; a stopped job skips `recordJobRun`.
 - Host runs are `detached` so the whole process group is killed. Sandbox runs need a second, container-side kill: `docker exec` does not propagate signals, so `killContainerRun` matches the `CLAUDISCORD_RUN=<uuid>` env marker (never the command name: other channels share the container). The service's `ExecStopPost` does the same at stop.
@@ -78,7 +79,7 @@ scripts/update-sandbox.sh   apt upgrade inside the container (/upgrade)
 
 ## Slash commands
 
-`COMMANDS` in `commands.js` is the single source for text and native slash commands; `runCommand()` holds the shared gating. Options (required strings) exist on the native side only: the text path matches the whole content and passes none. All Discord interaction plumbing stays in `index.js` (`registerSlashCommands` on ready, global scope). Requires the `applications.commands` OAuth scope.
+`COMMANDS` in `commands.js` is the single source for text and native slash commands; `runCommand()` holds the shared gating. Options (required strings) exist on the native side only: the text path matches the whole content and passes none, except `/btw <question>`, matched by prefix. All Discord interaction plumbing stays in `index.js` (`registerSlashCommands` on ready, global scope). Requires the `applications.commands` OAuth scope.
 
 ## Voice
 
