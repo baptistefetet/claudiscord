@@ -15,7 +15,7 @@ Scheduler (minute ticker) -> executePrompt(channel's agent, job.mode, …, { tie
 ```
 
 - Each channel (DM and public thread included) has its own `mode` (`admin`/`sandbox`), `agent` (`claude`/`codex`) and session, persisted in `ADMIN_USER_HOME/.claudiscord/sessions.json`. A thread snapshots its parent's mode/agent on first contact but starts a fresh session; a `/fork` thread snapshots its source's mode/agent/`depotPath` and forks its session on the first run (`forkFrom`), so the source is never touched. That first run misses the prompt cache: the system prompt carries the thread name.
-- `/btw` answers from a copy of the channel's session that nothing keeps (`ephemeral`: `--no-session-persistence` / `--ephemeral`, no session write even on error). It queues in the channel FIFO like a message, so it never copies a turn in flight, and keeps the system prompt unchanged so the cache still matches; its marker goes in the user turn.
+- `/btw` answers from a copy of the channel's session that nothing keeps (`ephemeral`: `--no-session-persistence` / `--ephemeral`, no session write even on error). It queues in the channel FIFO like a message, so it never copies a turn in flight and its no-session refusal (`SESSION_REQUIRED`) is checked at its turn, and keeps the system prompt unchanged so the cache still matches; its marker goes in the user turn.
 - `sessionId` belongs to the agent (Claude UUID vs Codex thread id): `/new`, a mode switch or an agent switch reset it, and are refused while the channel is busy.
 - Both agents are optional, at least one required (`CLAUDE_AVAILABLE`/`CODEX_AVAILABLE`, probed once at boot). Sandbox availability is a live container probe.
 

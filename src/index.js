@@ -290,6 +290,8 @@ async function runPrompt(channel, { prompt, shown, userName, react = null, aside
 		} else if (err.code === 'CANCELLED') {
 			// `/stop` answers for itself, once the process is really gone.
 			errMsg = null;
+		} else if (err.code === 'SESSION_REQUIRED') {
+			errMsg = 'No conversation here yet — send it as a normal message.';
 		} else if (err.code === 'CHANNEL_CONTEXT_CHANGED') {
 			errMsg = 'Channel mode or agent changed while your message(s) were waiting. Send again.';
 		} else if (err.message === 'Docker is not installed on this host') {

@@ -26,8 +26,8 @@ const { AGENT_MODELS, JOB_TIMEOUT_MS } = require('./config');
  * `prompt` may be a function, called once when the run reaches the head of the
  * queue, so a caller can keep appending to it while it waits.
  *
- * `ephemeral` (/btw) runs on a copy of the channel's session, or a fresh one,
- * that neither the CLI nor the channel keeps: nothing is persisted, even on error.
+ * `ephemeral` (/btw) runs on a copy of the channel's session that neither the
+ * CLI nor the channel keeps: nothing is persisted, even on error.
  */
 function executePrompt(agent, mode, prompt, options = {}) {
 	const {
@@ -64,7 +64,8 @@ function executePrompt(agent, mode, prompt, options = {}) {
 		// switch) nulls the session id. A check made before enqueuing
 		// would let a reset during that wait through, and the run would silently
 		// open a fresh session — whose id is then written back to the channel.
-		if (requireSession && !sessionId) {
+		// An aside needs a conversation to copy, a pending /fork source included.
+		if ((requireSession && !sessionId) || (ephemeral && !sessionId && !forkFrom)) {
 			throw Object.assign(new Error('SESSION_REQUIRED'), { code: 'SESSION_REQUIRED' });
 		}
 
