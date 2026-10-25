@@ -29,10 +29,11 @@ else
 fi
 
 # The container runs the host's Claude through a read-only bind-mount of the
-# installer's versions directory. Everything under /root is 0700, so the
-# container's non-root user needs that one directory opened up to traverse it.
-# Its parents keep their mode, so no host user gains anything. An install
-# outside /root would make this step unnecessary.
+# installer's versions directory, which Claude creates 0700 whatever the umask:
+# the container's non-root user needs that one directory opened up to traverse
+# it. Its parents keep their mode, so no host user gains anything. Codex needs
+# no such step: its installer creates releases/ under the umask (0755 with the
+# usual 022).
 CLAUDE_BIN=""
 if [ -f "$PROJECT_DIR/.env" ]; then
     CLAUDE_BIN=$(grep -E '^CLAUDE_BIN=' "$PROJECT_DIR/.env" | head -1 | cut -d= -f2-)
