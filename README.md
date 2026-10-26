@@ -9,7 +9,7 @@ A single-user Discord bot that drives [Claude Code](https://docs.anthropic.com/e
 
 - **One conversation per channel**: each channel, DM or thread has its own session, mode and agent. The channel topic is injected as standing context. Prompts are queued per channel, and different channels run in parallel.
 - **Live progress** of the running prompt, which can be stopped without losing the conversation.
-- **Fixed models**: prompts use the agent's high model (`opus` / `sol`), jobs the medium one (`sonnet` / `luna`), reasoning effort `xhigh`.
+- **Fixed models**: prompts use the agent's high model (`opus` / `sol`), jobs the medium one (`sonnet` / `terra`), reasoning effort `xhigh`.
 - **Scheduled jobs, created by asking**: "check the disk every morning and tell me only if it's above 90%" is enough. Jobs report to their channel and can stay silent when there's nothing to say.
 - **Repository diff**: each channel can point at a git repository, whose uncommitted changes are published on demand as a secret gist.
 - **Voice**: voice messages are transcribed (Groq Whisper). In voice channels, a realtime voice assistant (GPT-Live, on your ChatGPT subscription) holds the conversation and hands tasks to the channel's agent.
