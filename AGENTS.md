@@ -36,7 +36,7 @@ src/jobs-store.js  SQLite jobs via the sqlite3 CLI
 src/sessions.js    sessions.json, dropSession observer
 src/commands.js    COMMANDS registry + dispatch (text and slash)
 src/login.js src/shell.js src/diff.js src/gist.js src/skills.js src/uploads.js src/stt.js
-src/voice.js       Voice channel assistant (connection, delegation, autojoin)
+src/voice.js       Voice channel assistant (audio, connection, delegation, autojoin)
 src/live.js        GPT-Live call (WebRTC + sideband)
 scripts/rebuild-sandbox.sh  Build image (UID/GID from SANDBOX_HOME), open Claude versions dir
 scripts/update-sandbox.sh   apt upgrade inside the container (/upgrade)
@@ -84,7 +84,7 @@ scripts/update-sandbox.sh   apt upgrade inside the container (/upgrade)
 ## Voice
 
 - Voice messages (flag `IsVoiceMessage` only, not audio attachments) → Groq Whisper (`stt.js`), echoed as `🎙️ <text>`. Text wins over voice; no `GROQ_API_KEY` → dropped.
-- `/voice` in a voice channel's chat starts a GPT-Live call (`live.js`) on the **host** Codex ChatGPT login. Undocumented wire, expect breakage. The CLI only refreshes that token when it runs, so an expired one is first refreshed through `codex app-server` (`account/read`, no quota). Input must be RTP Opus over WebRTC; output arrives on the sideband only.
+- `/voice` in a voice channel's chat starts a GPT-Live call (`live.js`) on the **host** Codex ChatGPT login. Undocumented wire, expect breakage. The CLI only refreshes that token when it runs, so an expired one is first refreshed through `codex app-server` (`account/read`, no quota). Audio uses RTP Opus both ways; offering `oai-events` enables the remote track. Input silence starts before waiting for the first remote packet. The sideband carries control events; its duplicate PCM audio is ignored. Output passes original 20 ms Opus packets to Discord through a bounded jitter buffer (`voice.js`), with 400 ms initial reserve per burst. Decoded pauses can gain up to 200 ms to refill that reserve; inserted silence is logged separately. A persistent decoder measures activity in sequence order, including during idle and barge-in; 400 ms of decoded silence ends the burst. Missing frames get 20 ms silence. `live.js` supplies binary NTP fractions for werift sender reports and absolute send times. Burst logs report missing playback, packet loss and added pause time.
 - The call has no tools: every delegation goes through `executePrompt` (`high` tier, channel FIFO, `voice: true` prompt flag). GPT-Live delegates mid-sentence, so delegations are batched per call: held until the user's turn ends, merged into until the batch starts (`voice.js::handleDelegation`). GPT-Live also re-sends started requests on its own: until the next user turn, a delegation repeating an earlier one word for word is dropped. A result arriving while a later batch is pending is flagged to the call as possibly outdated; otherwise it comes with the user turns spoken since its batch started, which GPT-Live may have acknowledged without delegating them. A batch also carries the turns spoken since the previous one, as a delegation holds only the user's speech up to the hand-off, often a fragment. The session is the voice channel's `channelId`, shared with its chat. Each join resets it (skipped while a task runs there), so voice-created jobs must be isolated; agent switches are locked while the call is active.
 - `/autojoin` is a per-channel allowlist persisted in `sessions.json`, on purpose: the bot must never join calls with other people by default. A failed autojoin is posted to the channel's chat.
 

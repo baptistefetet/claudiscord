@@ -1,6 +1,8 @@
 const fs = require('fs');
 const { randomUUID, randomInt } = require('crypto');
 const { RTCPeerConnection, RtpPacket, RtpHeader, useOPUS } = require('werift');
+const { performance } = require('perf_hooks');
+const { dirname, join } = require('path');
 const WebSocket = require('ws');
 const config = require('./config');
 const log = require('./logger');
@@ -12,9 +14,8 @@ const { refreshHostCodexLogin } = require('./codex');
  *   - call creation: POST {sdp, session} with the host Codex OAuth token → SDP answer,
  *     call id in `Location`. Input audio MUST go over WebRTC (RTP Opus 48 kHz):
  *     the sideband rejects `session.input_audio.append`.
- *   - sideband WebSocket: every event, including the output audio as
- *     `session.output_audio.delta` (PCM16 24 kHz mono, 200 ms chunks, silence included).
- *     No RTP comes back, so the peer is send-only in practice.
+ *   - `oai-events` must be offered to receive RTP Opus audio (20 ms packets).
+ *     The sideband carries control events; its duplicate PCM audio is discarded.
  */
 
 const CALL_URL = 'https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas';
@@ -33,6 +34,26 @@ const CONNECT_TIMEOUT_MS = 15_000;
 const AUTH_EXPIRY_MARGIN_MS = 60_000;
 
 const LOGIN_HINT = 'send `/codex` then `/login` in an admin channel';
+
+const NTP_EPOCH_SECONDS = 2208988800;
+const FRACTION_SCALE = 0x100000000;
+
+function toNtp(unixMs) {
+	const seconds = Math.floor(unixMs / 1000) + NTP_EPOCH_SECONDS;
+	const fraction = Math.floor((unixMs % 1000) * FRACTION_SCALE / 1000);
+	return BigInt.asUintN(64, (BigInt(seconds) << 32n) | BigInt(fraction));
+}
+
+function fromNtp(ntp) {
+	return (Number(ntp >> 32n) - NTP_EPOCH_SECONDS) * 1000
+		+ Number(ntp & 0xffffffffn) * 1000 / FRACTION_SCALE;
+}
+
+// Werift 0.24.4 encodes decimal digits instead of RFC 3550's 32-bit fraction.
+// Patch the shared CJS module used by sender reports and abs-send-time headers.
+const rtpUtils = require(join(dirname(require.resolve('werift')), 'utils.js'));
+rtpUtils.ntpTime = () => toNtp(performance.timeOrigin + performance.now());
+rtpUtils.ntpTimeToEpochMs = fromNtp;
 
 function hasHostCodexLogin() {
 	return fs.existsSync(config.HOST_CODEX_AUTH_FILE);
@@ -96,7 +117,7 @@ function withTimeout(promise, label) {
  * Open a call. `onEvent(event)` receives every sideband event, `onClose(reason)`
  * fires once when the call ends on its own (never after `close()`).
  */
-async function openLiveCall({ instructions, onEvent, onClose }) {
+async function openLiveCall({ instructions, onAudio, onEvent, onClose }) {
 	const tokens = await readAuth();
 	const headers = {
 		Authorization: `Bearer ${tokens.access_token}`,
@@ -107,9 +128,13 @@ async function openLiveCall({ instructions, onEvent, onClose }) {
 		'x-session-id': randomUUID(),
 	};
 
-	const pc = new RTCPeerConnection({ codecs: { audio: [useOPUS({ payloadType: 111 })], video: [] } });
+	const pc = new RTCPeerConnection({ bundlePolicy: 'max-bundle', codecs: { audio: [useOPUS({ payloadType: 111 })], video: [] } });
 	const transceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
+	pc.createDataChannel('oai-events');
+	let firstAudio;
+	const audioReady = new Promise(resolve => { firstAudio = resolve; });
 	let ws = null;
+	let callId;
 	let clock = null;
 	let closed = false;
 	let established = false;
@@ -125,7 +150,8 @@ async function openLiveCall({ instructions, onEvent, onClose }) {
 		} else {
 			ws?.terminate();
 		}
-		pc.close().catch(() => {});
+		// Stop SCTP while DTLS can still send its shutdown packet.
+		Promise.resolve(pc.sctpTransport?.stop()).catch(() => {}).then(() => pc.close()).catch(() => {});
 	};
 	// Failures during setup surface as the thrown error instead.
 	const fail = (reason) => {
@@ -137,6 +163,14 @@ async function openLiveCall({ instructions, onEvent, onClose }) {
 		close();
 		onClose(reason);
 	};
+	pc.onTrack.subscribe(track => {
+		if (track.kind !== 'audio') return;
+		track.onReceiveRtp.subscribe(packet => {
+			if (closed || packet.header.payloadType !== 111) return;
+			firstAudio();
+			if (established) onAudio(packet);
+		});
+	});
 
 	try {
 		const connected = new Promise((resolve, reject) => {
@@ -165,7 +199,7 @@ async function openLiveCall({ instructions, onEvent, onClose }) {
 			throw new Error(`GPT-Live refused the host Codex login (${res.status}) — ${LOGIN_HINT}`);
 		}
 		if (!res.ok) throw new Error(`GPT-Live call creation failed (${res.status}): ${answer.slice(0, 200)}`);
-		const callId = (res.headers.get('location') || '').split('/').pop();
+		callId = (res.headers.get('location') || '').split('/').pop();
 		if (!/^rtc_[\w-]+$/.test(callId)) throw new Error('GPT-Live answered without a call id');
 		await pc.setRemoteDescription({ type: 'answer', sdp: answer });
 
@@ -180,14 +214,12 @@ async function openLiveCall({ instructions, onEvent, onClose }) {
 			let event;
 			try { event = JSON.parse(String(data)); } catch { return; }
 			if (event.type === 'session.closed') fail(`session closed (${event.reason})`);
-			else onEvent(event);
+			else if (event.type !== 'session.output_audio.delta') onEvent(event);
 		});
 		ws.on('error', err => log.warn('GPT-Live sideband error:', err.message));
 		ws.on('close', code => fail(`sideband closed (${code})`));
 		await withTimeout(connected, 'WebRTC connection');
 		if (lostDuringSetup) throw new Error(`GPT-Live call lost during setup: ${lostDuringSetup}`);
-		established = true;
-		log.info(`GPT-Live call ${callId} connected`);
 	} catch (err) {
 		close();
 		throw err;
@@ -223,6 +255,17 @@ async function openLiveCall({ instructions, onEvent, onClose }) {
 			transceiver.sender.sendRtp(packet).catch(() => {});
 		}
 	}, FRAME_MS / 2);
+
+	try {
+		// The server starts sending RTP only after receiving input, including silence.
+		await withTimeout(audioReady, 'GPT-Live RTP audio');
+		if (lostDuringSetup) throw new Error(`GPT-Live call lost during setup: ${lostDuringSetup}`);
+		established = true;
+		log.info(`GPT-Live call ${callId} connected (RTP audio)`);
+	} catch (err) {
+		close();
+		throw err;
+	}
 
 	return {
 		/** One Discord Opus packet (48 kHz stereo, 20 ms). */

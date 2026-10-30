@@ -35,15 +35,6 @@ on the channel FIFO. Next steps:
 - **Call renewal**: sessions expire ~2 h after start and the assistant leaves.
   Reopen a call instead, seeding it with the recent transcript
   (`initial_items`) and the tasks still running.
-- **Output audio quality**: occasional pauses remain. The sideband delivers
-  most replies in real time but some slower (a 19.8 s reply over 20.5 s);
-  each underrun gets a 200 ms pad (`voice.js::playOutput`, logged per burst).
-  Root-cause alternative: output over RTP.
-  [opencode-gpt-live](https://github.com/malhashemi/opencode-gpt-live), on the
-  same ChatGPT route, adds an `oai-events` data channel to its offer and plays
-  the remote Opus track (20 ms packets, no sideband audio). Untested here: does
-  that data channel make the call send RTP back to `live.js`? Minor:
-  `liveToDiscord` does not interpolate across chunk boundaries.
 
 Effort: medium each. Value: medium.
 

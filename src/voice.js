@@ -1,12 +1,13 @@
 const { ChannelType } = require('discord.js');
-const { PassThrough } = require('stream');
+const { Readable } = require('stream');
+const { performance } = require('perf_hooks');
+const { OpusEncoder } = require('@discordjs/opus');
 const {
 	joinVoiceChannel,
 	entersState,
 	createAudioPlayer,
 	createAudioResource,
 	VoiceConnectionStatus,
-	AudioPlayerStatus,
 	NoSubscriberBehavior,
 	EndBehaviorType,
 	StreamType,
@@ -29,19 +30,6 @@ const { getClient, sendChunked, resolveChannelName, startProgressReporter } = re
  * the call, which says the gist of it.
  */
 
-// Trailing silent output chunks (200 ms each) that end a spoken burst.
-const END_OF_SPEECH_CHUNKS = 2;
-// Discord player tolerance for late output chunks before it gives up (20 ms frames).
-const MAX_MISSED_FRAMES = 50;
-// Jitter buffer: output chunks arrive in real time but up to ~0.5 s late, and the
-// player fills any shortfall with silence frames. Each burst starts with this much
-// silence instead, which delays it as much.
-const PREBUFFER_MS = 200;
-// A chunk reaching a dry stream is late: the player has filled the gap with silence
-// frames and the cushion is gone, so every later late chunk cuts the speech again.
-// This much silence goes ahead of it instead: one short pause that rebuilds the cushion.
-const UNDERRUN_PAD_MS = 200;
-const BYTES_PER_MS = 192; // Discord raw playback: 48 kHz stereo s16le
 // Silent progress context is for "where are you at?" questions, not a live feed.
 const PROGRESS_MIN_INTERVAL_MS = 5000;
 // Past this, the call is told the rest is in the chat instead of receiving it.
@@ -116,73 +104,204 @@ function buildVoiceSystemPrompt(session) {
 
 /* ------------------------------------------------------------------ output */
 
-/**
- * GPT-Live output (s16le 24 kHz mono) → Discord raw playback (s16le 48 kHz
- * stereo): 2× linear interpolation + channel duplication. Exact integer ratio,
- * so no resampler dependency.
- */
-function liveToDiscord(pcm) {
-	const n = Math.floor(pcm.length / 2);
-	const out = Buffer.alloc(n * 8); // 2× samples × 2 channels × 2 bytes
-	for (let i = 0; i < n; i++) {
-		const s = pcm.readInt16LE(i * 2);
-		const mid = i + 1 < n ? (s + pcm.readInt16LE((i + 1) * 2)) >> 1 : s;
-		const o = i * 8;
-		out.writeInt16LE(s, o);
-		out.writeInt16LE(s, o + 2);
-		out.writeInt16LE(mid, o + 4);
-		out.writeInt16LE(mid, o + 6);
-	}
-	return out;
+const SILENCE_FRAME = Buffer.from([0xf8, 0xff, 0xfe]);
+const PREBUFFER_FRAMES = 20;
+const MAX_QUEUED_FRAMES = 50;
+const END_SILENT_FRAMES = 20;
+const MAX_PAUSE_FILL_FRAMES = 10;
+
+function sequenceDistance(sequence, reference) {
+	return (sequence - reference + 0x10000) & 0xffff;
 }
 
-/** True when the chunk holds sound: GPT-Live streams exact digital silence between turns. */
-function hasSignal(pcm) {
-	for (let i = 0; i + 1 < pcm.length; i += 2) {
-		if (Math.abs(pcm.readInt16LE(i)) > 64) return true;
-	}
-	return false;
+// RFC 6716 §3.1–3.2: Discord consumes exactly 20 ms per Opus packet.
+function opusDurationMs(packet) {
+	if (!packet.length) return 0;
+	const config = packet[0] >> 3;
+	const frameMs = config >= 16 ? 2.5 * 2 ** (config & 3)
+		: config >= 12 ? 10 * 2 ** (config & 1) : [10, 20, 40, 60][config & 3];
+	const code = packet[0] & 3;
+	return frameMs * (code === 0 ? 1 : code === 3 ? (packet[1] || 0) & 63 : 2);
 }
 
-/**
- * One audio resource per spoken burst: the call streams silence between turns,
- * which is dropped, so the player goes idle and the speaking ring turns off.
- */
-function playOutput(session, pcm) {
-	const speech = hasSignal(pcm);
+/** Decode in sequence for activity detection only; Discord still receives the original Opus. */
+class OpusActivity {
+	constructor(onPacket, onError) {
+		this.onPacket = onPacket;
+		this.onError = onError;
+		this.pending = new Map();
+	}
+
+	receive(packet) {
+		const { sequenceNumber, ssrc } = packet.header;
+		const distance = sequenceDistance(sequenceNumber, this.nextSequence);
+		if (ssrc !== this.ssrc || (distance < 0x8000 && distance >= MAX_QUEUED_FRAMES)) {
+			this.close();
+			this.ssrc = ssrc;
+			this.nextSequence = sequenceNumber;
+			this.decoder = new OpusEncoder(48000, 1);
+		}
+		if (sequenceDistance(sequenceNumber, this.nextSequence) >= 0x8000 || this.pending.has(sequenceNumber)) return;
+		if (!this.latest || sequenceDistance(sequenceNumber, this.latest.sequence) < 0x8000) {
+			this.latest = { ssrc, sequence: sequenceNumber };
+		}
+		this.pending.set(sequenceNumber, { packet, at: performance.now() });
+		this.flush();
+	}
+
+	flush() {
+		clearTimeout(this.timer);
+		while (this.pending.size) {
+			const entry = this.pending.get(this.nextSequence);
+			if (!entry) {
+				const wait = this.pending.values().next().value.at + 60 - performance.now();
+				if (wait > 0) { this.timer = setTimeout(() => this.flush(), wait); return; }
+			}
+			try {
+				const pcm = this.decoder.decode(entry?.packet.payload || SILENCE_FRAME);
+				if (entry) {
+					entry.packet.silent = true;
+					for (let i = 0; i < pcm.length; i += 2) {
+						if (Math.abs(pcm.readInt16LE(i)) > 64) { entry.packet.silent = false; break; }
+					}
+				}
+			} catch (err) {
+				this.onError(err);
+				if (entry) entry.packet.silent = false;
+			}
+			this.pending.delete(this.nextSequence);
+			this.nextSequence = (this.nextSequence + 1) & 0xffff;
+			if (entry) this.onPacket(entry.packet);
+		}
+	}
+
+	close() {
+		clearTimeout(this.timer);
+		this.pending.clear();
+		this.decoder = null;
+		this.ssrc = null;
+		this.latest = null;
+	}
+}
+
+/** Plays ordered OpusActivity packets; HWM 0 keeps reads paced by Discord's 20 ms clock. */
+class RtpOutput extends Readable {
+	constructor(packet) {
+		super({ objectMode: true, highWaterMark: 0 });
+		this.ssrc = packet.header.ssrc;
+		this.nextSequence = packet.header.sequenceNumber;
+		this.packets = new Map();
+		this.prefill = PREBUFFER_FRAMES;
+		this.silentFrames = 0;
+		this.pauseFill = this.pauseAdded = 0;
+		this.finished = false;
+		this.lastAt = performance.now();
+		this.missing = this.lost = 0;
+	}
+
+	receive(packet) {
+		if (this.finished || this.destroyed) return;
+		const sequence = packet.header.sequenceNumber;
+		if (sequenceDistance(sequence, this.nextSequence) >= MAX_QUEUED_FRAMES) {
+			this.packets.clear();
+			this.nextSequence = sequence;
+			this.prefill = PREBUFFER_FRAMES;
+			this.silentFrames = 0;
+			this.pauseFill = 0;
+		}
+		this.lastAt = performance.now();
+		this.packets.set(sequence, packet);
+	}
+
+	_read() {
+		if (this.finished) return;
+		if (!this.packets.size && performance.now() - this.lastAt >= 1000) return this.finish('timeout');
+		if (this.prefill > 0) {
+			this.prefill--;
+			this.push(SILENCE_FRAME);
+			return;
+		}
+		const packet = this.packets.get(this.nextSequence);
+		if (!packet) {
+			this.missing++;
+			// A later sequence proves a loss. An empty queue may only be late: keep its place.
+			if (this.packets.size) {
+				this.lost++;
+				this.nextSequence = (this.nextSequence + 1) & 0xffff;
+			}
+			this.push(SILENCE_FRAME);
+			return;
+		}
+		// Rebuild the reserve inside a decoded pause, before playing its next source packet.
+		if (packet.silent && this.silentFrames >= 2 && this.pauseFill < MAX_PAUSE_FILL_FRAMES
+			&& this.packets.size < PREBUFFER_FRAMES) {
+			this.pauseFill++;
+			this.pauseAdded++;
+			this.push(SILENCE_FRAME);
+			return;
+		}
+		if (!packet.silent) this.pauseFill = 0;
+		this.packets.delete(this.nextSequence);
+		this.nextSequence = (this.nextSequence + 1) & 0xffff;
+		this.silentFrames = packet.silent ? this.silentFrames + 1 : 0;
+		this.push(packet.payload);
+		if (this.silentFrames >= END_SILENT_FRAMES
+			&& [...this.packets.values()].every(queued => queued.silent)) this.finish('silence');
+	}
+
+	finish(reason) {
+		this.finished = true;
+		this.endReason = reason;
+		this.packets.clear();
+		this.push(null);
+	}
+
+	_destroy(error, callback) {
+		this.packets.clear();
+		callback(error);
+	}
+}
+
+/** Relay original 20 ms Opus packets after activity detection. */
+function playOutput(session, packet) {
+	const { sequenceNumber, ssrc } = packet.header;
+	if (opusDurationMs(packet.payload) !== 20) {
+		log.error('voice: unsupported RTP Opus packet duration');
+		leaveVoice();
+		return;
+	}
+	const previous = session.outputRtp;
+	const newer = !previous || previous.ssrc !== ssrc
+		|| (sequenceDistance(sequenceNumber, previous.sequence) > 0 && sequenceDistance(sequenceNumber, previous.sequence) < 0x8000);
+	if (session.output && session.output.stream.ssrc !== ssrc) stopOutput(session, 'source-change');
+	if (session.output?.stream.finished) session.output = null;
+	if (!session.output && !newer) return;
+	if (newer) session.outputRtp = { ssrc, sequence: sequenceNumber };
 	if (!session.output) {
-		if (!speech) return;
-		const stream = new PassThrough();
-		// The resource carries its burst, so the Idle handler can report on it.
-		const output = { stream, silentChunks: 0, writtenMs: 0, underruns: 0, receivedMs: 0, firstAt: Date.now(), lastAt: 0 };
-		output.resource = createAudioResource(stream, { inputType: StreamType.Raw, metadata: output });
-		writeOutput(output, Buffer.alloc(PREBUFFER_MS * BYTES_PER_MS));
+		if (packet.silent) return;
+		const stream = new RtpOutput(packet);
+		const output = { stream };
+		output.resource = createAudioResource(stream, { inputType: StreamType.Opus, metadata: output });
 		session.output = output;
 		session.player.play(output.resource);
 	}
-	const output = session.output;
-	// playbackDuration only counts real frames, not the player's fill-in silence.
-	if (output.writtenMs <= output.resource.playbackDuration) {
-		output.underruns++;
-		writeOutput(output, Buffer.alloc(UNDERRUN_PAD_MS * BYTES_PER_MS));
-	}
-	output.receivedMs += pcm.length / 48; // 24 kHz mono s16le
-	output.lastAt = Date.now();
-	writeOutput(output, liveToDiscord(pcm));
-	output.silentChunks = speech ? 0 : output.silentChunks + 1;
-	if (output.silentChunks >= END_OF_SPEECH_CHUNKS) {
-		output.stream.end(); // plays out what is buffered, then the player goes idle
-		session.output = null;
-	}
+	session.output.stream.receive(packet);
 }
 
-function writeOutput(output, pcm) {
-	output.stream.write(pcm);
-	output.writtenMs += pcm.length / BYTES_PER_MS;
+function reportOutput(oldState, newState) {
+	const output = oldState.resource?.metadata;
+	if (!output) return;
+	const stream = output.stream;
+	const reason = newState.resource ? 'replaced' : output.endReason || stream.endReason || 'idle';
+	log.info(`voice output RTP: end=${reason}; missing=${stream.missing * 20} ms; lost=${stream.lost}; pause_added=${stream.pauseAdded * 20} ms`);
 }
 
 /** Barge-in: drop the whole playback path, including a burst still playing out. */
-function stopOutput(session) {
+function stopOutput(session, reason = 'barge-in') {
+	// Pending packets still need decoding, but must not restart interrupted playback.
+	if (session.outputActivity.latest) session.outputRtp = session.outputActivity.latest;
+	const output = session.player?.state.resource?.metadata;
+	if (output) output.endReason = reason;
 	session.output?.stream.destroy();
 	session.output = null;
 	session.player?.stop(true);
@@ -382,9 +501,6 @@ function handleLiveEvent(session, call, event) {
 	// restart it is `session.call` until the new one opens.
 	if (active !== session || session.call !== call || !call.isOpen()) return;
 	switch (event.type) {
-		case 'session.output_audio.delta':
-			playOutput(session, Buffer.from(event.delta, 'base64'));
-			break;
 		case 'turn.done': {
 			const text = event.turn?.transcript?.trim();
 			log.info(`voice ${event.turn?.role}: ${text}`);
@@ -425,6 +541,9 @@ async function openCall(session) {
 			userName: session.userName,
 			mode: sessions.getMode(session.channelId),
 		}),
+		onAudio: packet => {
+			if (active === session && session.call === call && call?.isOpen()) session.outputActivity.receive(packet);
+		},
 		onEvent: event => call && handleLiveEvent(session, call, event),
 		onClose: (reason) => {
 			if (active !== session || session.call !== call) return;
@@ -452,7 +571,9 @@ async function restartVoiceCall(channelId) {
 	session.transcript = []; // belongs to the conversation being reset
 	session.delegated.clear();
 	session.call.close();
-	stopOutput(session);
+	session.outputActivity.close();
+	stopOutput(session, 'reset');
+	session.outputRtp = null;
 	try {
 		const call = await openCall(session);
 		if (isCurrent()) session.call = call;
@@ -511,6 +632,7 @@ async function connectAndStart(channel) {
 		callGeneration: 0,
 		player: null,
 		output: null,
+		outputRtp: null,
 		input: null,
 		// Delegations not started yet (see handleDelegation), counted in `pending`.
 		batch: null,
@@ -526,6 +648,10 @@ async function connectAndStart(channel) {
 		botName: client.user.displayName || client.user.username,
 		userName: 'user',
 	};
+	session.outputActivity = new OpusActivity(
+		packet => { if (active === session) playOutput(session, packet); },
+		err => log.warn('voice activity decode failed:', err.message),
+	);
 
 	// Independent setups of ~1 s each: run in parallel, the user can only speak once both are up.
 	const ready = entersState(connection, VoiceConnectionStatus.Ready, 15_000).catch((err) => {
@@ -555,18 +681,14 @@ async function connectAndStart(channel) {
 	}
 
 	session.player = createAudioPlayer({
-		behaviors: { noSubscriber: NoSubscriberBehavior.Play, maxMissedFrames: MAX_MISSED_FRAMES },
+		behaviors: { noSubscriber: NoSubscriberBehavior.Play, maxMissedFrames: 50 },
 	});
 	session.player.on('error', err => log.error('voice player error:', err.message));
-	// A burst that played out, was cut by a barge-in, or was dropped for missing too many frames.
-	session.player.on(AudioPlayerStatus.Idle, (oldState) => {
-		const output = oldState.resource?.metadata;
-		if (!output) return;
-		if (session.output === output) session.output = null;
-		// Real-time delivery takes the audio's duration minus its last chunk (200 ms).
-		if (output.underruns) {
-			log.info(`voice output: ${output.underruns} underrun(s); received ${(output.receivedMs / 1000).toFixed(1)} s of audio over ${((output.lastAt - output.firstAt) / 1000).toFixed(1)} s`);
-		}
+	// Resource replacement does not pass through Idle.
+	session.player.on('stateChange', (oldState, newState) => {
+		if (oldState.resource === newState.resource) return;
+		if (session.output?.resource === oldState.resource) session.output = null;
+		reportOutput(oldState, newState);
 	});
 	connection.subscribe(session.player);
 
@@ -615,9 +737,9 @@ function leaveVoice({ suppressAutojoin = false } = {}) {
 	clearTimeout(session.idleTimer);
 	if (session.batch) dispatchBatch(session, session.batch);
 	session.call.close();
+	session.outputActivity.close();
 	session.input?.destroy();
-	session.output?.stream.destroy();
-	try { session.player.stop(true); } catch (_) {}
+	try { stopOutput(session, 'leave'); } catch (_) {}
 	try { session.connection.destroy(); } catch (_) {}
 	log.info(`voice: left channel ${session.channelId}`);
 	return true;
