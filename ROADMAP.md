@@ -35,21 +35,15 @@ on the channel FIFO. Next steps:
 - **Call renewal**: sessions expire ~2 h after start and the assistant leaves.
   Reopen a call instead, seeding it with the recent transcript
   (`initial_items`) and the tasks still running.
-- **Output audio quality**: speech sounds choppy. Measured on a live call: the
-  player inserts single 20 ms silence frames mid-sentence (~1 per 2 s of
-  speech) because the next output chunk is late — the sideband goes silent for
-  up to ~450 ms every 10–15 s, with no packet loss on the path, while the
-  Pi → Discord send cadence stays regular (≤ 34 ms). Each underrun only adds
-  20 ms of slack, hence repeated micro-cuts. Fix: when a chunk reaches a dry
-  stream (`bytes written / 192 − resource.playbackDuration` ≈ 0), write ~200 ms
-  of silence before it — rare short pauses instead of micro-cuts, without
-  raising `PREBUFFER_MS` (200 ms, paid at the start of every reply). Log
-  underruns per burst to confirm. Minor: `liveToDiscord` does not interpolate
-  across chunk boundaries. Root-cause alternative: output over RTP.
+- **Output audio quality**: occasional pauses remain. The sideband delivers
+  most replies in real time but some slower (a 19.8 s reply over 20.5 s);
+  each underrun gets a 200 ms pad (`voice.js::playOutput`, logged per burst).
+  Root-cause alternative: output over RTP.
   [opencode-gpt-live](https://github.com/malhashemi/opencode-gpt-live), on the
   same ChatGPT route, adds an `oai-events` data channel to its offer and plays
   the remote Opus track (20 ms packets, no sideband audio). Untested here: does
-  that data channel make the call send RTP back to `live.js`?
+  that data channel make the call send RTP back to `live.js`? Minor:
+  `liveToDiscord` does not interpolate across chunk boundaries.
 
 Effort: medium each. Value: medium.
 

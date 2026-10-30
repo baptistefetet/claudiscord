@@ -37,6 +37,11 @@ const MAX_MISSED_FRAMES = 50;
 // player fills any shortfall with silence frames. Each burst starts with this much
 // silence instead, which delays it as much.
 const PREBUFFER_MS = 200;
+// A chunk reaching a dry stream is late: the player has filled the gap with silence
+// frames and the cushion is gone, so every later late chunk cuts the speech again.
+// This much silence goes ahead of it instead: one short pause that rebuilds the cushion.
+const UNDERRUN_PAD_MS = 200;
+const BYTES_PER_MS = 192; // Discord raw playback: 48 kHz stereo s16le
 // Silent progress context is for "where are you at?" questions, not a live feed.
 const PROGRESS_MIN_INTERVAL_MS = 5000;
 // Past this, the call is told the rest is in the chat instead of receiving it.
@@ -148,18 +153,32 @@ function playOutput(session, pcm) {
 	if (!session.output) {
 		if (!speech) return;
 		const stream = new PassThrough();
-		stream.write(Buffer.alloc(PREBUFFER_MS * 192)); // 48 kHz stereo s16le: 192 bytes/ms
-		const resource = createAudioResource(stream, { inputType: StreamType.Raw });
-		session.output = { stream, resource, silentChunks: 0 };
-		session.player.play(resource);
+		// The resource carries its burst, so the Idle handler can report on it.
+		const output = { stream, silentChunks: 0, writtenMs: 0, underruns: 0, receivedMs: 0, firstAt: Date.now(), lastAt: 0 };
+		output.resource = createAudioResource(stream, { inputType: StreamType.Raw, metadata: output });
+		writeOutput(output, Buffer.alloc(PREBUFFER_MS * BYTES_PER_MS));
+		session.output = output;
+		session.player.play(output.resource);
 	}
 	const output = session.output;
-	output.stream.write(liveToDiscord(pcm));
+	// playbackDuration only counts real frames, not the player's fill-in silence.
+	if (output.writtenMs <= output.resource.playbackDuration) {
+		output.underruns++;
+		writeOutput(output, Buffer.alloc(UNDERRUN_PAD_MS * BYTES_PER_MS));
+	}
+	output.receivedMs += pcm.length / 48; // 24 kHz mono s16le
+	output.lastAt = Date.now();
+	writeOutput(output, liveToDiscord(pcm));
 	output.silentChunks = speech ? 0 : output.silentChunks + 1;
 	if (output.silentChunks >= END_OF_SPEECH_CHUNKS) {
 		output.stream.end(); // plays out what is buffered, then the player goes idle
 		session.output = null;
 	}
+}
+
+function writeOutput(output, pcm) {
+	output.stream.write(pcm);
+	output.writtenMs += pcm.length / BYTES_PER_MS;
 }
 
 /** Barge-in: drop the whole playback path, including a burst still playing out. */
@@ -539,9 +558,15 @@ async function connectAndStart(channel) {
 		behaviors: { noSubscriber: NoSubscriberBehavior.Play, maxMissedFrames: MAX_MISSED_FRAMES },
 	});
 	session.player.on('error', err => log.error('voice player error:', err.message));
-	// A burst that played out, or was dropped for missing too many frames.
+	// A burst that played out, was cut by a barge-in, or was dropped for missing too many frames.
 	session.player.on(AudioPlayerStatus.Idle, (oldState) => {
-		if (session.output?.resource === oldState.resource) session.output = null;
+		const output = oldState.resource?.metadata;
+		if (!output) return;
+		if (session.output === output) session.output = null;
+		// Real-time delivery takes the audio's duration minus its last chunk (200 ms).
+		if (output.underruns) {
+			log.info(`voice output: ${output.underruns} underrun(s); received ${(output.receivedMs / 1000).toFixed(1)} s of audio over ${((output.lastAt - output.firstAt) / 1000).toFixed(1)} s`);
+		}
 	});
 	connection.subscribe(session.player);
 
