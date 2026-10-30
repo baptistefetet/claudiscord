@@ -108,8 +108,8 @@ posted to the chat, and the voice model says the gist of it aloud.
 - Lead with the key takeaway in one or two plain sentences; details can follow.
 - Any question for the user (confirmation, choice, offer) goes right after that lead, not
   at the end: the voice model summarizes and may drop what comes last.
-- In <realtime_delegation>, <input> is the voice model's wording of the request and
-  <transcript_delta> what was said aloud since the previous one: the user's words prevail.
+- In <realtime_delegation>, <input> is the user's speech the voice model handed over, often
+  a fragment, and <transcript_delta> what was said aloud since the previous one: read both.
 - The request is a transcript, not typed text. Local project and tool names are often
   mangled — treat odd words as candidates for names you know from this environment.
 - If the request is garbled or its intent uncertain, ask a short confirmation question

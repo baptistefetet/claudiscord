@@ -20,7 +20,6 @@ const { refreshHostCodexLogin } = require('./codex');
 const CALL_URL = 'https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas';
 const SIDEBAND_URL = 'wss://api.openai.com/v1/live/';
 const MODEL = 'gpt-live-1-codex';
-const VOICE = 'cove';
 const FRAME_MS = 20;
 const FRAME_SAMPLES = 960; // 20 ms at 48 kHz
 // Discord's own 20 ms Opus silence packet — sent on every tick the user is silent.
@@ -157,7 +156,7 @@ async function openLiveCall({ instructions, onEvent, onClose }) {
 			headers: { ...headers, 'Content-Type': 'application/json' },
 			body: JSON.stringify({
 				sdp: pc.localDescription.sdp,
-				session: { model: MODEL, instructions, audio: { output: { voice: VOICE } }, delegation: { type: 'client' } },
+				session: { model: MODEL, instructions, audio: { output: { voice: config.GPT_LIVE_VOICE } }, delegation: { type: 'client' } },
 			}),
 			signal: AbortSignal.timeout(CONNECT_TIMEOUT_MS),
 		});

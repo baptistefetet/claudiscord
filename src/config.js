@@ -30,6 +30,8 @@ const SANDBOX_HOST_HOME = process.env.SANDBOX_HOME || null;
 const GROQ_API_KEY = process.env.GROQ_API_KEY || null;
 const STT_MODEL = process.env.STT_MODEL || 'whisper-large-v3';
 const STT_LANGUAGE = process.env.STT_LANGUAGE || 'fr';
+// GPT-Live output voice (see live.js).
+const GPT_LIVE_VOICE = process.env.GPT_LIVE_VOICE || 'cove';
 
 // Required by `/diff`, which publishes the patch as a secret gist and refuses
 // to run without it. Needs the `gist` scope.
@@ -145,6 +147,7 @@ module.exports = {
 	CODEX_BIN,
 	SANDBOX_HOST_HOME,
 	GROQ_API_KEY,
+	GPT_LIVE_VOICE,
 	STT_MODEL,
 	STT_LANGUAGE,
 	GITHUB_TOKEN,

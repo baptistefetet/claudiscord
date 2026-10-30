@@ -115,6 +115,7 @@ New channels start in admin mode with Claude (Codex if Claude is absent). Authen
 | `SANDBOX_HOME` | Host dir mounted as `/home/claude`; enables sandbox mode |
 | `GROQ_API_KEY` | Voice message transcription |
 | `STT_MODEL` / `STT_LANGUAGE` | Whisper model / language (default `whisper-large-v3`, `fr`) |
+| `GPT_LIVE_VOICE` | Voice assistant voice (default `cove`) |
 | `GITHUB_TOKEN` | PAT with `gist` scope, required by `/diff` |
 
 ## License

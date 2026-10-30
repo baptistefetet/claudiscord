@@ -27,17 +27,6 @@ on the channel FIFO. Next steps:
 - **Parallel delegations**: run each task on an isolated session (e.g. one
   Discord thread per task) instead of the channel session, so a long task no
   longer blocks the next one. Costs the shared context with the text chat.
-- **Spoken control**: cancellation and redirects by voice (status questions
-  are answered by the call from commentary context). Needs a
-  host-side classification of the delegation (OpenClaw classifies spoken
-  input as `status` / `steer` / `cancel` / `followup`) wired to `stopRun`,
-  instead of queueing it behind the work it targets. Two designs from OpenCode:
-  [opencode-gpt-live](https://github.com/malhashemi/opencode-gpt-live) (same
-  ChatGPT route) delegates to a light agent whose only tools control the work
-  (stop, steer/queue, read progress, `end_call`); OpenCode's native voice
-  ([#58249](https://github.com/anomalyco/opencode/pull/58249)) sets
-  `delegation: { type: "responses" }`, a server-side delegator model calling
-  client-executed tools, untested on the ChatGPT route.
 - **Agent startup latency**: a simple spoken question takes 20–28 s, of which
   only 3–5 s is the model — measured on a sandbox Claude resume: ~14 s until
   the CLI is up, 5–10 s more before the prompt reaches the session. Keeping one

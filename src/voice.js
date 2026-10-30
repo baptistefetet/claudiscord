@@ -337,8 +337,9 @@ function dispatchBatch(session, batch) {
 }
 
 /**
- * The delegation is GPT-Live's rewording; the turns spoken since the previous
- * one ride along so the agent sees the user's own words (OpenClaw's format).
+ * A delegation holds the user's speech up to the hand-off, often a fragment; the
+ * turns spoken since the previous one ride along so the agent sees all of it
+ * (OpenClaw's format).
  */
 function recordTurn(session, role, text) {
 	if (!text || /^\[[^\]]*\]?$/.test(text)) return; // noise turn: "[sniff", "[breath"
