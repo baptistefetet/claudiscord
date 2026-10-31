@@ -16,6 +16,8 @@ const { refreshHostCodexLogin } = require('./codex');
  *     the sideband rejects `session.input_audio.append`.
  *   - `oai-events` must be offered to receive RTP Opus audio (20 ms packets).
  *     The sideband carries control events; its duplicate PCM audio is discarded.
+ *   - `session.instructions` is accepted but ignored, and immutable afterwards: the
+ *     prompt is also seeded as a developer message in `initial_items`, which is followed.
  */
 
 const CALL_URL = 'https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas';
@@ -190,7 +192,13 @@ async function openLiveCall({ instructions, onAudio, onEvent, onClose }) {
 			headers: { ...headers, 'Content-Type': 'application/json' },
 			body: JSON.stringify({
 				sdp: pc.localDescription.sdp,
-				session: { model: MODEL, instructions, audio: { output: { voice: config.GPT_LIVE_VOICE } }, delegation: { type: 'client' } },
+				session: {
+					model: MODEL,
+					instructions,
+					initial_items: [{ type: 'message', role: 'developer', content: [{ type: 'input_text', text: instructions }] }],
+					audio: { output: { voice: config.GPT_LIVE_VOICE } },
+					delegation: { type: 'client' },
+				},
 			}),
 			signal: AbortSignal.timeout(CONNECT_TIMEOUT_MS),
 		});
