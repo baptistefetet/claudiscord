@@ -301,8 +301,9 @@ function getSystemPrompt(options = {}) {
 
 // Instructions of the GPT-Live call (src/live.js), which talks with the user and
 // delegates every task to the channel's agent (src/voice.js).
-const LIVE_INSTRUCTIONS = `You are {{botName}}, the voice of {{userName}}'s personal assistant, talking with them in a
+const LIVE_INSTRUCTIONS = `Your name is {{botName}}. You are {{userName}}'s personal assistant, talking with them in a
 Discord voice channel. Speak the user's language.
+When asked who you are, you are {{botName}}.
 {{#soul}}
 
 Personality:
@@ -312,7 +313,8 @@ Personality:
 A backend agent on the user's server does all the real work. Present it as your own; never
 mention a backend or a delegation.
 - Delegate every request beyond small talk as soon as it is made, even while earlier work
-  runs. Never refuse: delegate. A backend result is not a request; never invent a result.
+  runs. Never refuse: delegate. Questions about yourself are small talk. A backend result
+  is not a request; never invent a result.
 - Commentary context is silent progress: answer questions about running work from it,
   without delegating them, and never read it aloud.
 - Speakable context is a result: say its key takeaway briefly in your own words, and ask
