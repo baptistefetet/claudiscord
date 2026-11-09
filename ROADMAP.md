@@ -24,6 +24,19 @@ Minimal HTTP server in the same process (`node:http`, no framework):
 The GPT-Live front end (`src/live.js`, `src/voice.js`) serializes delegations
 on the channel FIFO. Next steps:
 
+- **Readiness at join**: `live.js::openLiveCall` resolves once the peer is
+  `connected` and the sideband socket is open, never on the sideband's
+  `session.started`, which kimaki waits for (15 s timeout). Likely cause of the
+  dead seconds after "Just talk" (to confirm with timestamps). Announce the call
+  only after `session.started`, then have GPT-Live greet the user (a
+  `speakable` `session.context.append`, as kimaki does): the greeting tells the
+  user when to speak.
+- **`ack_filler`**: kimaki opens calls with
+  `delegation: { type: 'client', ack_filler: true }`. Undocumented; presumably a
+  spoken filler while a delegation runs. Try it.
+- **Delegation policy**: kimaki's GPT-Live instructions use explicit "Delegate
+  when" / "Do not delegate when" lists plus backchannel and interruption
+  policies. Compare with `LIVE_INSTRUCTIONS`.
 - **Parallel delegations**: run each task on an isolated session (e.g. one
   Discord thread per task) instead of the channel session, so a long task no
   longer blocks the next one. Costs the shared context with the text chat.
@@ -35,8 +48,30 @@ on the channel FIFO. Next steps:
 - **Call renewal**: sessions expire ~2 h after start and the assistant leaves.
   Reopen a call instead, seeding it with the recent transcript
   (`initial_items`) and the tasks still running.
+- **Audio glitches**: kimaki's output path is simpler (raw Opus packets into
+  one `AudioResource` per reply, 120 ms prebuffer, no decoding, reply ended
+  after 1 s of trailing silence), but nothing shows it glitches less: only an
+  A/B test would tell.
 
-Effort: medium each. Value: medium.
+Effort: low for readiness, `ack_filler` and policy; medium for the others.
+Value: medium.
+
+### Fast backend (large, later)
+
+kimaki puts a tool loop between GPT-Live and the real work (`voice-agent.ts`):
+a fast model (`gpt-6-luna`, reasoning `low`, `service_tier: priority`) on the
+Codex Responses endpoint, same ChatGPT login. Every transcribed turn is
+appended to its history; its tools are `shell`, `post_message` and `end_call`.
+
+- For claudiscord: tools `delegate` (`executePrompt` on the channel's agent),
+  `post_message`, `end_call`.
+- Solves at once: hang-up by voice (`end_call` sets a flag, the call ends once
+  the goodbye has played), simple-question latency (no agent spawn), and
+  fragmentary or repeated delegations (the backend sees the whole transcript,
+  replacing the batching heuristics of `voice.js::handleDelegation`).
+- Costs: a third model, another undocumented endpoint, subscription quota.
+
+Effort: high. Value: high.
 
 ## 3. Per-channel working directory
 
@@ -135,16 +170,140 @@ step, edited at most every `PROGRESS_EDIT_MS` (2 s).
 
 Effort: low-medium. Value: medium.
 
+## 7. Agent file uploads
+
+Nothing in `src/` posts attachments: screenshots (e.g. from a headless browser)
+reach the user only through an external upload.
+
+- Convention: a `[[attach: /absolute/path]]` line in the final answer; the bot
+  strips it and attaches the files (Discord takes 10 per message). Agent- and
+  mode-agnostic, so it works for prompts, jobs and voice; one sentence in the
+  system prompt.
+- Sandbox: map the container path to `SANDBOX_HOST_HOME`, refuse it unless its
+  realpath stays under that home, open with `O_NOFOLLOW` — the container owns
+  the tree and could plant a symlink to a host file (same threat as
+  `readSoul`).
+- No hardcoded size: Discord's limit depends on the server. Catch error 50045
+  and post a notice instead.
+- End of turn only: mid-run uploads need a CLI talking to the bot, i.e. §1's
+  HTTP server.
+
+Effort: low. Value: high.
+
+## 8. Job pre-check
+
+An optional shell command run before a job's agent, to spend no LLM run on an
+empty check (e.g. "is there a new mail?"). kimaki's `--pre-run`.
+
+- Column `pre_check TEXT` (`user_version` 5), documented in `getSchedulingDoc`.
+- Exit 0: the agent runs, with the command's stdout (bounded) appended to the
+  prompt. Exit 1: occurrence skipped silently. Any other code or a timeout:
+  error notified, so a typo (exit 127) cannot disable a job unnoticed.
+- Runs in the job's environment: host for admin, container for sandbox — never
+  on the host for a sandbox job, whose database the sandbox agent writes.
+- A skip consumes no `remaining` and leaves `last_run` (`skipRecord`): with
+  `remaining = 1` and a check every 5 min, a job says "the mail arrived" once.
+- Runs before the job enters the channel FIFO, with its own short timeout, so
+  it never waits behind a prompt.
+
+Effort: low-medium. Value: high.
+
+## 9. Lexicon
+
+Names and jargon are mistranscribed. `SOUL.md` could carry them, but mixes
+vocabulary with persona.
+
+- `<mode home>/LEXICON.md` beside `SOUL.md`: one per environment, not per
+  project, read on every use through the same guarded read (generalize
+  `readSoul`).
+- Fed to the Groq transcription `prompt` field (`stt.js`) and to the GPT-Live
+  instructions (`getLiveInstructions`), for the channel's mode.
+- Groq caps `prompt` at 224 tokens and documents no truncation: format the file
+  as a comma-separated list of terms, send Groq a version cut on a term
+  boundary, GPT-Live the whole file.
+
+Effort: low. Value: medium.
+
+## 10. Upload-only messages start a prompt
+
+Today a message with attachments and no text saves them and stops (`index.js`).
+
+- Run a prompt anyway, any file type, images included: a short bot-written
+  prompt naming the saved paths, in the same `[Files attached …]` shape as
+  uploads with text.
+- Covers long text Discord turns into a `.txt` attachment.
+- A follow-up instruction sent right after joins the busy-channel batch, like
+  any message.
+
+Effort: low. Value: medium.
+
+## 11. `/diff`: one gist file per changed file
+
+`/diff` writes the whole patch to a single `<channel>.diff` (`diff.js`), so
+files blur together on the gist page.
+
+- One gist file per changed file, prefixed with its position
+  (`01-src_index.js.diff`) on the assumption that the gist page sorts files by
+  name (to verify). GitHub then renders each file under its own header.
+- `gist.upload` already deletes stale files: generalize it from one filename to
+  a files map. `DIFF_MAX_BYTES` still bounds the total.
+- kimaki's `critique --web` does not fit: it needs Bun, uploads to a
+  third-party host (public by link, 7-day expiry without a license) and has no
+  local HTML export.
+
+Effort: low. Value: medium.
+
+## 12. OpenCode agent (large, later)
+
+A third agent beside Claude and Codex, `/opencode`, with no model selection:
+claudiscord never passes `--model`. Per OpenCode's docs a session keeps its
+model, and new sessions take `model` from `opencode.json`, else the newest
+available one. So jobs use the same model: no tiers, no effort override.
+
+- Same process-per-prompt shape as the others:
+  `opencode run --format json --session <id>` (flags from the CLI docs; check
+  `--help` on OpenCode 2). kimaki drives a long-lived `opencode serve` over HTTP
+  instead: richer, but it breaks the one-process-per-prompt model and needs a
+  server per environment.
+- Work: `opencode.js` adapter (exec, session id, progress mapping, version),
+  availability probe, sandbox binary mount and per-environment credentials.
+  `opencode auth login` is interactive: `/login` may stay manual at first.
+  `/usage` does not apply.
+- Not installed on the host yet.
+
+Effort: high. Value: medium.
+
+## 13. Windows host, admin mode only (large, later)
+
+The README states Linux only. Blockers in the code:
+
+- Process-tree kill through process groups (`detached` + `process.kill(-pid)`
+  in `spawn.js`, `shell.js`): `taskkill /T /F /PID` instead.
+- `!shell` runs `bash -c`: PowerShell instead.
+- Jobs: the `sqlite3` CLI (bot and agents), and a scheduling doc written as
+  bash heredocs.
+- `/restart` calls `systemctl`: needs a Windows service wrapper.
+- Default agent paths (`~/.local/bin/…`) and a system prompt that mentions
+  systemd.
+- Voice: the native `@discordjs/opus` build is untested on Windows.
+
+The sandbox stays off (the no-Docker path exists). Testing needs a Windows
+machine or a Windows GitHub Actions runner.
+
+Effort: high. Value: medium.
+
 ## Priorities
 
-The webhook has the best value/effort ratio among the bigger items. §4 and §5
-are contained one-function changes; §3 is worth doing before more channels
-accumulate a `depotPath`. Voice: §2 once the
-GPT-Live front end has been used for a while. §6 stays within the progress
-relay (`claude.js`, `codex.js`, `discord.js`).
+Quick tasks first: §7–§11, the contained §4 and §5, and the cheap half of §2
+(readiness, `ack_filler`, policy). Then the webhook (§1), whose HTTP server
+§7's mid-run uploads would reuse, and §3 before more channels accumulate a
+`depotPath`. §6 stays within the progress relay (`claude.js`, `codex.js`,
+`discord.js`). Large projects for later: §2's fast backend, §12, §13.
 
 ## References
 
 - disclaw — Discord × Claude Code (source of §3–5: working-directory chain,
   fence-aware splitting, reply quoting):
   <https://github.com/six-ddc/disclaw>
+- kimaki — Discord × OpenCode (source of §2's voice findings and §7–§12):
+  <https://kimaki.dev>, <https://github.com/remorses/kimaki>
