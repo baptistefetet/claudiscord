@@ -224,36 +224,7 @@ vocabulary with persona.
 
 Effort: low. Value: medium.
 
-## 10. Upload-only messages start a prompt
-
-Today a message with attachments and no text saves them and stops (`index.js`).
-
-- Run a prompt anyway, any file type, images included: a short bot-written
-  prompt naming the saved paths, in the same `[Files attached …]` shape as
-  uploads with text.
-- Covers long text Discord turns into a `.txt` attachment.
-- A follow-up instruction sent right after joins the busy-channel batch, like
-  any message.
-
-Effort: low. Value: medium.
-
-## 11. `/diff`: one gist file per changed file
-
-`/diff` writes the whole patch to a single `<channel>.diff` (`diff.js`), so
-files blur together on the gist page.
-
-- One gist file per changed file, prefixed with its position
-  (`01-src_index.js.diff`) on the assumption that the gist page sorts files by
-  name (to verify). GitHub then renders each file under its own header.
-- `gist.upload` already deletes stale files: generalize it from one filename to
-  a files map. `DIFF_MAX_BYTES` still bounds the total.
-- kimaki's `critique --web` does not fit: it needs Bun, uploads to a
-  third-party host (public by link, 7-day expiry without a license) and has no
-  local HTML export.
-
-Effort: low. Value: medium.
-
-## 12. OpenCode agent (large, later)
+## 10. OpenCode agent (large, later)
 
 A third agent beside Claude and Codex, `/opencode`, with no model selection:
 claudiscord never passes `--model`. Per OpenCode's docs a session keeps its
@@ -273,7 +244,7 @@ available one. So jobs use the same model: no tiers, no effort override.
 
 Effort: high. Value: medium.
 
-## 13. Windows host, admin mode only (large, later)
+## 11. Windows host, admin mode only (large, later)
 
 The README states Linux only. Blockers in the code:
 
@@ -294,16 +265,16 @@ Effort: high. Value: medium.
 
 ## Priorities
 
-Quick tasks first: §7–§11, the contained §4 and §5, and the cheap half of §2
+Quick tasks first: §7–§9, the contained §4 and §5, and the cheap half of §2
 (readiness, `ack_filler`, policy). Then the webhook (§1), whose HTTP server
 §7's mid-run uploads would reuse, and §3 before more channels accumulate a
 `depotPath`. §6 stays within the progress relay (`claude.js`, `codex.js`,
-`discord.js`). Large projects for later: §2's fast backend, §12, §13.
+`discord.js`). Large projects for later: §2's fast backend, §10, §11.
 
 ## References
 
 - disclaw — Discord × Claude Code (source of §3–5: working-directory chain,
   fence-aware splitting, reply quoting):
   <https://github.com/six-ddc/disclaw>
-- kimaki — Discord × OpenCode (source of §2's voice findings and §7–§12):
+- kimaki — Discord × OpenCode (source of §2's voice findings and §7–§10):
   <https://kimaki.dev>, <https://github.com/remorses/kimaki>

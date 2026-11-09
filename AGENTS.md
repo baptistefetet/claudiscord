@@ -90,6 +90,6 @@ scripts/update-sandbox.sh   apt upgrade inside the container (/upgrade)
 
 ## Uploads, progress, sessions
 
-- Uploads go to `<home>/.claudiscord/files/` per mode (chowned in the sandbox). Upload-only messages don't spawn the agent; with text, the saved paths prefix the prompt.
+- Uploads go to `<home>/.claudiscord/files/` per mode (chowned in the sandbox). The saved paths prefix the prompt; an upload-only message gets a bot-written prompt listing them.
 - Progress relay: each agent maps stream lines to `{ icon, summary, detail }`, `discord.js` renders one edited message. Updates are fire-and-forget and must never disturb the run. Jobs pass no `onProgress`; voice relays it to the chat (no typing indicator) and as silent context to the call.
 - `sessions.json` entries: `mode, agent, sessionId, forkFrom, context, lastName, depotPath, diffGistId, autojoin`. `context` = last assistant event's input tokens (Codex: none). `depotPath` is cleared by a mode switch. Agent-less legacy entries load as Claude. Startup purge only removes channels on Discord error 10003.

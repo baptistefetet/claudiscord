@@ -13,7 +13,7 @@ A single-user Discord bot that drives [Claude Code](https://docs.anthropic.com/e
 - **Scheduled jobs, created by asking**: "check the disk every morning and tell me only if it's above 90%" is enough. Jobs report to their channel and can stay silent when there's nothing to say.
 - **Repository diff**: each channel can point at a git repository, whose uncommitted changes are published on demand as a secret gist.
 - **Voice**: voice messages are transcribed (Groq Whisper). In voice channels, a realtime voice assistant (GPT-Live, on your ChatGPT subscription) holds the conversation and hands tasks to the channel's agent.
-- **Uploads**: files dropped in a channel are saved to disk for the agent to use.
+- **Uploads**: files dropped in a channel are saved to disk and handed to the agent, with or without a message.
 - **Single user**: only `AUTHORIZED_USER_ID` gets answers. Docker is optional; without it only admin mode is available.
 
 > **Linux only** (systemd, GNU coreutils, Linux UID/GID mapping).

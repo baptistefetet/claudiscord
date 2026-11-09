@@ -85,34 +85,35 @@ client.on(Events.MessageCreate, async message => {
 		}
 	}
 	// What the user sees of this message, before any prefix meant for the agent.
-	const shown = prompt;
+	let shown = prompt;
 
-	// Before handleCommand: an upload spawns no agent, so it is saved even when the
-	// text alongside it is a command. A voice message's lone attachment is the audio,
-	// handled by STT above.
+	// Before handleCommand, so an upload is saved even when the text alongside it
+	// is a command. A voice message's lone attachment is the audio, handled by STT
+	// above.
 	if (!isVoice && message.attachments.size > 0) {
 		const uploadMode = sessions.getMode(channel.id);
 		try {
 			const saved = await saveUploads([...message.attachments.values()], uploadMode);
 			const list = saved.map(n => `\`${n}\``).join(', ');
 			await channel.send(`📎 Received ${saved.length} file(s): ${list}`).catch(() => {});
-			if (prompt) {
-				// Paths as the agent sees them, so it reads the file instead of
-				// searching for the name.
-				const dir = uploadMode === 'sandbox' ? SANDBOX_FILES_DIR : ADMIN_FILES_DIR;
-				const paths = saved.map(n => `${dir}/${n}`).join('\n');
-				prompt = `[Files attached to this message:]\n${paths}\n\n[Message:]\n${prompt}`;
-			}
+			// Paths as the agent sees them, so it reads the file instead of
+			// searching for the name.
+			const dir = uploadMode === 'sandbox' ? SANDBOX_FILES_DIR : ADMIN_FILES_DIR;
+			const paths = saved.map(n => `${dir}/${n}`).join('\n');
+			// A file sent alone still reaches the agent, which otherwise would not
+			// know it exists.
+			if (!prompt) shown = `📎 ${saved.join(', ')}`;
+			prompt = `[Files attached to this message:]\n${paths}${prompt ? `\n\n[Message:]\n${prompt}` : ''}`;
 		} catch (err) {
 			log.error('Upload failed:', err.message);
 			await channel.send(`Upload failed: ${err.message?.slice(0, 200) || 'unknown'}`).catch(() => {});
 			return;
 		}
-		if (!prompt) return; // upload-only: the agent is not invoked
 	}
 
-	// Commands first (they manage their own responses).
-	if (await handleCommand(message)) return;
+	// Commands first (they manage their own responses). An empty text is never
+	// one, nor an answer to a pending /login or /git question.
+	if (content && await handleCommand(message)) return;
 
 	await runPrompt(channel, {
 		prompt,
