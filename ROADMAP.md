@@ -17,7 +17,8 @@ Minimal HTTP server in the same process (`node:http`, no framework):
   channel. HTTP answers `202` immediately (a prompt has no bounded duration).
 - Exposure beyond localhost: Apache reverse proxy + TLS + fail2ban (existing
   infra on this host). Optional channel allowlist in `.env`.
-- Use cases: iOS Shortcuts, CI, home automation.
+- Use cases: iOS Shortcuts, CI, home automation. The same server could take
+  mid-run file uploads from agents (today end of turn only).
 
 ## 2. Voice assistant follow-ups
 
@@ -170,27 +171,7 @@ step, edited at most every `PROGRESS_EDIT_MS` (2 s).
 
 Effort: low-medium. Value: medium.
 
-## 7. Agent file uploads
-
-Nothing in `src/` posts attachments: screenshots (e.g. from a headless browser)
-reach the user only through an external upload.
-
-- Convention: a `[[attach: /absolute/path]]` line in the final answer; the bot
-  strips it and attaches the files (Discord takes 10 per message). Agent- and
-  mode-agnostic, so it works for prompts, jobs and voice; one sentence in the
-  system prompt.
-- Sandbox: map the container path to `SANDBOX_HOST_HOME`, refuse it unless its
-  realpath stays under that home, open with `O_NOFOLLOW` — the container owns
-  the tree and could plant a symlink to a host file (same threat as
-  `readSoul`).
-- No hardcoded size: Discord's limit depends on the server. Catch error 50045
-  and post a notice instead.
-- End of turn only: mid-run uploads need a CLI talking to the bot, i.e. §1's
-  HTTP server.
-
-Effort: low. Value: high.
-
-## 8. Job pre-check
+## 7. Job pre-check
 
 An optional shell command run before a job's agent, to spend no LLM run on an
 empty check (e.g. "is there a new mail?"). kimaki's `--pre-run`.
@@ -208,7 +189,7 @@ empty check (e.g. "is there a new mail?"). kimaki's `--pre-run`.
 
 Effort: low-medium. Value: high.
 
-## 9. Lexicon
+## 8. Lexicon
 
 Names and jargon are mistranscribed. `SOUL.md` could carry them, but mixes
 vocabulary with persona.
@@ -224,7 +205,7 @@ vocabulary with persona.
 
 Effort: low. Value: medium.
 
-## 10. OpenCode agent (large, later)
+## 9. OpenCode agent (large, later)
 
 A third agent beside Claude and Codex, `/opencode`, with no model selection:
 claudiscord never passes `--model`. Per OpenCode's docs a session keeps its
@@ -244,7 +225,7 @@ available one. So jobs use the same model: no tiers, no effort override.
 
 Effort: high. Value: medium.
 
-## 11. Windows host, admin mode only (large, later)
+## 10. Windows host, admin mode only (large, later)
 
 The README states Linux only. Blockers in the code:
 
@@ -265,16 +246,16 @@ Effort: high. Value: medium.
 
 ## Priorities
 
-Quick tasks first: §7–§9, the contained §4 and §5, and the cheap half of §2
-(readiness, `ack_filler`, policy). Then the webhook (§1), whose HTTP server
-§7's mid-run uploads would reuse, and §3 before more channels accumulate a
-`depotPath`. §6 stays within the progress relay (`claude.js`, `codex.js`,
-`discord.js`). Large projects for later: §2's fast backend, §10, §11.
+Quick tasks first: §7, §8, the contained §4 and §5, and the cheap half of §2
+(readiness, `ack_filler`, policy). Then the webhook (§1) and §3 before more
+channels accumulate a `depotPath`. §6 stays within the progress relay
+(`claude.js`, `codex.js`, `discord.js`). Large projects for later: §2's fast
+backend, §9, §10.
 
 ## References
 
 - disclaw — Discord × Claude Code (source of §3–5: working-directory chain,
   fence-aware splitting, reply quoting):
   <https://github.com/six-ddc/disclaw>
-- kimaki — Discord × OpenCode (source of §2's voice findings and §7–§10):
+- kimaki — Discord × OpenCode (source of §2's voice findings and §7–§9):
   <https://kimaki.dev>, <https://github.com/remorses/kimaki>

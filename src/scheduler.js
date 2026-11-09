@@ -224,7 +224,7 @@ async function executeJob(job) {
 			stopInfo: { label: `scheduled job '${id}'`, note: 'its schedule is unchanged' },
 			...(job.isolated ? { sessionId: null } : { channelId, requireSession: true }),
 		};
-		const { result: output, sessionId } = await executePrompt(jobAgent, job.mode, jobPrompt, jobOptions);
+		const { result: output, sessionId, files } = await executePrompt(jobAgent, job.mode, jobPrompt, jobOptions);
 		lastSessionId = sessionId || null;
 
 		log.info(`Job '${key}' completed (output: ${output.length} chars)`);
@@ -235,10 +235,10 @@ async function executeJob(job) {
 			log.warn(`Job '${key}': notification skipped (unresolved channelId '${channelId}')`);
 		} else if (suppressesNotification(output)) {
 			log.info(`Job '${key}': NOTIFY_NONE, output dropped (${output.length} chars)`);
-		} else if (!output) {
+		} else if (!output && !files.length) {
 			log.warn(`Job '${key}': completed with empty output, nothing to notify`);
 		} else {
-			await sendToChannel(channelId, `\u{1F4CB} **Job '${id}'**\n${output}`);
+			await sendToChannel(channelId, `\u{1F4CB} **Job '${id}'**\n${output}`, files);
 		}
 	} catch (err) {
 		// Only a non-isolated job can raise these: it passes channelId, which arms

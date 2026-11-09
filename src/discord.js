@@ -65,10 +65,25 @@ function splitMessage(text, maxLength = DISCORD_MAX_MSG_LENGTH) {
  * Discord's per-message limit (1900 leaves a margin below the 2000 hard cap).
  * Centralizes chunking so callers never deal with message-size limits themselves.
  * `options` (e.g. allowedMentions) applies to every chunk.
+ *
+ * `files` (`{ name, data }`, attached by an agent) follow the text, 10 per
+ * message as Discord allows. A rejected batch (over the server's size limit, say)
+ * is reported in its place.
  */
-async function sendChunked(channel, text, options) {
-	for (const chunk of splitMessage(text, 1900)) {
-		await channel.send(options ? { ...options, content: chunk } : chunk);
+async function sendChunked(channel, text, options, files = []) {
+	if (text) {
+		for (const chunk of splitMessage(text, 1900)) {
+			await channel.send(options ? { ...options, content: chunk } : chunk);
+		}
+	}
+	for (let i = 0; i < files.length; i += 10) {
+		const batch = files.slice(i, i + 10);
+		try {
+			await channel.send({ ...options, files: batch.map(f => ({ attachment: f.data, name: f.name })) });
+		} catch (err) {
+			const names = batch.map(f => `\`${f.name}\``).join(', ').slice(0, 1500);
+			await channel.send(`📎 ${names} not sent: ${err.message.slice(0, 200)}`);
+		}
 	}
 }
 
@@ -76,9 +91,9 @@ async function sendChunked(channel, text, options) {
  * Same as sendChunked, but resolves the channel by id first (used where only an
  * id is known, e.g. scheduled-job notifications).
  */
-async function sendToChannel(channelId, message) {
+async function sendToChannel(channelId, message, files) {
 	const channel = await client.channels.fetch(channelId);
-	await sendChunked(channel, message);
+	await sendChunked(channel, message, undefined, files);
 }
 
 /**

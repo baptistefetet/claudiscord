@@ -272,8 +272,8 @@ async function runPrompt(channel, { prompt, shown, userName, react = null, aside
 		progress.clear();
 
 		const agentLabel = agent === 'codex' ? 'Codex' : 'Claude Code';
-		const responseText = result.result || `Empty response from ${agentLabel}.`;
-		await sendChunked(channel, responseText, await replyTo());
+		const responseText = result.result || (result.files.length ? '' : `Empty response from ${agentLabel}.`);
+		await sendChunked(channel, responseText, await replyTo(), result.files);
 	} catch (err) {
 		if (stopTyping) stopTyping();
 

@@ -67,11 +67,11 @@ function getActiveVoiceChannelId() {
 	return active ? active.channelId : null;
 }
 
-async function postToChat(session, text) {
+async function postToChat(session, text, files) {
 	// Re-resolve from cache: the session outlives any interaction-scoped proxy.
 	try {
 		const channel = getClient().channels.cache.get(session.channelId);
-		if (channel) await sendChunked(channel, text);
+		if (channel) await sendChunked(channel, text, undefined, files);
 	} catch (err) {
 		log.warn('voice chat post failed:', err.message);
 	}
@@ -444,12 +444,12 @@ function dispatchBatch(session, batch) {
 		onProgress,
 	})
 		.then(async (result) => {
-			const reply = result.result || 'Empty reply.';
+			const reply = result.result || (result.files.length ? '' : 'Empty reply.');
 			chatProgress?.clear();
 			// Spoken first: the FIFO is already released, so the next run could finish
 			// during the chat post.
-			speakResult(reply);
-			await postToChat(session, reply);
+			speakResult(reply || 'Files sent in the chat.');
+			await postToChat(session, reply, result.files);
 		})
 		.catch(async (err) => {
 			// `/stop` answers in the chat for itself.

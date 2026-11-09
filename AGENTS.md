@@ -35,7 +35,7 @@ src/scheduler.js   Ticker, reloadJobs, executeJob, NOTIFY_NONE, non-isolated job
 src/jobs-store.js  SQLite jobs via the sqlite3 CLI
 src/sessions.js    sessions.json, dropSession observer
 src/commands.js    COMMANDS registry + dispatch (text and slash)
-src/login.js src/shell.js src/diff.js src/gist.js src/skills.js src/uploads.js src/stt.js
+src/login.js src/shell.js src/diff.js src/gist.js src/skills.js src/uploads.js src/attachments.js src/stt.js
 src/voice.js       Voice channel assistant (audio, connection, delegation, autojoin)
 src/live.js        GPT-Live call (WebRTC + sideband)
 scripts/rebuild-sandbox.sh  Build image (UID/GID from SANDBOX_HOME), open Claude versions dir
@@ -91,5 +91,6 @@ scripts/update-sandbox.sh   apt upgrade inside the container (/upgrade)
 ## Uploads, progress, sessions
 
 - Uploads go to `<home>/.claudiscord/files/` per mode (chowned in the sandbox). The saved paths prefix the prompt; an upload-only message gets a bot-written prompt listing them.
+- Outbound files: `[[attach: /absolute/path]]` lines in a final answer are stripped and their files posted after the text (`attachments.js`, called in `executePrompt`, so prompts, jobs and voice all get them). End of turn only. Sandbox files are read through `docker exec` as the container user: a planted symlink resolves inside the container, never to a host file. A file that cannot be read or sent leaves a notice. Discord's size limit varies per server, so it is not hardcoded; `ATTACH_MAX_BYTES` only caps an answer's total as a memory guard.
 - Progress relay: each agent maps stream lines to `{ icon, summary, detail }`, `discord.js` renders one edited message. Updates are fire-and-forget and must never disturb the run. Jobs pass no `onProgress`; voice relays it to the chat (no typing indicator) and as silent context to the call.
 - `sessions.json` entries: `mode, agent, sessionId, forkFrom, context, lastName, depotPath, diffGistId, autojoin`. `context` = last assistant event's input tokens (Codex: none). `depotPath` is cleared by a mode switch. Agent-less legacy entries load as Claude. Startup purge only removes channels on Discord error 10003.

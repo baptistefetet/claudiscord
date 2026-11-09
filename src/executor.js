@@ -5,6 +5,7 @@ const {
 	sandboxCodexEnv,
 } = require('./container');
 const { runQueued } = require('./queue');
+const { takeAttachments } = require('./attachments');
 const sessions = require('./sessions');
 const { AGENT_MODELS, JOB_TIMEOUT_MS } = require('./config');
 
@@ -122,7 +123,9 @@ function executePrompt(agent, mode, prompt, options = {}) {
 				if (result.sessionId) sessions.setSessionId(channelId, result.sessionId);
 				sessions.setContext(channelId, result.context);
 			}
-			return result;
+			// Read here, where the mode is known: every caller posts `files` after the text.
+			const { text, files } = await takeAttachments(result.result || '', mode);
+			return { ...result, result: text, files };
 		} catch (err) {
 			if (channelId && !ephemeral && sessionContextIsCurrent()) {
 				if (err.sessionId) sessions.setSessionId(channelId, err.sessionId);

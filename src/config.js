@@ -98,6 +98,9 @@ const DIFF_MAX_BYTES = 5 * 1024 * 1024;
 // A gist upload sits between the user and their diff, so it gives up and says so
 // rather than leaving the command hanging on a dead network.
 const GIST_TIMEOUT_MS = 15_000;
+// Total size an agent may attach to one answer: a memory guard, not Discord's
+// limit, which varies per server and is reported when a send fails.
+const ATTACH_MAX_BYTES = 25 * 1024 * 1024;
 
 // Inactivity before the voice assistant leaves the voice channel on its own.
 const VOICE_IDLE_TIMEOUT_MS = 900_000; // 15 min
@@ -178,6 +181,7 @@ module.exports = {
 	DIFF_PATH_TIMEOUT_MS,
 	DIFF_MAX_BYTES,
 	GIST_TIMEOUT_MS,
+	ATTACH_MAX_BYTES,
 	DOCKER_IMAGE,
 	CONTAINER_CPUS,
 	VALID_AGENTS,

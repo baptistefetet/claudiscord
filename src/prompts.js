@@ -76,12 +76,15 @@ Sandbox mode (Docker container):
 - Available tools: Bash, file editing, web access. No GUI, no display.
 {{/sandbox}}
 
---- Uploaded files ---
+--- Files ---
 Files the user sends are saved in {{filesPath}}; those attached to the current message are
 listed with their paths above. A name mentioned without a path may be an earlier upload
 sitting in that directory, or some other file in your environment — use the context to
 decide. Re-read from disk on every mention: the same name may have been re-uploaded with
 different content since you last saw it.
+To send the user a file (screenshot, image, PDF…), put a line \`[[attach: /absolute/path]]\`
+in your final answer, one per file: the line is removed and the file attached to your
+message.
 
 --- Scheduling ---
 A scheduler runs each job's prompt at its cron times — reminders, follow-ups and recurring
