@@ -182,23 +182,7 @@ empty check (e.g. "is there a new mail?"). kimaki's `--pre-run`.
 
 Effort: low-medium. Value: high.
 
-## 8. Lexicon
-
-Names and jargon are mistranscribed. `SOUL.md` could carry them, but mixes
-vocabulary with persona.
-
-- `<mode home>/LEXICON.md` beside `SOUL.md`: one per environment, not per
-  project, read on every use through the same guarded read (generalize
-  `readSoul`).
-- Fed to the Groq transcription `prompt` field (`stt.js`) and to the GPT-Live
-  instructions (`getLiveInstructions`), for the channel's mode.
-- Groq caps `prompt` at 224 tokens and documents no truncation: format the file
-  as a comma-separated list of terms, send Groq a version cut on a term
-  boundary, GPT-Live the whole file.
-
-Effort: low. Value: medium.
-
-## 9. OpenCode agent (large, later)
+## 8. OpenCode agent (large, later)
 
 A third agent beside Claude and Codex, `/opencode`, with no model selection:
 claudiscord never passes `--model`. Per OpenCode's docs a session keeps its
@@ -218,7 +202,7 @@ available one. So jobs use the same model: no tiers, no effort override.
 
 Effort: high. Value: medium.
 
-## 10. Windows host, admin mode only (large, later)
+## 9. Windows host, admin mode only (large, later)
 
 The README states Linux only. Blockers in the code:
 
@@ -239,16 +223,16 @@ Effort: high. Value: medium.
 
 ## Priorities
 
-Quick tasks first: §7, §8, the contained §4 and §5, and the cheap half of §2
+Quick tasks first: §7, the contained §4 and §5, and the cheap half of §2
 (`ack_filler`, policy). Then the webhook (§1) and §3 before more
 channels accumulate a `depotPath`. §6 stays within the progress relay
 (`claude.js`, `codex.js`, `discord.js`). Large projects for later: §2's fast
-backend, §9, §10.
+backend, §8, §9.
 
 ## References
 
 - disclaw — Discord × Claude Code (source of §3–5: working-directory chain,
   fence-aware splitting, reply quoting):
   <https://github.com/six-ddc/disclaw>
-- kimaki — Discord × OpenCode (source of §2's voice findings and §7–§9):
+- kimaki — Discord × OpenCode (source of §2's voice findings and §7–§8):
   <https://kimaki.dev>, <https://github.com/remorses/kimaki>

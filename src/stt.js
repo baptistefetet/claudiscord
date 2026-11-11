@@ -2,8 +2,21 @@ const log = require('./logger');
 
 const GROQ_TRANSCRIPTIONS_URL = 'https://api.groq.com/openai/v1/audio/transcriptions';
 
-/** Transcribe a Discord voice message (the mic button's attachment) via Groq Whisper. */
-async function transcribeVoiceMessage(attachment, { apiKey, model, language }) {
+// Groq caps `prompt` at 224 tokens and documents no truncation. Tokens are not
+// countable here: 2 characters per token is a deliberately low estimate.
+const PROMPT_MAX_CHARS = 448;
+
+/** Cut a comma-separated list of terms on a term boundary. */
+function fitTerms(terms, max = PROMPT_MAX_CHARS) {
+	if (terms.length <= max) return terms;
+	return terms.slice(0, Math.max(0, terms.lastIndexOf(',', max)));
+}
+
+/**
+ * Transcribe a Discord voice message (the mic button's attachment) via Groq Whisper.
+ * `lexicon`: comma-separated terms whose spelling the model should know.
+ */
+async function transcribeVoiceMessage(attachment, { apiKey, model, language, lexicon }) {
 	if (!apiKey) throw new Error('GROQ_API_KEY missing');
 
 	const audioRes = await fetch(attachment.url);
@@ -16,6 +29,7 @@ async function transcribeVoiceMessage(attachment, { apiKey, model, language }) {
 	form.append('file', new Blob([buf], { type: attachment.contentType || 'audio/ogg' }), attachment.name || 'voice-message.ogg');
 	form.append('model', model);
 	if (language) form.append('language', language);
+	if (lexicon) form.append('prompt', fitTerms(lexicon));
 	form.append('response_format', 'text');
 
 	const t0 = Date.now();

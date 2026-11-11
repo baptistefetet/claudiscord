@@ -3,7 +3,7 @@ const path = require('path');
 const config = require('./config');
 const { ADMIN_USER_HOME, STATE_DIR, ADMIN_JOBS_FILE, ADMIN_SCHEDULING_DOC, ADMIN_FILES_DIR, SANDBOX_FILES_DIR } = config;
 const { ensureDb } = require('./jobs-store');
-const { getSystemPrompt, getSchedulingDoc } = require('./prompts');
+const { getSystemPrompt, getSchedulingDoc, readLexicon } = require('./prompts');
 const log = require('./logger');
 const sessions = require('./sessions');
 const { ensureImage, DOCKER_AVAILABLE } = require('./container');
@@ -75,6 +75,7 @@ client.on(Events.MessageCreate, async message => {
 				apiKey: config.GROQ_API_KEY,
 				model: config.STT_MODEL,
 				language: config.STT_LANGUAGE,
+				lexicon: readLexicon(sessions.getMode(channel.id)),
 			})).trim();
 			if (!prompt) return;
 			await message.channel.send(`🎙️ ${prompt}`).catch(() => {});

@@ -192,32 +192,37 @@ const DEFAULT_AGENTS_MD = `# Claudiscord sandbox instructions
 Customize this file to tailor the agent's behavior to your needs.
 `;
 
-const SOUL_MAX_BYTES = 8192;
+const HOME_FILE_MAX_BYTES = 8192;
 
-// Optional persona shared by the agent and the voice call: <mode home>/SOUL.md, read on
-// every prompt so edits apply without a restart.
-// The sandbox owns its home and could swap the file for a symlink, FIFO or device that
+// Optional user files in <mode home>, read on every use so edits apply without a restart.
+// The sandbox owns its home and could swap one for a symlink, FIFO or device that
 // this root process would then read into the prompt: O_NOFOLLOW (ELOOP on a symlink),
 // O_NONBLOCK (no hang on a FIFO open), a regular-file check and a bounded read.
-function readSoul(mode) {
+function readHomeFile(mode, name) {
 	const home = mode === 'sandbox' ? SANDBOX_HOST_HOME : ADMIN_USER_HOME;
 	if (!home) return '';
 	let fd;
 	try {
-		fd = fs.openSync(path.join(home, 'SOUL.md'),
+		fd = fs.openSync(path.join(home, name),
 			fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
 		const stat = fs.fstatSync(fd);
 		if (!stat.isFile()) throw new Error('not a regular file');
-		if (stat.size > SOUL_MAX_BYTES) throw new Error(`larger than ${SOUL_MAX_BYTES} bytes`);
-		const buf = Buffer.alloc(SOUL_MAX_BYTES);
-		return buf.toString('utf8', 0, fs.readSync(fd, buf, 0, SOUL_MAX_BYTES, 0)).trim();
+		if (stat.size > HOME_FILE_MAX_BYTES) throw new Error(`larger than ${HOME_FILE_MAX_BYTES} bytes`);
+		const buf = Buffer.alloc(HOME_FILE_MAX_BYTES);
+		return buf.toString('utf8', 0, fs.readSync(fd, buf, 0, HOME_FILE_MAX_BYTES, 0)).trim();
 	} catch (err) {
-		if (err.code !== 'ENOENT') log.warn(`SOUL.md unreadable (${mode}): ${err.message}`);
+		if (err.code !== 'ENOENT') log.warn(`${name} unreadable (${mode}): ${err.message}`);
 		return '';
 	} finally {
 		if (fd !== undefined) fs.closeSync(fd);
 	}
 }
+
+/** Persona shared by the agent and the voice call. */
+const readSoul = mode => readHomeFile(mode, 'SOUL.md');
+
+/** Names and jargon speech recognition gets wrong, as comma-separated terms: voice only. */
+const readLexicon = mode => readHomeFile(mode, 'LEXICON.md').replace(/\s+/g, ' ');
 
 // Replace {{#flag}}...{{/flag}} blocks based on boolean flags.
 // The loop allows nested conditional blocks to collapse from the inside out.
@@ -312,6 +317,10 @@ When asked who you are, you are {{botName}}.
 Personality:
 {{soul}}
 {{/soul}}
+{{#lexicon}}
+
+Names and terms the user often says: {{lexicon}}
+{{/lexicon}}
 
 A backend agent on the user's server does all the real work. Present it as your own; never
 mention a backend or a delegation.
@@ -327,7 +336,8 @@ mention a backend or a delegation.
 
 function getLiveInstructions({ botName, userName, mode }) {
 	const soul = readSoul(mode);
-	return render(LIVE_INSTRUCTIONS, { botName, userName, soul }, { soul: Boolean(soul) });
+	const lexicon = readLexicon(mode);
+	return render(LIVE_INSTRUCTIONS, { botName, userName, soul, lexicon }, { soul: Boolean(soul), lexicon: Boolean(lexicon) });
 }
 
 function getSchedulingDoc(mode = 'admin') {
@@ -340,4 +350,4 @@ function getDefaultAgentsMd() {
 	return DEFAULT_AGENTS_MD;
 }
 
-module.exports = { getSystemPrompt, getLiveInstructions, getSchedulingDoc, getDefaultAgentsMd };
+module.exports = { getSystemPrompt, getLiveInstructions, readLexicon, getSchedulingDoc, getDefaultAgentsMd };
