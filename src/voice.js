@@ -342,13 +342,14 @@ function handleDelegation(session, call, event) {
 	}
 	call.appendContext(id, 'commentary', MERGED_NOTE);
 	// An extension (or equal text) replaces the batch's, a prefix is a re-send.
-	// Compared without whitespace: the join below adds a space, even inside a
-	// split word, which a complete re-send then repairs.
+	// Compared without whitespace: the join below adds a space within a user turn,
+	// even inside a split word, which a complete re-send then repairs. Another
+	// turn is another sentence: it gets its own line.
 	const before = batch.text.replace(/\s+/g, '');
 	const added = text.replace(/\s+/g, '');
 	if (added.startsWith(before)) batch.text = text;
 	else if (before.startsWith(added)) return;
-	else batch.text = `${batch.text} ${text}`;
+	else batch.text = `${batch.text}${batch.turn === session.userTurns ? ' ' : '\n'}${text}`;
 	if (added !== before) batch.turn = session.userTurns;
 	// A held batch is echoed whole when queued.
 	if (!batch.queued) armDispatch(session);
@@ -417,7 +418,7 @@ function dispatchBatch(session, batch) {
 		// the user turns spoken since this batch started, except its own turn when
 		// still being spoken at take().
 		if (session.opened > batch.seq) call.appendContext(id, 'commentary', OUTDATED_NOTE);
-		else if (ownTurnOpenAtTake !== null) {
+		else {
 			const said = transcript.filter(line => line.startsWith('user: ')).slice(ownTurnOpenAtTake ? 1 : 0).join('\n');
 			if (said) call.appendContext(id, 'commentary', `${UNDELIVERED_NOTE}\n${said.slice(-TRANSCRIPT_MAX_CHARS)}`);
 		}
@@ -431,7 +432,7 @@ function dispatchBatch(session, batch) {
 	// Held by reference: a call reset swaps in a new one, this batch keeps its own.
 	// A turn still being spoken at that point goes with the next delegation.
 	const { transcript } = session;
-	let ownTurnOpenAtTake = null; // null: never taken (refused before the head of the queue)
+	let ownTurnOpenAtTake = false;
 	const take = () => {
 		ownTurnOpenAtTake = session.userTurnOpen && session.userTurns === batch.turn;
 		if (session.batch === batch) session.batch = null;
