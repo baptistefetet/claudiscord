@@ -163,7 +163,7 @@ complete reference; the channel ID and name it asks for are in your instructions
   notifies nothing yet still consumes the run, so always produce output.
 - The only permitted way to stay silent is NOTIFY_NONE as the output's last non-empty line,
   alone on that line: the whole output is then discarded. The token must BE the line —
-  "Auth still valid. NOTIFY_NONE" notifies, token and all. Use it only when the job's own
+  "Nothing new. NOTIFY_NONE" notifies, token and all. Use it only when the job's own
   \`prompt\` defines a condition for silence (there is no column for it) and that condition
   is met — e.g. "if everything is fine, reply with NOTIFY_NONE and nothing else". Without
   such an instruction, always produce a notification.
