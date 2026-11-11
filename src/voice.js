@@ -44,7 +44,7 @@ const DELEGATION_MAX_HOLD_MS = 10_000;
 const MERGED_NOTE = 'Merged into an earlier request that has not started yet; its result covers this one.';
 const RESENT_NOTE = 'Repeats a request already delegated since the user last spoke; not run again.';
 // A result spoken while a later request is pending sounds like it overrules that request.
-const OUTDATED_NOTE = 'A later request is still pending: wherever it changes this result, present that part as being changed, not as the final state.';
+const OUTDATED_NOTE = 'A later request is still pending: wherever it changes this result, present that part as being changed, not as the final state. Do not ask a question that request already answers: say it is being handled.';
 // GPT-Live may acknowledge a request said while work runs without delegating it.
 const UNDELIVERED_NOTE = 'No other request is pending. The user said this while the task ran, and none of it was delegated: delegate now any request for work in it.';
 const GREETING_NOTE = 'The call just started: greet the user in one short sentence.';
