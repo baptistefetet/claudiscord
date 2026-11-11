@@ -47,6 +47,7 @@ const RESENT_NOTE = 'Repeats a request already delegated since the user last spo
 const OUTDATED_NOTE = 'A later request is still pending: wherever it changes this result, present that part as being changed, not as the final state.';
 // GPT-Live may acknowledge a request said while work runs without delegating it.
 const UNDELIVERED_NOTE = 'No other request is pending. The user said this while the task ran, and none of it was delegated: delegate now any request for work in it.';
+const GREETING_NOTE = 'The call just started: greet the user in one short sentence.';
 // Transcript sent with a delegation, oldest part dropped first (Codex caps it at 4 KB).
 const TRANSCRIPT_MAX_CHARS = 4000;
 
@@ -615,6 +616,8 @@ async function joinVoice(channel) {
 
 async function connectAndStart(channel) {
 	const client = getClient();
+	const startedAt = Date.now();
+	let discordReadyMs;
 
 	const connection = joinVoiceChannel({
 		channelId: channel.id,
@@ -654,9 +657,10 @@ async function connectAndStart(channel) {
 	);
 
 	// Independent setups of ~1 s each: run in parallel, the user can only speak once both are up.
-	const ready = entersState(connection, VoiceConnectionStatus.Ready, 15_000).catch((err) => {
-		throw new Error(`could not join the voice channel (permissions?): ${err.message}`);
-	});
+	const ready = entersState(connection, VoiceConnectionStatus.Ready, 15_000).then(
+		() => { discordReadyMs = Date.now() - startedAt; },
+		(err) => { throw new Error(`could not join the voice channel (permissions?): ${err.message}`); },
+	);
 	const opening = (async () => {
 		try {
 			const user = await client.users.fetch(config.AUTHORIZED_USER_ID);
@@ -719,6 +723,9 @@ async function connectAndStart(channel) {
 
 	active = session;
 	resetIdleTimer(session);
+	log.info(`voice: listening ${Date.now() - startedAt} ms after the join (Discord ready at ${discordReadyMs} ms)`);
+	// The bot shows in the channel well before it listens: the greeting is the cue to speak.
+	session.call.appendContext(null, 'speakable', GREETING_NOTE);
 	return session;
 }
 

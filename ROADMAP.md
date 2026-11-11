@@ -25,13 +25,6 @@ Minimal HTTP server in the same process (`node:http`, no framework):
 The GPT-Live front end (`src/live.js`, `src/voice.js`) serializes delegations
 on the channel FIFO. Next steps:
 
-- **Readiness at join**: `live.js::openLiveCall` resolves once the peer is
-  `connected` and the sideband socket is open, never on the sideband's
-  `session.started`, which kimaki waits for (15 s timeout). Likely cause of the
-  dead seconds after "Just talk" (to confirm with timestamps). Announce the call
-  only after `session.started`, then have GPT-Live greet the user (a
-  `speakable` `session.context.append`, as kimaki does): the greeting tells the
-  user when to speak.
 - **`ack_filler`**: kimaki opens calls with
   `delegation: { type: 'client', ack_filler: true }`. Undocumented; presumably a
   spoken filler while a delegation runs. Try it.
@@ -54,7 +47,7 @@ on the channel FIFO. Next steps:
   after 1 s of trailing silence), but nothing shows it glitches less: only an
   A/B test would tell.
 
-Effort: low for readiness, `ack_filler` and policy; medium for the others.
+Effort: low for `ack_filler` and policy; medium for the others.
 Value: medium.
 
 ### Fast backend (large, later)
@@ -247,7 +240,7 @@ Effort: high. Value: medium.
 ## Priorities
 
 Quick tasks first: §7, §8, the contained §4 and §5, and the cheap half of §2
-(readiness, `ack_filler`, policy). Then the webhook (§1) and §3 before more
+(`ack_filler`, policy). Then the webhook (§1) and §3 before more
 channels accumulate a `depotPath`. §6 stays within the progress relay
 (`claude.js`, `codex.js`, `discord.js`). Large projects for later: §2's fast
 backend, §9, §10.

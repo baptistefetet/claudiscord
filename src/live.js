@@ -284,17 +284,18 @@ async function openLiveCall({ instructions, onAudio, onEvent, onClose }) {
 				dropped++;
 			}
 		},
-		/** `channel`: 'commentary' (silent context) or 'speakable' (said aloud, paraphrased). */
+		/**
+		 * `channel`: 'commentary' (silent context) or 'speakable' (said aloud, paraphrased).
+		 * Without a `delegationId` the context belongs to the session itself.
+		 */
 		appendContext(delegationId, channel, text) {
 			if (closed || ws.readyState !== WebSocket.OPEN) return;
-			log.info(`voice append ${channel} [${delegationId}]: ${text.replace(/\s+/g, ' ').slice(0, 120)}`);
+			log.info(`voice append ${channel} [${delegationId || 'session'}]: ${text.replace(/\s+/g, ' ').slice(0, 120)}`);
+			const target = delegationId
+				? { type: 'delegation.context.append', delegation_item_id: delegationId }
+				: { type: 'session.context.append' };
 			for (const chunk of chunkUtf8(text, CONTEXT_APPEND_MAX_BYTES)) {
-				ws.send(JSON.stringify({
-					type: 'delegation.context.append',
-					delegation_item_id: delegationId,
-					channel,
-					content: [{ type: 'input_text', text: chunk }],
-				}));
+				ws.send(JSON.stringify({ ...target, channel, content: [{ type: 'input_text', text: chunk }] }));
 			}
 		},
 		close,
