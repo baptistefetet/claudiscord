@@ -266,13 +266,32 @@ OpenClaw write-up (trusted gateway holding secrets, untrusted workload):
 
 Effort: low (identity, hardening) to high (broker, split harness). Value: high.
 
+## 11. Mid-run steering and delivery receipts (later)
+
+Study agentes.chat's implementation for corrections sent while an agent works:
+
+- **Claude** (`apps/server/runner/brain.ts`): keep stdin open with
+  `--input-format stream-json`, inject user messages with UUIDs and check the
+  CLI's steering capabilities. Confirm reads through `command_lifecycle`
+  (`started`) and `user_message_uuids`.
+- **Codex** (`apps/server/runner/brain-codex-app.ts`): execute through
+  `app-server`, send `turn/steer` with `expectedTurnId` and
+  `clientUserMessageId`, confirm reads through `userMessage` items. Urgent
+  corrections use `turn/interrupt` then `turn/start` in the same thread.
+- **Delivery** (`packages/engine/src/live-steer.ts`): distinguish pending,
+  delivered and read messages; return unconfirmed messages to the inbox when
+  the turn ends. Keep a FIFO fallback when live delivery is unavailable.
+
+Requires adapting `spawn.js` (stdin currently closes immediately), the agent
+adapters and incoming-message routing while preserving per-channel ordering.
+
 ## Priorities
 
 Quick tasks first: §7, the contained §4 and §5, and the cheap half of §2
 (`ack_filler`, policy). Then the webhook (§1) and §3 before more
 channels accumulate a `depotPath`. §6 stays within the progress relay
 (`claude.js`, `codex.js`, `discord.js`). Large projects for later: §2's fast
-backend, §8, §9, §10 (its cheap hardening aside).
+backend, §8, §9, §10 (its cheap hardening aside), §11.
 
 ## References
 
@@ -281,5 +300,8 @@ backend, §8, §9, §10 (its cheap hardening aside).
   <https://github.com/six-ddc/disclaw>
 - kimaki — Discord × OpenCode (source of §2's voice findings and §7–§8):
   <https://kimaki.dev>, <https://github.com/remorses/kimaki>
+- agentes.chat — channel-based agent platform (source of §11: Claude/Codex
+  live steering and delivery/read receipts):
+  <https://github.com/agentes-chat/agentes-chat>
 - Securing persistent agents like OpenClaw at OpenAI (source of §10):
   <https://developers.openai.com/blog/securing-persistent-agents-like-openclaw-at-openai>
