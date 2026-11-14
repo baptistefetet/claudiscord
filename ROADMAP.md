@@ -221,13 +221,58 @@ machine or a Windows GitHub Actions runner.
 
 Effort: high. Value: medium.
 
+## 10. Sandbox credential isolation (later)
+
+The sandbox logins (`~/.claude/.credentials.json`, `~/.codex/auth.json`,
+refresh tokens included) sit in the sandbox home, readable by the agent's own
+tools (same UID), with no egress filtering: one prompt injection can exfiltrate
+them. Here they are the same accounts as admin mode. Tracks, after OpenAI's
+OpenClaw write-up (trusted gateway holding secrets, untrusted workload):
+
+- **Credential broker**: a host proxy injects the real token (Claude:
+  `ANTHROPIC_BASE_URL` + `claude setup-token`; Codex: app-server
+  `chatgptAuthTokens` external auth, the host answering
+  `account/chatgptAuthTokens/refresh`). Two agent-specific OAuth flows to keep
+  working across CLI versions, close to the size of the project. OpenClaw
+  Enterprise's variant (placeholder + TLS-terminating egress proxy) is
+  experimental and fails on Cloudflare-fronted upstreams, which both APIs are.
+- **Harness on the host, tools in the container**: credentials never enter it.
+  - Codex: `codex exec-server` (experimental, process + filesystem) in the
+    container, the host harness connecting over WebSocket (token auth needs
+    `wss://` or loopback). To check: `apply_patch` routing, `codex exec`
+    support.
+  - Claude: only Bash, hooks and stdio MCP are redirectable
+    (`CLAUDE_CODE_SHELL_PREFIX`). Read/Write/Edit/Glob/Grep run in the host
+    process, so a symlink planted in the sandbox home reads host files: needs
+    Bash-only tools, `--setting-sources` without project settings (an
+    agent-written `env` could clear the prefix) and `--strict-mcp-config`.
+    Relies on Bash tool internals (cwd tracking, shell snapshot).
+  - Inverts the risk: a routing leak reaches the host, so the sandbox harness
+    must run as a dedicated non-root user.
+  - Nested agents break: the container keeps the binaries but no login, so a
+    sandbox Claude can no longer ask Codex for a review, and vice versa.
+- **Tools confined by the CLIs' own sandboxes**: not possible as is. This
+  kernel has no Landlock (`/sys/kernel/security/lsm` = `capability`) and
+  Docker's default seccomp blocks user namespaces (bwrap). Without OS
+  enforcement, managed-settings `deny` rules stop the Read tool, not a `cat`.
+- **Dedicated identity** (the write-up's per-agent inference credential):
+  sandbox-only accounts or spend-capped API keys. No code; a leak costs that
+  account only and is revoked without touching admin. Costs a subscription or
+  per-token billing.
+- **Cheap hardening**, whatever the choice: an nft rule dropping input from
+  `docker0` (closes the host and the LAN, not the Internet),
+  `--cap-drop ALL --security-opt no-new-privileges` at container creation, a
+  documented revocation procedure (log out all sessions, sandbox `/login`).
+
+Effort: low (identity, hardening) to high (broker, split harness). Value: high.
+
 ## Priorities
 
 Quick tasks first: §7, the contained §4 and §5, and the cheap half of §2
 (`ack_filler`, policy). Then the webhook (§1) and §3 before more
 channels accumulate a `depotPath`. §6 stays within the progress relay
 (`claude.js`, `codex.js`, `discord.js`). Large projects for later: §2's fast
-backend, §8, §9.
+backend, §8, §9, §10 (its cheap hardening aside).
 
 ## References
 
@@ -236,3 +281,5 @@ backend, §8, §9.
   <https://github.com/six-ddc/disclaw>
 - kimaki — Discord × OpenCode (source of §2's voice findings and §7–§8):
   <https://kimaki.dev>, <https://github.com/remorses/kimaki>
+- Securing persistent agents like OpenClaw at OpenAI (source of §10):
+  <https://developers.openai.com/blog/securing-persistent-agents-like-openclaw-at-openai>
