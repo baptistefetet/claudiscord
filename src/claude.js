@@ -19,14 +19,21 @@ if (!CLAUDE_AVAILABLE) log.warn('Claude Code not detected — Claude agent disab
 // Claude-only; Codex governs its tools via --yolo. `claude -p` already drops the
 // interactive tools, so DISALLOWED_TOOLS only lists what would conflict with
 // claudiscord. Skills and plugins are trimmed through CLAUDE_SETTINGS below.
-const ALLOWED_TOOLS = 'Bash(*) Read Write Edit Glob Grep WebSearch WebFetch Task';
+const ALLOWED_TOOLS = 'Bash(*) Read Write Edit Glob Grep WebSearch WebFetch Agent';
 
 // Native scheduling + remote session control — claudiscord owns the job and
 // session lifecycle itself.
 const ORCHESTRATION_TOOLS = ['CronCreate', 'CronDelete', 'CronList', 'ScheduleWakeup', 'RemoteTrigger'];
-// Features with no place in a headless Discord relay: agent messaging, push
-// notifications, git worktree switching, Jupyter notebook editing.
-const UNSUPPORTED_TOOLS = ['SendMessage', 'PushNotification', 'EnterWorktree', 'ExitWorktree', 'NotebookEdit'];
+// Features with no place in a headless Discord relay: agent listing and
+// messaging, push notifications, background monitors (their events land after
+// the reply), git worktree switching, Jupyter notebook editing, findings
+// rendered by a host UI instead of the answer, claude.ai/design sync, and the
+// statusline subagent (it edits the ~/.claude/settings.json shared with the
+// admin's interactive sessions).
+const UNSUPPORTED_TOOLS = [
+	'ListAgents', 'SendMessage', 'PushNotification', 'Monitor', 'EnterWorktree', 'ExitWorktree',
+	'NotebookEdit', 'ReportFindings', 'DesignSync', 'Agent(statusline-setup)',
+];
 
 const DISALLOWED_TOOLS = [
 	...ORCHESTRATION_TOOLS,
