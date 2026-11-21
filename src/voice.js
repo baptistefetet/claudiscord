@@ -45,8 +45,8 @@ const MERGED_NOTE = 'Merged into an earlier request that has not started yet; it
 const RESENT_NOTE = 'Repeats a request already delegated since the user last spoke; not run again.';
 // A result spoken while a later request is pending sounds like it overrules that request.
 const OUTDATED_NOTE = 'A later request is still pending: wherever it changes this result, present that part as being changed, not as the final state. Do not ask a question that request already answers: say it is being handled.';
-// GPT-Live may acknowledge a request said while work runs without delegating it.
-const UNDELIVERED_NOTE = 'No other request is pending. The user said this while the task ran, and none of it was delegated: delegate now any request for work in it.';
+const NO_ACTION = 'VOICE_NO_ACTION';
+const FOLLOWUP_NOTE = `[The user spoke during a voice task. Handle any new request in <input> using the conversation as context. If it only acknowledges, chats or asks something already answered aloud, take no action and reply exactly ${NO_ACTION}.]`;
 const GREETING_NOTE = 'The call just started: greet the user in one short sentence.';
 // Transcript sent with a delegation, oldest part dropped first (Codex caps it at 4 KB).
 const TRANSCRIPT_MAX_CHARS = 4000;
@@ -329,18 +329,52 @@ function handleDelegation(session, call, event) {
 		.trim();
 	log.info(`voice delegation [${id}]: ${text}`);
 	if (!id || !text) return;
+	acceptDelegation(session, call, id, text);
+}
+
+function speechKey(text) {
+	return text.toLowerCase().replace(/[\p{P}\s]+/gu, ' ').trim();
+}
+
+function acceptDelegation(session, call, id, text) {
+	const turn = session.userTurn;
 	const key = text.replace(/\s+/g, ' ');
-	if (session.delegated.has(key)) {
+	const spoken = speechKey(text);
+	if (turn?.forwarded || session.delegated.has(key)) {
+		if (turn?.forwarded) session.recoveredTexts.add(spoken);
 		call.appendContext(id, 'commentary', RESENT_NOTE);
 		return;
 	}
+	// An old hand-off can cross into another turn. Wait for its transcript to
+	// distinguish an intentional repeat from a replay of the recovered speech.
+	if (spoken && Array.from(session.recoveredTexts).some(previous => previous.startsWith(spoken))) {
+		if (turn?.text === null) {
+			turn.repeats.set(id, text);
+			return;
+		}
+		if (!speechKey(turn?.text || '').startsWith(spoken)) {
+			call.appendContext(id, 'commentary', RESENT_NOTE);
+			return;
+		}
+	}
 	session.delegated.add(key);
+	queueVoiceRequest(session, call, id, text);
+}
+
+function queueVoiceRequest(session, call, id, text) {
 	const batch = session.batch;
 	if (batch?.call !== call) {
 		openBatch(session, call, id, text);
 		return;
 	}
-	call.appendContext(id, 'commentary', MERGED_NOTE);
+	if (!batch.id) batch.id = id;
+	else if (id) call.appendContext(id, 'commentary', MERGED_NOTE);
+	if (!id) {
+		batch.text += `\n${text}`;
+		batch.turn = session.userTurns;
+		armDispatch(session);
+		return;
+	}
 	// An extension (or equal text) replaces the batch's, a prefix is a re-send.
 	// Compared without whitespace: the join below adds a space within a user turn,
 	// even inside a split word, which a complete re-send then repairs. Another
@@ -365,13 +399,13 @@ function openBatch(session, call, id, text) {
 		// Captured like a text batch: executePrompt refuses it if the channel changed meanwhile.
 		agent: sessions.getAgent(channelId),
 		mode: sessions.getMode(channelId),
-		overlap: session.pending > 0,
+		overlap: session.latest?.call === call,
 		deadline: Date.now() + DELEGATION_MAX_HOLD_MS,
 		timer: null,
 		queued: false,
-		seq: ++session.opened,
 		turn: session.userTurns, // user turn of its latest delegation
 	};
+	session.latest = session.batch;
 	session.pending++;
 	clearTimeout(session.idleTimer);
 	armDispatch(session);
@@ -387,7 +421,7 @@ function armDispatch(session) {
 	if (!batch || batch.queued) return;
 	clearTimeout(batch.timer);
 	const left = batch.deadline - Date.now();
-	const wait = session.userTurnOpen ? left : Math.min(DELEGATION_GRACE_MS, left);
+	const wait = session.userTurn?.text === null ? left : Math.min(DELEGATION_GRACE_MS, left);
 	batch.timer = setTimeout(() => dispatchBatch(session, batch), wait);
 }
 
@@ -396,10 +430,10 @@ function dispatchBatch(session, batch) {
 	batch.queued = true;
 	clearTimeout(batch.timer);
 	const { channelId } = session;
-	const { call, id } = batch;
-	postToChat(session, `🎙️ ${batch.text}`);
-	if (isBusy(channelId)) {
-		call.appendContext(id, 'commentary', 'Queued behind another task running on this channel; starts when it ends.');
+	const { call } = batch;
+	if (batch.id) postToChat(session, `🎙️ ${batch.text}`);
+	if (batch.id && isBusy(channelId)) {
+		call.appendContext(batch.id, 'commentary', 'Queued behind another task running on this channel; starts when it ends.');
 	}
 
 	// Same live activity line as text channels, without the typing indicator.
@@ -407,36 +441,30 @@ function dispatchBatch(session, batch) {
 	const chatProgress = channel ? startProgressReporter(channel, { typing: false }) : null;
 	let lastProgress = 0;
 	const onProgress = (progress) => {
+		if (!batch.id && progress?.summary?.trim() === NO_ACTION) return;
 		chatProgress?.update(progress);
 		if (!progress?.summary || Date.now() - lastProgress < PROGRESS_MIN_INTERVAL_MS) return;
 		lastProgress = Date.now();
-		call.appendContext(id, 'commentary', `In progress: ${progress.summary.slice(0, 300)}`);
+		call.appendContext(batch.id, 'commentary', `In progress: ${progress.summary.slice(0, 300)}`);
 	};
 	// A closed call ignores the append; the chat still gets the result.
 	const speakResult = (result) => {
-		// Batches opened since are still pending (FIFO). Without one, nothing carries
-		// the user turns spoken since this batch started, except its own turn when
-		// still being spoken at take().
-		if (session.opened > batch.seq) call.appendContext(id, 'commentary', OUTDATED_NOTE);
-		else {
-			const said = transcript.filter(line => line.startsWith('user: ')).slice(ownTurnOpenAtTake ? 1 : 0).join('\n');
-			if (said) call.appendContext(id, 'commentary', `${UNDELIVERED_NOTE}\n${said.slice(-TRANSCRIPT_MAX_CHARS)}`);
-		}
+		const later = session.latest;
+		if (later !== batch && later?.call === call && later.id) call.appendContext(batch.id, 'commentary', OUTDATED_NOTE);
 		const spoken = result.length > MAX_SPOKEN_RESULT_CHARS
 			? `${result.slice(0, MAX_SPOKEN_RESULT_CHARS)}… (the rest is in the chat)`
 			: result;
-		call.appendContext(id, 'speakable', spoken);
+		call.appendContext(batch.id, 'speakable', spoken);
 	};
 
 	// Called at the head of the queue: closes the batch and takes the transcript.
 	// Held by reference: a call reset swaps in a new one, this batch keeps its own.
 	// A turn still being spoken at that point goes with the next delegation.
 	const { transcript } = session;
-	let ownTurnOpenAtTake = false;
 	const take = () => {
-		ownTurnOpenAtTake = session.userTurnOpen && session.userTurns === batch.turn;
 		if (session.batch === batch) session.batch = null;
 		const prompt = renderDelegation(batch.text, transcript.splice(0).join('\n'));
+		if (!batch.id) return `${FOLLOWUP_NOTE}\n\n${prompt}`;
 		return batch.overlap ? `${OVERLAP_NOTE}\n\n${prompt}` : prompt;
 	};
 	executePrompt(batch.agent, batch.mode, take, {
@@ -445,7 +473,11 @@ function dispatchBatch(session, batch) {
 		tier: 'high',
 		onProgress,
 	})
+		.finally(() => {
+			if (session.latest === batch) session.latest = null;
+		})
 		.then(async (result) => {
+			if (!batch.id && !result.files.length && result.result?.trim() === NO_ACTION) return;
 			const reply = result.result || (result.files.length ? '' : 'Empty reply.');
 			chatProgress?.clear();
 			// Spoken first: the FIFO is already released, so the next run could finish
@@ -476,20 +508,11 @@ function dispatchBatch(session, batch) {
 		});
 }
 
-/**
- * A delegation holds the user's speech up to the hand-off, often a fragment; the
- * turns spoken since the previous one ride along so the agent sees all of it
- * (OpenClaw's format).
- */
-function recordTurn(session, role, text) {
-	if (!text || /^\[[^\]]*\]?$/.test(text)) return; // noise turn: "[sniff", "[breath"
-	session.transcript.push(`${role}: ${text}`);
-}
-
 function escapeXml(text) {
 	return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 }
 
+/** Include the intervening conversation: a hand-off often contains only a fragment. */
 function renderDelegation(input, transcript) {
 	const bounded = transcript.length > TRANSCRIPT_MAX_CHARS ? `…${transcript.slice(-TRANSCRIPT_MAX_CHARS)}` : transcript;
 	const delta = bounded ? `\n  <transcript_delta>${escapeXml(bounded)}</transcript_delta>` : '';
@@ -506,16 +529,28 @@ function handleLiveEvent(session, call, event) {
 		case 'turn.done': {
 			const text = event.turn?.transcript?.trim();
 			log.info(`voice ${event.turn?.role}: ${text}`);
-			recordTurn(session, event.turn?.role, text);
+			const speech = text && !/^\[[^\]]*\]?$/.test(text); // noise turn: "[sniff", "[breath"
+			if (speech) session.transcript.push(`${event.turn.role}: ${text}`);
 			if (event.turn?.role !== 'user') break;
-			session.userTurnOpen = false;
+			const turn = session.userTurn;
+			if (turn?.text === null) {
+				turn.text = text || '';
+				for (const [id, repeat] of turn.repeats) acceptDelegation(session, call, id, repeat);
+				turn.repeats.clear();
+				if (speech && turn.duringWork && !session.delegated.size) {
+					turn.forwarded = true;
+					session.recoveredTexts.add(speechKey(text));
+					log.info(`voice follow-up from transcript: ${text}`);
+					queueVoiceRequest(session, call, null, text);
+				}
+			}
 			armDispatch(session);
 			break;
 		}
 		case 'turn.created':
 			log.info(`voice ${event.turn?.role} turn started`);
 			if (event.turn?.role !== 'user') break;
-			session.userTurnOpen = true;
+			session.userTurn = { text: null, duringWork: session.latest?.call === call, forwarded: false, repeats: new Map() };
 			session.userTurns++;
 			session.delegated.clear(); // the user may now repeat a request on purpose
 			armDispatch(session);
@@ -569,7 +604,9 @@ async function restartVoiceCall(channelId) {
 	const generation = ++session.callGeneration;
 	const isCurrent = () => active === session && session.callGeneration === generation;
 	if (session.batch) dispatchBatch(session, session.batch);
-	session.userTurnOpen = false;
+	session.userTurn = null;
+	session.latest = null;
+	session.recoveredTexts.clear();
 	session.transcript = []; // belongs to the conversation being reset
 	session.delegated.clear();
 	session.call.close();
@@ -642,9 +679,10 @@ async function connectAndStart(channel) {
 		batch: null,
 		// Delegation texts since the last user turn (see handleDelegation).
 		delegated: new Set(),
-		opened: 0, // batches opened, numbering them (batch.seq)
+		latest: null, // newest batch until it returns a result
+		recoveredTexts: new Set(),
 		unhandled: new Set(), // GPT-Live event types already logged (see handleLiveEvent)
-		userTurnOpen: false,
+		userTurn: null,
 		userTurns: 0, // user turns started, numbering them (batch.turn)
 		transcript: [],
 		pending: 0,

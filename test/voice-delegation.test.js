@@ -2,17 +2,18 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { readFileSync } = require('fs');
 const { compileFunction } = require('vm');
+const queue = require('../src/queue');
 
 const filename = require.resolve('../src/voice');
 const source = readFileSync(filename, 'utf8') + `
 return {
 	handleLiveEvent, leaveVoice, setActive: session => { active = session; },
-	MERGED_NOTE, RESENT_NOTE, OUTDATED_NOTE, UNDELIVERED_NOTE, OVERLAP_NOTE,
+	MERGED_NOTE, RESENT_NOTE, OUTDATED_NOTE, NO_ACTION, OVERLAP_NOTE,
 	DELEGATION_GRACE_MS, DELEGATION_MAX_HOLD_MS, MAX_SPOKEN_RESULT_CHARS,
 };`;
 
 /** A fresh voice.js on stubbed services, with one active session and its call. */
-function setup(t) {
+function setup(t, { fifo = false } = {}) {
 	// A realistic clock: the code compares timestamps against 0 for "never".
 	t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() });
 	const runs = []; // executePrompt calls, settled by the test
@@ -24,11 +25,14 @@ function setup(t) {
 		'./logger': { info() {}, warn() {}, error() {} },
 		'./sessions': { getAgent: () => 'codex', getMode: () => 'admin' },
 		'./executor': {
-			executePrompt: (agent, mode, take, options) => new Promise((resolve, reject) => {
-				runs.push({ take, options, resolve, reject });
-			}),
+			executePrompt: (agent, mode, take, options) => {
+				const start = () => new Promise((resolve, reject) => {
+					runs.push({ prompt: fifo ? take() : null, take, options, resolve, reject });
+				});
+				return fifo ? queue.runQueued(options.channelId, start) : start();
+			},
 		},
-		'./queue': { isBusy: () => state.busy },
+		'./queue': fifo ? queue : { isBusy: () => state.busy },
 		'./prompts': { getSystemPrompt: () => 'system', getLiveInstructions: () => '' },
 		'./live': {},
 		'./scheduler': { reloadJobs() {} },
@@ -53,9 +57,10 @@ function setup(t) {
 		outputActivity: { close() {} },
 		batch: null,
 		delegated: new Set(),
-		opened: 0,
+		latest: null,
+		recoveredTexts: new Set(),
 		unhandled: new Set(),
-		userTurnOpen: false,
+		userTurn: null,
 		userTurns: 0,
 		transcript: [],
 		pending: 0,
@@ -293,21 +298,122 @@ test('a result arriving while a later batch is pending is flagged as outdated', 
 	assert.deepEqual(v.notes('d1'), [v.OUTDATED_NOTE, 'Movie added.']);
 });
 
-test('a result comes with the user turns spoken since its batch started', async t => {
+const tomorrow = 'Et dis-moi aussi pour demain';
+for (const handoff of ['missing', 'native', 'while queued', 'after start', 'after result']) {
+	test(`the Lyon follow-up runs exactly once with a hand-off ${handoff}`, async t => {
+		const v = setup(t, { fifo: true });
+		request(v, 'today', "Tu peux me dire s'il va faire beau à Lyon cet après-midi");
+		await v.flush();
+		v.userStarts();
+		if (handoff === 'native') v.delegate('tomorrow', tomorrow);
+		v.userSays(tomorrow);
+		v.assistantSays("Noté, j'ajoute demain aussi.");
+		v.tick(v.DELEGATION_GRACE_MS);
+		if (handoff === 'while queued') v.delegate('late', tomorrow);
+		assert.equal(v.runs.length, 1);
+		v.runs[0].resolve({ result: 'Sunny today.', files: [] });
+		await v.flush();
+		assert.equal(v.runs.length, 2);
+		assert.ok(v.runs[1].prompt.includes(`<input>${tomorrow}</input>`));
+		assert.ok(v.runs[1].prompt.includes(`user: ${tomorrow}`));
+		if (handoff === 'after start') v.delegate('late', 'Check tomorrow in Lyon too');
+		v.runs[1].resolve({ result: 'Rain tomorrow.', files: [] });
+		await v.flush();
+		if (handoff === 'after result') v.delegate('late', tomorrow);
+		v.tick(v.DELEGATION_MAX_HOLD_MS);
+		await v.flush();
+		assert.equal(v.runs.length, 2);
+		assert.deepEqual(v.appended.filter(e => e.channel === 'speakable').map(e => e.text), ['Sunny today.', 'Rain tomorrow.']);
+		assert.ok(v.notes(handoff === 'native' ? 'tomorrow' : null).includes('Rain tomorrow.'));
+		assert.equal(v.chat.filter(text => text === 'Rain tomorrow.').length, 1);
+		assert.equal(v.session.pending, 0);
+	});
+}
+
+test('an overlapping turn is recovered even if the task finishes mid-sentence', async t => {
 	const v = setup(t);
-	const run = request(v, 'd1', 'add a movie');
-	run.take();
+	const first = request(v, 'd1', 'Check Batflix');
+	first.take();
 	v.userStarts();
-	v.userSays('and tell me when it is done');
-	v.assistantSays('Sure.');
-	run.resolve({ result: 'Movie added.', files: [] });
+	first.resolve({ result: 'Batflix is up.', files: [] });
 	await v.flush();
-	assert.deepEqual(v.notes('d1'), [
-		`${v.UNDELIVERED_NOTE}\nuser: and tell me when it is done`,
-		'Movie added.',
-	]);
-	// Those turns still ride along with the next delegation.
-	assert.deepEqual(v.session.transcript, ['user: and tell me when it is done', 'assistant: Sure.']);
+	v.userSays('Check Badly too');
+	v.tick(v.DELEGATION_GRACE_MS);
+	assert.match(v.runs[1].take(), /<input>Check Badly too<\/input>/);
+});
+
+test('recovered and explicit follow-ups waiting together are delivered in order', async t => {
+	const v = setup(t, { fifo: true });
+	request(v, 'today', 'Weather today?');
+	await v.flush();
+	v.userStarts();
+	v.userSays('And tomorrow?');
+	v.tick(v.DELEGATION_GRACE_MS); // recovery now waits in the real FIFO
+	v.userStarts();
+	v.userSays('In Lyon please');
+	v.userStarts();
+	v.delegate('weekend', 'And this weekend?');
+	v.userSays('And this weekend?');
+	v.runs[0].resolve({ result: 'Sunny.', files: [] });
+	await v.flush();
+	assert.equal(v.runs.length, 2);
+	assert.ok(v.runs[1].prompt.includes('<input>And tomorrow?\nIn Lyon please\nAnd this weekend?</input>'));
+	v.runs[1].resolve({ result: 'Rain both days.', files: [] });
+	await v.flush();
+	assert.deepEqual(v.notes('weekend'), ['Rain both days.']);
+	assert.equal(v.session.pending, 0);
+});
+
+test('small talk can finish silently and idle turns and noise start no work', async t => {
+	const v = setup(t);
+	v.userStarts();
+	v.userSays('Hello');
+	const first = request(v, 'd1', 'Check Boardy');
+	first.take();
+	v.userStarts();
+	v.userSays('[breath]');
+	v.userStarts();
+	v.userSays('Thanks');
+	v.tick(v.DELEGATION_GRACE_MS);
+	assert.equal(v.runs.length, 2);
+	const recovered = v.runs[1];
+	assert.ok(recovered.take().includes(v.NO_ACTION));
+	first.resolve({ result: 'Boardy is up.', files: [] });
+	await v.flush();
+	const previous = v.appended.slice();
+	recovered.options.onProgress({ summary: v.NO_ACTION });
+	recovered.resolve({ result: v.NO_ACTION, files: [] });
+	await v.flush();
+	assert.deepEqual(v.appended, previous);
+	assert.deepEqual(v.chat, ['🎙️ Check Boardy', 'Boardy is up.']);
+	assert.equal(v.session.pending, 0);
+});
+
+test('a delayed replay during another turn respects a deliberate repeat', async t => {
+	const v = setup(t);
+	const first = request(v, 'today', 'Weather in Lyon?');
+	first.take();
+	v.userStarts();
+	v.userSays(tomorrow);
+	v.tick(v.DELEGATION_GRACE_MS);
+	v.runs[1].take();
+	first.resolve({ result: 'Sunny.', files: [] });
+	v.runs[1].resolve({ result: 'Rain.', files: [] });
+	await v.flush();
+	v.userStarts();
+	v.delegate('stale', tomorrow + '?');
+	v.delegate('fragment', 'Et dis-moi aussi pour dem');
+	v.userSays('Thanks');
+	v.tick(v.DELEGATION_GRACE_MS);
+	assert.equal(v.runs.length, 2);
+	assert.deepEqual(v.notes('stale'), [v.RESENT_NOTE]);
+	assert.deepEqual(v.notes('fragment'), [v.RESENT_NOTE]);
+	v.userStarts();
+	v.delegate('repeat', tomorrow);
+	v.userSays(tomorrow);
+	v.tick(v.DELEGATION_GRACE_MS);
+	assert.equal(v.runs.length, 3);
+	assert.ok(v.runs[2].take().includes(`<input>${tomorrow}</input>`));
 });
 
 test('the turn that delegated the batch is not reported as undelivered', async t => {
@@ -320,6 +426,8 @@ test('the turn that delegated the batch is not reported as undelivered', async t
 	v.runs[0].resolve({ result: 'Movie added.', files: [] });
 	await v.flush();
 	assert.deepEqual(v.notes('d1'), ['Movie added.']);
+	assert.equal(v.session.latest, null);
+	assert.equal(v.runs.length, 1);
 });
 
 test('a result without anything said meanwhile carries no note', async t => {
