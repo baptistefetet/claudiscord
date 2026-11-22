@@ -9,7 +9,7 @@ const log = require('./logger');
 const { refreshHostCodexLogin } = require('./codex');
 
 /**
- * GPT-Live call on the ChatGPT subscription (`gpt-live-1-codex`), the route the
+ * GPT-Live call on the ChatGPT subscription (`gpt-live-1.1-codex`), the route the
  * Codex CLI uses. Undocumented wire, validated empirically:
  *   - call creation: POST {sdp, session} with the host Codex OAuth token → SDP answer,
  *     call id in `Location`. Input audio MUST go over WebRTC (RTP Opus 48 kHz):
@@ -22,7 +22,7 @@ const { refreshHostCodexLogin } = require('./codex');
 
 const CALL_URL = 'https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas';
 const SIDEBAND_URL = 'wss://api.openai.com/v1/live/';
-const MODEL = 'gpt-live-1-codex';
+const MODEL = 'gpt-live-1.1-codex';
 const FRAME_MS = 20;
 const FRAME_SAMPLES = 960; // 20 ms at 48 kHz
 // Discord's own 20 ms Opus silence packet — sent on every tick the user is silent.
