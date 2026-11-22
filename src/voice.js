@@ -46,7 +46,7 @@ const RESENT_NOTE = 'Repeats a request already delegated since the user last spo
 // A result spoken while a later request is pending sounds like it overrules that request.
 const OUTDATED_NOTE = 'A later request is still pending: wherever it changes this result, present that part as being changed, not as the final state. Do not ask a question that request already answers: say it is being handled.';
 const NO_ACTION = 'VOICE_NO_ACTION';
-const FOLLOWUP_NOTE = `[The user spoke during a voice task. Handle any new request in <input> using the conversation as context. If it only acknowledges, chats or asks something already answered aloud, take no action and reply exactly ${NO_ACTION}.]`;
+const FOLLOWUP_NOTE = `[The user spoke during a voice task. Handle any new request in <input> using the conversation as context. That task's result is being said aloud even if <transcript_delta> does not show it yet: do not repeat it. If <input> only acknowledges, chats or asks something already answered aloud, take no action and reply exactly ${NO_ACTION}.]`;
 const GREETING_NOTE = 'The call just started: greet the user in one short sentence.';
 // Transcript sent with a delegation, oldest part dropped first (Codex caps it at 4 KB).
 const TRANSCRIPT_MAX_CHARS = 4000;
