@@ -405,15 +405,38 @@ test('a delayed replay during another turn respects a deliberate repeat', async 
 	v.delegate('fragment', 'Et dis-moi aussi pour dem');
 	v.userSays('Thanks');
 	v.tick(v.DELEGATION_GRACE_MS);
-	assert.equal(v.runs.length, 2);
+	assert.equal(v.runs.length, 3); // the first turn after a result is recovered
+	assert.match(v.runs[2].take(), /<input>Thanks<\/input>/);
 	assert.deepEqual(v.notes('stale'), [v.RESENT_NOTE]);
 	assert.deepEqual(v.notes('fragment'), [v.RESENT_NOTE]);
+	v.runs[2].resolve({ result: v.NO_ACTION, files: [] });
+	await v.flush();
 	v.userStarts();
 	v.delegate('repeat', tomorrow);
 	v.userSays(tomorrow);
 	v.tick(v.DELEGATION_GRACE_MS);
-	assert.equal(v.runs.length, 3);
-	assert.ok(v.runs[2].take().includes(`<input>${tomorrow}</input>`));
+	assert.equal(v.runs.length, 4);
+	assert.ok(v.runs[3].take().includes(`<input>${tomorrow}</input>`));
+});
+
+test('only the first turn after a result is recovered', async t => {
+	const v = setup(t);
+	const first = request(v, 'd1', 'Check Badly');
+	first.take();
+	first.resolve({ result: 'Badly is up.', files: [] });
+	await v.flush();
+	v.userStarts(); // barge-in while the result is said
+	v.userSays('Check Boardy too');
+	v.assistantSays("Ok, j'ajoute Boardy.");
+	v.tick(v.DELEGATION_GRACE_MS);
+	assert.equal(v.runs.length, 2);
+	assert.match(v.runs[1].take(), /<input>Check Boardy too<\/input>/);
+	v.runs[1].resolve({ result: v.NO_ACTION, files: [] });
+	await v.flush();
+	v.userStarts();
+	v.userSays('Thanks');
+	v.tick(v.DELEGATION_GRACE_MS);
+	assert.equal(v.runs.length, 2);
 });
 
 test('the turn that delegated the batch is not reported as undelivered', async t => {

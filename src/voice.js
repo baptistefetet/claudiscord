@@ -46,7 +46,7 @@ const RESENT_NOTE = 'Repeats a request already delegated since the user last spo
 // A result spoken while a later request is pending sounds like it overrules that request.
 const OUTDATED_NOTE = 'A later request is still pending: wherever it changes this result, present that part as being changed, not as the final state. Do not ask a question that request already answers: say it is being handled.';
 const NO_ACTION = 'VOICE_NO_ACTION';
-const FOLLOWUP_NOTE = `[The user spoke during a voice task. Handle any new request in <input> using the conversation as context. That task's result is being said aloud even if <transcript_delta> does not show it yet: do not repeat it. If <input> only acknowledges, chats or asks something already answered aloud, take no action and reply exactly ${NO_ACTION}.]`;
+const FOLLOWUP_NOTE = `[The user spoke during or right after a voice task. Handle any new request in <input> using the conversation as context. That task's result is being said aloud even if <transcript_delta> does not show it yet: do not repeat it. If <input> only acknowledges, chats or asks something already answered aloud, take no action and reply exactly ${NO_ACTION}.]`;
 const GREETING_NOTE = 'The call just started: greet the user in one short sentence.';
 // Transcript sent with a delegation, oldest part dropped first (Codex caps it at 4 KB).
 const TRANSCRIPT_MAX_CHARS = 4000;
@@ -455,6 +455,7 @@ function dispatchBatch(session, batch) {
 			? `${result.slice(0, MAX_SPOKEN_RESULT_CHARS)}… (the rest is in the chat)`
 			: result;
 		call.appendContext(batch.id, 'speakable', spoken);
+		session.resultCall = call;
 	};
 
 	// Called at the head of the queue: closes the batch and takes the transcript.
@@ -550,7 +551,15 @@ function handleLiveEvent(session, call, event) {
 		case 'turn.created':
 			log.info(`voice ${event.turn?.role} turn started`);
 			if (event.turn?.role !== 'user') break;
-			session.userTurn = { text: null, duringWork: session.latest?.call === call, forwarded: false, repeats: new Map() };
+			// GPT-Live also acknowledges a request made while it says a result without
+			// delegating it: the first turn after a result is recovered like one during work.
+			session.userTurn = {
+				text: null,
+				duringWork: session.resultCall === call || session.latest?.call === call,
+				forwarded: false,
+				repeats: new Map(),
+			};
+			session.resultCall = null;
 			session.userTurns++;
 			session.delegated.clear(); // the user may now repeat a request on purpose
 			armDispatch(session);
@@ -680,6 +689,7 @@ async function connectAndStart(channel) {
 		// Delegation texts since the last user turn (see handleDelegation).
 		delegated: new Set(),
 		latest: null, // newest batch until it returns a result
+		resultCall: null, // call given a result since the last user turn
 		recoveredTexts: new Set(),
 		unhandled: new Set(), // GPT-Live event types already logged (see handleLiveEvent)
 		userTurn: null,
