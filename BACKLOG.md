@@ -1,7 +1,7 @@
-# Claudiscord — roadmap
+# Claudiscord — backlog
 
-Backlog only: a shipped item is removed from this file, not marked done — its
-reasoning belongs in `AGENTS.md` or the code.
+Ideas, with no schedule or commitment. A shipped item is removed from this
+file, not marked done — its reasoning belongs in `AGENTS.md` or the code.
 
 ## 1. Webhook — trigger prompts from outside Discord
 
