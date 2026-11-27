@@ -77,7 +77,8 @@ const ADMIN_ENV = {
 };
 const CLAUDE_LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
 const CLAUDE_LOGIN_URL_TIMEOUT_MS = 15 * 1000;
-const CLAUDE_LOGIN_URL_RE = /https:\/\/claude\.com\/cai\/oauth\/authorize\?[^\s]+/;
+// Older CLIs print claude.com/cai/oauth/authorize, 2.1.332+ claude.ai/oauth/authorize.
+const CLAUDE_LOGIN_URL_RE = /https:\/\/claude\.(?:ai|com)\/(?:cai\/)?oauth\/authorize\?\S+/;
 
 function extractClaudeLoginUrl(output) {
 	const match = output.match(CLAUDE_LOGIN_URL_RE);

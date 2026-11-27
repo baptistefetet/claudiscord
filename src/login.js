@@ -196,6 +196,7 @@ async function handleLogin({ channel, channelId, mode, agent }) {
 
 	login.urlTimeout = setTimeout(() => {
 		if (login.urlSent || pendingLogin !== login) return;
+		log.warn(`${flow.label} login produced no URL. Output: ${JSON.stringify(loginOutput(login).trim().slice(-1000))}`);
 		killLogin(login);
 		clearLogin(login);
 		channel.send(flow.noUrlMessage)
